@@ -1,0 +1,29 @@
+# Discovery output — may contain schema detail and, in the case of
+# lookup-table dumps, real data. Never commit it.
+discovery/output/
+*.csv
+*.tsv
+*.xlsx
+
+# Secrets — credentials belong in Key Vault or environment variables,
+# never in the repo.
+.env
+.env.*
+!.env.example
+*.pfx
+*.key
+appsettings.*.json
+!appsettings.example.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
