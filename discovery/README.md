@@ -30,6 +30,11 @@ answers:
 
 ## Running it
 
+**New to this? Follow [`RUNBOOK.md`](RUNBOOK.md)** — step-by-step
+instructions covering getting the files onto FLOWWEB4, the Windows
+script-blocking gotchas, and what to send back. The summary below
+assumes you are comfortable with PowerShell.
+
 ### Option A — PowerShell (recommended)
 
 From FLOWWEB4, or any machine that can reach the instance:
