@@ -219,6 +219,81 @@ run to the day of the run.
 
 ---
 
+## 4c. `Overflow` is not purged either, and `FundedLeads` is dead
+
+`05` run against `Overflow`: 42 of 47 date columns read.
+
+**Neither database is subject to a 30-day deletion.** `Leads.DateCreated`
+and `LeadApplications.DateCreated` both run 2021-07-01 to the day of the
+run, the same floor as `OverflowReporting`. Whatever the doc's 30-day
+deletion refers to, it is a *third* store — consistent with its wording
+about data "processed within a transactional database" — and it is not
+on this server. Nothing reachable from here is being purged.
+
+That also settles the lead-to-application ratio. `Leads` (780,508) and
+`LeadApplications` (4,443,646) cover the *same* five-year window, so the
+roughly 1:5.7 ratio is genuine repeat applications, not a retention
+artefact.
+
+### `FundedLeads` stopped being written in October 2024
+
+| Column | Earliest | Latest |
+|---|---|---|
+| `FundedLeads.DateCreated` | 2022-05-11 | **2024-10-11** |
+| `FundedLeads.DateFunded` | 2022-06-11 | **2024-10-03** |
+| `FundedLeads.DateSold` | 2022-04-12 | **2024-10-01** |
+
+146,000 rows, frozen for about eleven months while every other active
+table runs to the current day.
+
+**Any funding or commission report built on `FundedLeads` will be
+correct up to October 2024 and then silently flat-line.** It will not
+error — it will just show zero.
+
+`OverflowReporting.LeadFundedStatuses` (1.27M rows, 2021-07-01 to
+current) is the live equivalent and is almost certainly where funding
+state moved to. Confirm that with whoever made the change before
+building on it.
+
+Two other tables to check the same way: `SellHistory` only starts
+2025-02-20 and `LeadScores` only starts 2024-09-24, so neither supports
+a multi-year trend.
+
+### Date columns containing impossible values
+
+| Column | Minimum | Maximum |
+|---|---|---|
+| `LeadApplications.DateOfBirth` | 1753-01-01 | **2881-06-15** |
+| `LeadApplications.MoveInDate` | 1900-01-01 | **5687-12-01** |
+| `Leads.DateOfBirth` | 1753-01-01 | 2026-09-29 |
+
+1753-01-01 is the SQL Server `datetime` minimum, so it is a sentinel for
+"not supplied" rather than a real date. The maxima are data-entry
+garbage, and `Leads.DateOfBirth` includes a date in the future.
+
+**Any age calculation off these columns produces nonsense unless the
+range is filtered first.** `LeadMetrics.Age` may be the cleaner source;
+it is worth comparing the two before any age banding is published.
+
+### Configuration tables share a migration date
+
+`PingTrees`, `PingTreeItems`, `Lenders`, `LenderTiers`, `AffiliateGroups`,
+`ConditionalFilters`, `LenderBlacklisting`, `CommissionOverrides` and
+`LenderTierBaseFilters` all carry `DateCreated` of **2025-03-04**, and
+several have a `DateModified` *earlier* than their `DateCreated`
+(`PingTreeItems` is modified from 2020-09-24 but created 2025-03-04).
+
+So `DateCreated` on the configuration tables records a bulk migration on
+that date, not when the record really came into being. It cannot be used
+to date a lender or affiliate relationship. `Affiliates` is the
+exception, running back to 2015-06-05.
+
+Five columns were not read: `LeadApplicationCustomValues` (22.6M) and
+`LenderApplicationResults` (31.2M) are large with unindexed date
+columns, and three are empty or all-NULL.
+
+---
+
 ## 5. Access, time and collation
 
 - **Read-only is enforced.** `LaytonB` holds `db_datareader` with
@@ -235,20 +310,21 @@ run to the day of the run.
 
 ## 6. Not yet established
 
-Date coverage has now been measured for `OverflowReporting` (section 4b)
-but **not for `Overflow`**. Still open:
+Date coverage has now been measured for both databases. What remains
+needs a person, not a query:
 
-- **What the doc's "deleted after 30 days" actually removes.** It is not
-  `OverflowReporting`, which holds five years. It may be `Overflow`, or
-  the separate transactional database the doc alludes to, or nothing at
-  all. Running `05` against `Overflow` settles it.
-- **Whether `Leads` at 780k versus `LeadApplications` at 4.4M** reflects
-  genuine repeat applications or different retention. Note that
-  `LeadApplicationAccepts` holds 1,269,706 rows in `Overflow` against
-  1,269,703 in `OverflowReporting` — near-identical, which argues
-  against aggressive purging of `Overflow`, at least for that table.
-- **The history of the three largest reporting tables**, skipped as
-  unindexed scans.
+- **Where funding data moved after October 2024**, and whether
+  `LeadFundedStatuses` is the full replacement for `FundedLeads`.
+- **What the doc's "deleted after 30 days" refers to.** Neither database
+  here is purged, so it is a third store not on this server. Worth
+  knowing whether anything needed for reporting lives in it.
+- **Whether `LeadMetrics.Age` is trustworthy** where
+  `LeadApplications.DateOfBirth` is not.
+- **What `SortCode` actually holds** (section 7).
+- **Which datetime columns are UTC and which are local** (section 5).
+- **The history of the largest tables** — `FailedFiltersV2`,
+  `LenderApplicationResults`, `FailedFilters`,
+  `LeadApplicationCustomValues` — skipped as unindexed scans.
 
 ---
 
@@ -289,9 +365,9 @@ indicators) with **no direct identifiers** beyond
 
 ## 8. Recommended next steps
 
-1. **Run `05_date_coverage.sql` against `Overflow`** to settle whether
-   the 30-day deletion applies to it. It is the last open question about
-   retention.
+1. **Establish where funding data lives after October 2024.** Nothing
+   about commission or conversion reporting can be trusted until this is
+   answered.
 2. **Confirm the `Leads` → `LeadApplications` → metrics grain** with
    whoever built the system, since no foreign key documents it.
 3. **Decide the architecture** given cross-database joins are
