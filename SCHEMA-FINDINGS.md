@@ -124,8 +124,98 @@ All relationships are convention. Nothing stops an orphaned
 correct — it has to come from whoever built it, or from checking the
 data.
 
-Indexes: 43 in `Overflow`, and `LeadApplicationId` is indexed on the
-tables that matter, so joins on it should perform acceptably.
+**Correction.** An earlier version of this document said
+`LeadApplicationId` was indexed on the tables that matter and that joins
+on it should perform acceptably. That was wrong, and section 4a replaces
+it. It was inferred before the index output had been examined.
+
+---
+
+## 4a. There are no reporting indexes either
+
+Every user index in both databases is the clustered primary key on `Id`.
+Nothing else exists.
+
+| | `Overflow` | `OverflowReporting` |
+|---|---|---|
+| Total indexes | 33 | 43 |
+| Non-PK indexes | 8 | 9 |
+| Non-PK indexes that are not replication plumbing | 1 | 2 |
+
+The handful of non-PK indexes are `MSreplication_*` internals plus
+`Affiliates(Id)`, `AffiliateInvoices(Id)` and `webpages_Roles(RoleName)`.
+
+Two consequences, both serious:
+
+- **No index contains `LeadApplicationId`.** Not one, in either
+  database. Every join on the key that the whole model hangs off is a
+  full scan of both sides.
+- **No date column leads an index.** All 52 date columns checked in
+  `OverflowReporting` are unindexed. Every "last 30 days" filter scans
+  the entire table.
+
+On `FailedFiltersV2` that means 194M rows and 26 GB read to answer a
+question about yesterday.
+
+This database is a replication target, not a reporting-tuned store.
+Running dashboard queries directly against it will be slow and will load
+a server that live-ish processes also use.
+
+**This is the finding that decides the architecture.** Combined with
+cross-database joins being unavailable, querying these databases
+directly is not viable. The work needs an extract into a properly
+modelled and indexed store, and reporting runs against that.
+
+---
+
+## 4b. History goes back to 2021, not 30 days
+
+`05_date_coverage.sql`, run against `OverflowReporting`, read 48 of 52
+date columns.
+
+**Nothing here is subject to a 30-day deletion.** Most tables start at
+exactly **2021-07-01** — a hard floor that looks like a platform launch
+or migration cut-over — and run to the day of the run. Over five years
+of history is available.
+
+Dates worth knowing before promising any trend:
+
+| Table | From | To | Note |
+|---|---|---|---|
+| `LeadApplicationStages` | 2021-07-01 | current | 19.8M rows, the fullest funnel history |
+| `LeadMetadata`, `ApiErrors`, `LeadRedirects` | 2021-07-01 | current | |
+| `LeadFundedStatuses`, `LeadApplicationAccepts` | 2021-07-01 | current | |
+| **`LeadMetrics`** | **2023-01-24** | current | **no affordability metrics before 2023** |
+| `OfferResults` | 2024-07-29 | current | |
+| `AccountCategorisation` | 2025-05-06 | current | |
+| `LeadSmsEmailRetry` | 2025-05-22 | current | |
+| `SystemAlerts` | 2026-05-26 | current | very new |
+| `AffiliateInvoices` | 2017-11-24 | current | pre-dates everything else |
+| `OfflineConversions` | 2022-09-11 | **2023-11-12** | dead, nothing written since |
+
+Two traps for anyone writing a query:
+
+- **`AffiliateRawData` stops on 2025-11-28 and `AffiliateRawDataV2`
+  starts the same day.** A clean cut-over. Any affiliate report spanning
+  that date must union both tables or it will silently lose everything
+  on one side of it.
+- **`LeadMetrics` starts 2023-01-24.** Any metric built on it cannot be
+  compared with 2021-22, and a year-on-year chart reaching back further
+  will show a false zero.
+
+`AccountCategorisation.NextExpectedIncomeDate` and
+`AffiliateInvoices.DueDate` hold dates in the future, which is correct
+for what they represent - worth remembering before anyone writes a
+`WHERE date <= today` filter that quietly drops them.
+
+Four columns were not read: `FailedFiltersV2`, `FailedFilters` and
+`LenderApplicationResults` are large with unindexed date columns, so the
+script avoided a full scan, and `MSsnapshotdeliveryprogress` is empty.
+Their history is unknown, though the 2021-07-01 floor elsewhere makes a
+similar range likely.
+
+Replication is current: subscriber metadata timestamps and the data both
+run to the day of the run.
 
 ---
 
@@ -145,18 +235,20 @@ tables that matter, so joins on it should perform acceptably.
 
 ## 6. Not yet established
 
-`05_date_coverage.sql` was skipped on this run, so history depth is
-unknown. Specifically unresolved:
+Date coverage has now been measured for `OverflowReporting` (section 4b)
+but **not for `Overflow`**. Still open:
 
-- What the doc's "deleted after 30 days" actually removes. The row
-  counts hint that `Overflow` is purged while `OverflowReporting`
-  retains history, which would make **the reporting database the only
-  source of anything historical** — but that is inference from row
-  counts, not measurement.
-- Whether `Leads` at 780k versus `LeadApplications` at 4.4M reflects
-  genuine repeat applications or different retention windows.
-
-Running `05` answers both. It reads date columns only.
+- **What the doc's "deleted after 30 days" actually removes.** It is not
+  `OverflowReporting`, which holds five years. It may be `Overflow`, or
+  the separate transactional database the doc alludes to, or nothing at
+  all. Running `05` against `Overflow` settles it.
+- **Whether `Leads` at 780k versus `LeadApplications` at 4.4M** reflects
+  genuine repeat applications or different retention. Note that
+  `LeadApplicationAccepts` holds 1,269,706 rows in `Overflow` against
+  1,269,703 in `OverflowReporting` — near-identical, which argues
+  against aggressive purging of `Overflow`, at least for that table.
+- **The history of the three largest reporting tables**, skipped as
+  unindexed scans.
 
 ---
 
@@ -197,8 +289,9 @@ indicators) with **no direct identifiers** beyond
 
 ## 8. Recommended next steps
 
-1. **Run `05_date_coverage.sql`** to settle retention and history depth.
-   Nothing about trend reporting can be designed without it.
+1. **Run `05_date_coverage.sql` against `Overflow`** to settle whether
+   the 30-day deletion applies to it. It is the last open question about
+   retention.
 2. **Confirm the `Leads` → `LeadApplications` → metrics grain** with
    whoever built the system, since no foreign key documents it.
 3. **Decide the architecture** given cross-database joins are
