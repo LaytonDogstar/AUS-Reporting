@@ -188,11 +188,21 @@ and carries the least risk.
 
 - The warehouse stores UTC throughout. Conversion happens once, in the
   semantic layer.
-- **"Daily" needs defining.** Australia spans three time zones and not
-  every state observes daylight saving. A lead at 23:30 AEST is on a
-  different UTC day. Until someone says which timezone the business
-  day is measured in, every daily number is ambiguous. `dim_date`
-  should be built against that answer, not guessed.
+- **The reporting day is AEST**, as decided 2026-09-21. `dim_date` is
+  built against AEST and every daily figure means an AEST day.
+
+> **One thing to confirm: AEST fixed, or Sydney local time?**
+> Taken literally, AEST is UTC+10 all year, which is what Queensland
+> observes. Sydney and Melbourne shift to AEDT (UTC+11) for daylight
+> saving, and many businesses say "AEST" when they mean "our local
+> time".
+>
+> It matters for about five months a year: with fixed UTC+10 a lead at
+> 00:30 Sydney summer time lands on the previous reporting day. The
+> model currently implements **fixed UTC+10**, matching the literal
+> reading. Switching to `Australia/Sydney` is a one-line change in
+> `dim_date` but restates history, so it is worth settling before
+> anyone compares numbers to another system.
 
 ---
 
@@ -245,7 +255,9 @@ Either way:
 1. ~~Where did funding data go after October 2024?~~ **Answered:**
    nowhere. Lenders do not provide it. The funnel ends at the sale; see
    above.
-2. **What is the business timezone for a reporting day?**
+2. ~~What is the business timezone for a reporting day?~~ **Answered:**
+   AEST. Confirm whether that means fixed UTC+10 or Sydney local time
+   including AEDT — see section "Time".
 3. **Which metrics matter, and who owns their definitions?** The model
    above is a shape, not a specification. Conversion rate, cost per
    sale, affiliate quality — each needs an owner and a written
@@ -254,13 +266,14 @@ Either way:
    is not?
 5. **What does `SortCode` hold?** A UK term in an Australian system.
 
-Question 2 blocks correct daily numbers. Question 3 decides what gets
-built next. The rest can be answered as the model grows.
+Question 3 decides what gets built next. The rest can be answered as the model grows.
 
 Also open: **`StageId` in `LeadApplicationStages` has no lookup table**
-anywhere in either database. It is the funnel's stage identifier, so the
-meaning of each value has to come from the business before the funnel
-can be labelled.
+anywhere in either database — it is the only stage-related column in
+either, and nothing decodes it. The meaning of each value has to come
+from the business before the funnel can be labelled.
+`discovery/adhoc/stage_ids.sql` profiles the values to make that
+conversation concrete.
 
 ---
 
