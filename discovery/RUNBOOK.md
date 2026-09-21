@@ -24,36 +24,7 @@ nothing below will succeed until it does.
 
 ---
 
-## Step 1 — Get the files onto FLOWWEB4
-
-**Option A: download from GitHub (if the VM has internet access)**
-
-Open a browser on the VM and go to:
-
-```
-https://github.com/LaytonDogstar/AUS-Reporting/archive/refs/heads/claude/code-review-tsyca6.zip
-```
-
-That downloads a ZIP. Right-click it → **Extract All** → extract to
-`C:\discovery` (or anywhere you like — just remember where).
-
-You will end up with a folder named something like
-`AUS-Reporting-claude-code-review-tsyca6`, containing a `discovery`
-folder. That `discovery` folder is what you want.
-
-> If the repo has been made private, this URL will ask you to sign in.
-> Sign in as `LaytonDogstar` and it will work.
-
-**Option B: copy from your own machine (if the VM has no internet)**
-
-Download the ZIP on your local machine, extract it, then copy the
-`discovery` folder into the RDP session (Ctrl+C on your machine, Ctrl+V
-inside the remote desktop). This needs clipboard sharing enabled in the
-RDP client, which it is by default.
-
----
-
-## Step 2 — Open the right PowerShell
+## Step 1 — Open the right PowerShell
 
 Press the **Windows key** and type `powershell`.
 
@@ -65,29 +36,61 @@ Open **"Windows PowerShell"** — the one with the **blue** icon.
 
 ---
 
-## Step 3 — Go to the folder and unblock the files
+## Step 2 — Download and extract, in one go
 
-Windows blocks scripts that came from the internet. This clears that
-flag for these files only:
+Paste this whole block into PowerShell and press Enter. It downloads the
+pack and extracts it to `C:\discovery`, with no browser and no
+right-click Extract All:
 
 ```powershell
-cd C:\discovery\AUS-Reporting-claude-code-review-tsyca6\discovery
-Get-ChildItem -Recurse | Unblock-File
+$dest = "C:\discovery"
+$url  = "https://github.com/LaytonDogstar/AUS-Reporting/archive/refs/heads/claude/code-review-tsyca6.zip"
+
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+New-Item -ItemType Directory -Path $dest -Force | Out-Null
+Invoke-WebRequest -Uri $url -OutFile "$dest\pack.zip"
+Expand-Archive -Path "$dest\pack.zip" -DestinationPath $dest -Force
+
+$pack = Join-Path $dest "AUS-Reporting-claude-code-review-tsyca6\discovery"
+Test-Path $pack
 ```
 
-Adjust the path if you extracted somewhere else. If you are unsure of
-the path, navigate to the folder in File Explorer, click the address
-bar, copy it, and use that.
+The last line prints **True** or **False**.
 
-Then allow scripts to run **in this window only**:
+- **True** — good, carry on to Step 3.
+- **False** — the download or extract did not work. Skip to
+  *"If the download does not work"* near the bottom.
+
+> If the repo has been made private, `Invoke-WebRequest` will fail with
+> a 404 rather than prompting for a login. Use the manual route at the
+> bottom instead.
+
+---
+
+## Step 3 — Unblock the files and allow scripts
+
+Windows blocks scripts that came from the internet, and by default
+refuses to run unsigned ones. These two lines fix both, **for this
+folder and this window only**:
 
 ```powershell
+Get-ChildItem -Path $pack -Recurse | Unblock-File
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 ```
 
-> `-Scope Process` means this applies only to the PowerShell window you
-> have open right now. It changes nothing on the machine and reverts the
-> moment you close the window.
+> Note `-Path $pack`. Always give `Unblock-File` an explicit folder. A
+> bare `Get-ChildItem -Recurse | Unblock-File` runs against whatever
+> directory you happen to be in, which may be your whole user profile.
+>
+> `-Scope Process` means the script permission applies only to the
+> PowerShell window open right now. It changes nothing on the machine
+> and reverts the moment you close the window.
+
+Now move into the folder:
+
+```powershell
+cd $pack
+```
 
 ---
 
@@ -166,8 +169,9 @@ RDP clipboard, or email it to yourself, then send it on.
 
 | What you see | What it means | What to do |
 |---|---|---|
+| `Cannot find path ... because it does not exist` | The files are not where you think | Re-run Step 2; check it prints `True` |
 | `cannot be loaded because running scripts is disabled` | Execution policy | Re-run the `Set-ExecutionPolicy` line in Step 3 |
-| `This script needs Windows PowerShell 5.1` | Wrong PowerShell | Close it, open the **blue** Windows PowerShell (Step 2) |
+| `This script needs Windows PowerShell 5.1` | Wrong PowerShell | Close it, open the **blue** Windows PowerShell (Step 1) |
 | `Login failed for user` | Wrong username or password | Check them in SSMS first |
 | `Cannot open server ... requested by the login` | Firewall — your IP is not allow-listed | Run it from FLOWWEB4, not your local machine |
 | `The server was not found or was not accessible` | Server name typo, or no route | Check the name against SSMS |
@@ -175,6 +179,30 @@ RDP clipboard, or email it to yourself, then send it on.
 
 Anything else: send me the red text. Because everything is read-only, a
 failure means "that script did not run", never "something changed".
+
+### If a command is still running and you want to stop it
+
+Press **Ctrl+C**. Nothing in this pack leaves anything half-finished.
+
+### If the download does not work
+
+The VM may have no internet access, or the repo may now be private.
+Download the ZIP on your own machine from:
+
+```
+https://github.com/LaytonDogstar/AUS-Reporting/archive/refs/heads/claude/code-review-tsyca6.zip
+```
+
+Extract it locally, then copy the `discovery` folder into the RDP
+session (Ctrl+C on your machine, Ctrl+V inside the remote desktop —
+clipboard sharing is on by default).
+
+Then set `$pack` to wherever you pasted it and continue from Step 3:
+
+```powershell
+$pack = "C:\wherever\you\put\it\discovery"
+Test-Path $pack
+```
 
 ---
 
