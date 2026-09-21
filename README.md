@@ -17,10 +17,11 @@ is loading yet — the warehouse database has not been created.
 | [`warehouse/ddl/`](warehouse/ddl/) | Warehouse schema and the dim/fct model |
 | [`warehouse/validate.sql`](warehouse/validate.sql) | 13 post-load correctness checks |
 | [`STAGES.md`](STAGES.md) | The funnel: `StageId` order, evidence, open labels |
-| [`EXTRACT-RUNBOOK.md`](EXTRACT-RUNBOOK.md) | How to stand it up and run it |
+| [`WAREHOUSE-SETUP.md`](WAREHOUSE-SETUP.md) | **Start here:** creating the warehouse, step by step |
+| [`EXTRACT-RUNBOOK.md`](EXTRACT-RUNBOOK.md) | Running and maintaining the extract |
 
-Next step is section "Suggested sequence" in `ARCHITECTURE.md`: create
-the warehouse database, run the DDL, and load the spine.
+Next step is [`WAREHOUSE-SETUP.md`](WAREHOUSE-SETUP.md): create the
+database, run the DDL, load the spine. About 30 minutes.
 
 ## Background
 

@@ -123,28 +123,78 @@ class TestRepoConfig(unittest.TestCase):
 class TestSettings(unittest.TestCase):
     ENV = {
         "AUS_SOURCE_SERVER": "src.database.windows.net",
+        "AUS_SOURCE_USERNAME": "LaytonB",
+        "AUS_SOURCE_PASSWORD": "source-secret",
         "AUS_WAREHOUSE_SERVER": "wh.database.windows.net",
         "AUS_WAREHOUSE_DATABASE": "AusReporting",
-        "AUS_SQL_USERNAME": "svc_reporting",
-        "AUS_SQL_PASSWORD": "hunter2",
     }
 
     def test_reads_environment(self):
         settings = Settings.from_env(self.ENV)
-        self.assertEqual(settings.username, "svc_reporting")
+        self.assertEqual(settings.source_username, "LaytonB")
         self.assertEqual(settings.batch_size, 50_000)
+
+    def test_warehouse_uses_its_own_login_when_given(self):
+        env = dict(self.ENV,
+                   AUS_WAREHOUSE_USERNAME="svc_warehouse",
+                   AUS_WAREHOUSE_PASSWORD="warehouse-secret")
+        settings = Settings.from_env(env)
+        self.assertEqual(settings.warehouse_username, "svc_warehouse")
+        self.assertEqual(settings.warehouse_password, "warehouse-secret")
+        self.assertEqual(settings.source_username, "LaytonB")
+
+    def test_warehouse_falls_back_to_source_login(self):
+        # Only correct when both live on one server; not the default.
+        settings = Settings.from_env(self.ENV)
+        self.assertEqual(settings.warehouse_username, "LaytonB")
+        self.assertEqual(settings.warehouse_password, "source-secret")
 
     def test_missing_variables_are_named(self):
         with self.assertRaises(ConfigError) as ctx:
             Settings.from_env({"AUS_SOURCE_SERVER": "x"})
         message = str(ctx.exception)
-        self.assertIn("AUS_SQL_PASSWORD", message)
+        self.assertIn("AUS_SOURCE_PASSWORD", message)
         self.assertIn("AUS_WAREHOUSE_SERVER", message)
 
-    def test_repr_hides_the_password(self):
-        settings = Settings.from_env(self.ENV)
-        self.assertNotIn("hunter2", repr(settings))
-        self.assertIn("<redacted>", repr(settings))
+    def test_repr_hides_both_passwords(self):
+        env = dict(self.ENV,
+                   AUS_WAREHOUSE_USERNAME="svc_warehouse",
+                   AUS_WAREHOUSE_PASSWORD="warehouse-secret")
+        text = repr(Settings.from_env(env))
+        self.assertNotIn("source-secret", text)
+        self.assertNotIn("warehouse-secret", text)
+        self.assertEqual(text.count("<redacted>"), 2)
+
+
+class TestConnectionString(unittest.TestCase):
+    """The credentials used must match the server being connected to."""
+
+    def test_source_and_warehouse_use_different_logins(self):
+        from aus_reporting.db import connection_string
+
+        settings = Settings.from_env(dict(
+            TestSettings.ENV,
+            AUS_WAREHOUSE_USERNAME="svc_warehouse",
+            AUS_WAREHOUSE_PASSWORD="warehouse-secret",
+        ))
+
+        src = connection_string(
+            settings, server=settings.source_server, database="Overflow",
+            username=settings.source_username, password=settings.source_password,
+            readonly=True)
+        wh = connection_string(
+            settings, server=settings.warehouse_server,
+            database=settings.warehouse_database,
+            username=settings.warehouse_username,
+            password=settings.warehouse_password)
+
+        self.assertIn("UID=LaytonB", src)
+        self.assertIn("ApplicationIntent=ReadOnly", src)
+        self.assertIn("UID=svc_warehouse", wh)
+        self.assertNotIn("ApplicationIntent=ReadOnly", wh)
+        for cs in (src, wh):
+            self.assertIn("Encrypt=yes", cs)
+            self.assertIn("TrustServerCertificate=no", cs)
 
 
 if __name__ == "__main__":

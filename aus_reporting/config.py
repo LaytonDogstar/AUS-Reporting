@@ -95,15 +95,24 @@ def load_plan(path: str | Path) -> ExtractPlan:
 class Settings:
     """Connection settings, read from the environment.
 
+    The source and the warehouse are separate logical servers with
+    separate logins: the source login is read-only and issued by the
+    Azure admins, while the warehouse is ours. They are configured
+    independently, and the warehouse falls back to the source
+    credentials only when it is not given its own - which is the
+    unusual case, not the default.
+
     Credentials are never read from ``tables.yml`` or any file in this
     repository. On a server, set these from Key Vault.
     """
 
     source_server: str
+    source_username: str
+    source_password: str
     warehouse_server: str
     warehouse_database: str
-    username: str
-    password: str
+    warehouse_username: str
+    warehouse_password: str
     driver: str = "ODBC Driver 18 for SQL Server"
     batch_size: int = 50_000
     login_timeout: int = 30
@@ -114,10 +123,10 @@ class Settings:
 
         required = (
             "AUS_SOURCE_SERVER",
+            "AUS_SOURCE_USERNAME",
+            "AUS_SOURCE_PASSWORD",
             "AUS_WAREHOUSE_SERVER",
             "AUS_WAREHOUSE_DATABASE",
-            "AUS_SQL_USERNAME",
-            "AUS_SQL_PASSWORD",
         )
         missing = [key for key in required if not src.get(key)]
         if missing:
@@ -127,22 +136,32 @@ class Settings:
                 + ". See .env.example."
             )
 
+        # Same server for both is possible but not assumed; when the
+        # warehouse has its own login, it is used.
+        warehouse_username = src.get("AUS_WAREHOUSE_USERNAME") or src["AUS_SOURCE_USERNAME"]
+        warehouse_password = src.get("AUS_WAREHOUSE_PASSWORD") or src["AUS_SOURCE_PASSWORD"]
+
         return cls(
             source_server=src["AUS_SOURCE_SERVER"],
+            source_username=src["AUS_SOURCE_USERNAME"],
+            source_password=src["AUS_SOURCE_PASSWORD"],
             warehouse_server=src["AUS_WAREHOUSE_SERVER"],
             warehouse_database=src["AUS_WAREHOUSE_DATABASE"],
-            username=src["AUS_SQL_USERNAME"],
-            password=src["AUS_SQL_PASSWORD"],
+            warehouse_username=warehouse_username,
+            warehouse_password=warehouse_password,
             driver=src.get("AUS_ODBC_DRIVER", cls.driver),
             batch_size=int(src.get("AUS_BATCH_SIZE", cls.batch_size)),
             login_timeout=int(src.get("AUS_LOGIN_TIMEOUT", cls.login_timeout)),
         )
 
-    def __repr__(self) -> str:  # keep the password out of tracebacks and logs
+    def __repr__(self) -> str:  # keep passwords out of tracebacks and logs
         return (
             f"Settings(source_server={self.source_server!r}, "
+            f"source_username={self.source_username!r}, "
+            f"source_password=<redacted>, "
             f"warehouse_server={self.warehouse_server!r}, "
             f"warehouse_database={self.warehouse_database!r}, "
-            f"username={self.username!r}, password=<redacted>, "
+            f"warehouse_username={self.warehouse_username!r}, "
+            f"warehouse_password=<redacted>, "
             f"driver={self.driver!r}, batch_size={self.batch_size})"
         )
