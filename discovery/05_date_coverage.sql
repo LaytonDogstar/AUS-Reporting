@@ -12,12 +12,15 @@
     table scan.
 
     RUN THIS AGAINST THE REPORTING REPLICA, NOT LIVE.
-    Tables above @max_rows are skipped; raise it only if you need to.
+
+    A date column that leads an index is always read, however big the
+    table, because MIN/MAX on it is an index seek rather than a scan.
+    Only large tables whose date column is NOT indexed are skipped.
 */
 SET NOCOUNT ON;
 SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
 
-DECLARE @max_rows bigint = 20000000;   -- skip anything bigger than this
+DECLARE @max_rows bigint = 20000000;   -- unindexed columns above this are skipped
 
 IF OBJECT_ID('tempdb..#candidates') IS NOT NULL DROP TABLE #candidates;
 IF OBJECT_ID('tempdb..#results')    IS NOT NULL DROP TABLE #results;
@@ -74,6 +77,7 @@ DECLARE @i          int = 1,
         @tbl        sysname,
         @col        sysname,
         @rows       bigint,
+        @indexed    bit,
         @sql        nvarchar(max),
         @min_value  nvarchar(50),
         @max_value  nvarchar(50);
@@ -82,13 +86,15 @@ SELECT @n = MAX(id) FROM #candidates;
 
 WHILE @i <= ISNULL(@n, 0)
 BEGIN
-    SELECT @sch = schema_name, @tbl = table_name, @col = column_name, @rows = approx_rows
+    SELECT @sch = schema_name, @tbl = table_name, @col = column_name,
+           @rows = approx_rows, @indexed = is_index_leading_col
     FROM #candidates WHERE id = @i;
 
-    IF @rows > @max_rows
+    -- An indexed date column is a seek, so size does not matter.
+    IF @rows > @max_rows AND @indexed = 0
     BEGIN
         INSERT INTO #results (schema_name, table_name, column_name, approx_rows, min_value, max_value, note)
-        VALUES (@sch, @tbl, @col, @rows, NULL, NULL, 'SKIPPED - table exceeds @max_rows');
+        VALUES (@sch, @tbl, @col, @rows, NULL, NULL, 'SKIPPED - large table, column not indexed (full scan avoided)');
     END
     ELSE
     BEGIN
