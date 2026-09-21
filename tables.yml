@@ -1,0 +1,175 @@
+# What the extract copies, and how.
+#
+# Adding a table is a change here, not a change to code. Every spec is
+# validated before anything connects: an unknown key, a missing
+# watermark, or a disallowed column fails the run up front.
+#
+# mode:
+#   incremental  - WHERE <watermark_column> > last, in batches. Only valid
+#                  where the primary key is an int/bigint IDENTITY, which
+#                  makes the read a clustered index seek. Do not use a date
+#                  column: no date column is indexed in either source
+#                  database, so it would scan.
+#   snapshot     - full replace each run. For uniqueidentifier-keyed tables
+#                  (no usable watermark) and for small mutable config
+#                  tables, where an Id watermark would miss updates.
+#
+# Columns are always listed explicitly. No SELECT *, so a column added
+# upstream never arrives here unnoticed.
+#
+# Omitted on purpose across every spec below: names, email, phone, date
+# of birth, licence and street address. Banking columns and secrets
+# cannot be listed at all - see aus_reporting/sensitive.py.
+
+databases:
+
+  # ------------------------------------------------------------------
+  # Overflow - transactional application data
+  # ------------------------------------------------------------------
+  Overflow:
+
+    - table: Leads
+      mode: snapshot            # uniqueidentifier PK, no usable watermark
+      target: Leads
+      note: >
+        780k rows. Carries FirstName, LastName, Email, MobileNumber and
+        DateOfBirth in source; none are extracted. City and StateCode are
+        kept for geography and are not identifying on their own.
+      columns:
+        - Id
+        - DateCreated
+        - City
+        - StateCode
+
+    - table: LeadApplications
+      mode: snapshot            # uniqueidentifier PK
+      target: LeadApplications
+      note: >
+        4.4M rows, the spine of the model. MoveInDate is excluded: it holds
+        values up to 5687-12-01. EmployerName and JobTitle are excluded as
+        free text that can identify a person.
+      columns:
+        - Id
+        - LeadId
+        - AffiliateId
+        - ReferenceId
+        - StateCode
+        - PostCode
+        - ResidentialStatus
+        - EmploymentStatus
+        - EmploymentDuration
+        - MonthlyIncome
+        - PaymentFrequency
+        - LoanAmount
+        - LoanPurpose
+        - SecuredLoans
+        - MarketingConsent
+        - TermsAgreed
+        - IsAustralianResident
+        - AntiHawking
+        - DateCreated
+
+    - table: LeadApplicationAccepts
+      mode: snapshot            # uniqueidentifier PK
+      target: LeadApplicationAccepts
+      note: >
+        1.27M rows. The sale to a lender, and the measurable end of the
+        funnel: funded outcomes are not reported back by lenders, so this
+        is the conversion event, not funding. Url is excluded because
+        query strings can carry personal data.
+      columns:
+        - Id
+        - LeadId
+        - AffiliateId
+        - LeadApplicationId
+        - LenderTierId
+        - DateCreated
+
+    - table: Affiliates
+      mode: snapshot            # small and mutable
+      target: Affiliates
+      note: >
+        185 rows. Source also holds Password, CredfinSecretKey and
+        TalefinClientSecret; those are blocked outright and cannot be added
+        here. DateCreated is genuine for this table, unlike the other
+        config tables.
+      columns:
+        - Id
+        - AffiliateGroupId
+        - Name
+        - DisplayName
+        - Commission
+        - CommissionTypeId
+        - PingTreeId
+        - JourneyVersion
+        - IsImmediateResponse
+        - MarketingEnabled
+        - IsInternalSource
+        - MinimumLoanAmount
+        - DefaultLoanAmount
+        - SentLimit
+        - IsActive
+        - IsDeleted
+        - DateCreated
+        - DateModified
+
+    - table: AffiliateGroups
+      mode: snapshot
+      target: AffiliateGroups
+      note: 34 rows. DateCreated is the 2025-03-04 migration stamp, not real.
+      columns:
+        - Id
+        - Name
+        - XeroName
+        - PaymentCycle
+        - LastPaymentDate
+        - NextPaymentDate
+        - IsActive
+        - IsDeleted
+        - DateCreated
+        - DateModified
+
+    - table: Lenders
+      mode: snapshot
+      target: Lenders
+      note: >
+        47 rows. ContactName and Email are excluded as personal data for a
+        named individual at the lender. DateCreated is the 2025-03-04
+        migration stamp.
+      columns:
+        - Id
+        - Name
+        - SentLimit
+        - DeclineLimit
+        - BsType
+        - BankstatementAlias
+        - ShowTaleFinScore
+        - XeroName
+        - PaymentCycle
+        - LastBillingDate
+        - NextBillingDate
+        - IsActive
+        - IsDeleted
+        - DateCreated
+        - DateModified
+
+  # ------------------------------------------------------------------
+  # OverflowReporting - event and metric history
+  # ------------------------------------------------------------------
+  OverflowReporting:
+
+    - table: LeadApplicationStages
+      mode: incremental
+      watermark_column: Id      # bigint IDENTITY, clustered - a seek
+      target: LeadApplicationStages
+      note: >
+        19.8M rows and append-only, from 2021-07-01. The funnel table:
+        one row per stage a lead application reaches. StageId needs
+        decoding - no lookup table was found for it, so the meanings have
+        to come from the business.
+      columns:
+        - Id
+        - LeadApplicationId
+        - AffiliateId
+        - StageId
+        - DateCreated

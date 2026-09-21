@@ -4,10 +4,21 @@ Reporting against the AUS (Australia) lead and application databases.
 
 ## Status
 
-Early. Nothing is built yet — this repo currently contains the schema
-discovery pack only. The first job is to find out what is actually in
-the databases, because at the moment the only documented facts are two
-database names and one example join.
+Discovery is complete and the extract scaffolding is in place. Nothing
+is loading yet — the warehouse database has not been created.
+
+| | |
+|---|---|
+| [`discovery/`](discovery/) | Read-only scripts that mapped the source databases |
+| [`SCHEMA-FINDINGS.md`](SCHEMA-FINDINGS.md) | What they found. Read this before writing any query |
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | The design, and the constraints that forced it |
+| [`aus_reporting/`](aus_reporting/) | The extract |
+| [`tables.yml`](tables.yml) | What gets copied, and how |
+| [`warehouse/ddl/`](warehouse/ddl/) | Warehouse schema |
+| [`EXTRACT-RUNBOOK.md`](EXTRACT-RUNBOOK.md) | How to stand it up and run it |
+
+Next step is section "Suggested sequence" in `ARCHITECTURE.md`: create
+the warehouse database, run the DDL, and load the spine.
 
 ## Background
 
@@ -35,44 +46,45 @@ it, including exposed connection details in its screenshots.
 
 ## Getting started
 
-Run the discovery pack and share the output:
+Validate the extract config without connecting to anything:
 
 ```powershell
-cd discovery
-.\run-discovery.ps1 -ServerName fw04-sqlreporting01.database.windows.net -Database OverflowReporting
+python -m aus_reporting --dry-run
 ```
 
-See [`discovery/README.md`](discovery/README.md) for detail, safety notes
-and what to send back.
+Run the tests (no database needed):
+
+```powershell
+python -m unittest discover -s tests
+```
+
+To actually load data, follow [`EXTRACT-RUNBOOK.md`](EXTRACT-RUNBOOK.md).
+
+To re-run schema discovery, see [`discovery/RUNBOOK.md`](discovery/RUNBOOK.md).
 
 ## Open questions
 
 These block design, not discovery. Answers wanted from whoever owns the
 definitions:
 
-**Funnel and metrics**
-- What distinguishes a lead, an application and a funded customer?
-- What counts as a conversion, and when is commission recognised?
-- Which status and error codes matter, and what do they mean?
-- How is PingTree structured — what is a ping, a post, and a stored value?
+**Answered by discovery** — see `SCHEMA-FINDINGS.md`
+- Retention: neither database is purged; history runs from 2021-07-01.
+- Datetimes: the server is UTC. Local time is application-written.
+- Funded outcomes: lenders do not report them. The funnel ends at the
+  sale, so conversion means the accept, not funding.
 
-**Data semantics**
-- Are datetimes stored UTC or Australian local time?
-- Are monetary values stored in cents or dollars?
-- Can one person appear as multiple leads, and how are unique applicants counted?
+**Still open**
+- **What timezone defines a reporting day?** Australia spans three, and
+  not every state observes daylight saving. Blocks correct daily numbers.
+- **What does `StageId` mean?** It drives the funnel and has no lookup
+  table in either database.
+- **Which metrics matter, and who owns their definitions?** Conversion
+  rate, cost per sale, affiliate quality — each needs an owner.
+- Are monetary values in cents or dollars?
 - What test or internal traffic must be excluded from every report?
-
-**Retention and compliance**
-- Exactly what does the 30-day transactional deletion remove? This caps
-  how far back any report can ever look.
-- Which fields are off-limits to reporting, and is that enforced by
-  grants or by convention?
-- May report outputs leave the Azure boundary? This decides the BI tool.
-
-**Delivery**
-- Who is the audience, and what questions must this answer?
-- What grain and cadence — daily, hourly, near-real-time?
-- What output surface — Power BI, Metabase, scheduled email, Excel?
+  (`Affiliates.IsInternalSource` looks relevant.)
+- May report outputs leave the Azure boundary? Decides the BI tool.
+- What does `SortCode` hold? A UK term in an Australian system.
 
 ## Conventions
 
@@ -82,3 +94,11 @@ definitions:
   lookup tables are dumped, real data.
 - Reporting connects with a dedicated read-only login, not a named
   person's account.
+- **Banking columns and secrets cannot be extracted.** Configuring one
+  fails the run; there is no override. Personal identifiers require
+  explicit per-column approval in `tables.yml`. See
+  `aus_reporting/sensitive.py`.
+- Columns are always listed explicitly. No `SELECT *`, so a column added
+  upstream never arrives unnoticed.
+- Run `python -m unittest discover -s tests` before committing changes
+  to `aus_reporting/`.

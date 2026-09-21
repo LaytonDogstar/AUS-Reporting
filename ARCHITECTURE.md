@@ -92,9 +92,10 @@ Mitigation, by table type:
 - **Configuration tables** (`Lenders`, `Affiliates`, `PingTrees`,
   `CommissionOverrides`, …) — all tiny, hundreds of rows. Full snapshot
   every run. Cost is nil.
-- **`LeadFundedStatuses`** (1.27M, has `DateModified`) — full refresh
-  nightly. A 1.27M-row copy is cheap and funding state is exactly where
-  silent staleness would hurt most.
+- **Mutable tables with a `uniqueidentifier` key**
+  (`LeadApplications`, `LeadApplicationAccepts`, `Leads`) — full
+  snapshot. They have no usable watermark anyway, so the question does
+  not arise; the largest is 4.4M rows and a subset of columns.
 - **Append-only event tables** (`FailedFiltersV2`,
   `LeadApplicationStages`, `ApiErrors`, `LeadRedirects`, …) — inserts
   only by nature. Watermark is sufficient.
@@ -123,12 +124,30 @@ dim_lead ──┐
 dim_affiliate ─┤        │
 dim_lender ────┤        ├── fct_application_stage   (funnel)
 dim_date ──────┘        ├── fct_lender_result       (pingtree outcomes)
-                        ├── fct_funding             (see open question)
+                        ├── fct_accept              (the sale - see below)
                         ├── fct_lead_metrics        (2023-01-24 onward)
                         └── agg_failed_filter_daily (aggregated, not raw)
 ```
 
-Two deliberate choices:
+### The funnel ends at the sale, not at funding
+
+Lenders do not report funded outcomes back, so **funded data does not
+exist to be reported on.** That is confirmed rather than assumed:
+`FundedLeads` stopped being written in October 2024, and
+`LeadFundedStatuses` holds 1,269,731 rows against just **5** rows in
+`LeadFundedStatusHistories` — statuses are created per accept and then
+never transition.
+
+So the measurable conversion event is `LeadApplicationAccepts`: the lead
+being sold to a lender. That is also the commercial event, since revenue
+is commission on the sale. `fct_accept` is the end of the funnel, and no
+metric should be named or described as "funded".
+
+If lender funding feeds are ever obtained, they arrive as a new source
+and a new fact table; nothing in this design needs to change to
+accommodate that.
+
+Two further deliberate choices:
 
 **`FailedFiltersV2` is aggregated, not copied.** 194M rows and 26 GB to
 support "why did leads fail" questions that are almost always asked at
@@ -185,7 +204,7 @@ produces wrong numbers rather than an error:
 | Trap | Handling |
 |---|---|
 | `AffiliateRawData` ends 2025-11-28, `AffiliateRawDataV2` begins the same day | Union both in staging; never read one alone |
-| `FundedLeads` frozen since Oct 2024 | Do not use. See open question below |
+| `FundedLeads` frozen since Oct 2024 | Do not use. Lenders do not report funding; the funnel ends at the sale |
 | `LeadMetrics` starts 2023-01-24 | Metric definitions must state this; no YoY before 2024 |
 | `DateOfBirth` / `MoveInDate` contain 1753 sentinels and dates up to 5687 | Filter to a sane range before any age calculation |
 | Config `DateCreated` is a 2025-03-04 migration stamp | Never use to date a lender or affiliate relationship |
@@ -223,21 +242,25 @@ Either way:
 
 ## Open questions that block build
 
-1. **Where did funding data go after October 2024?** `FundedLeads` is
-   frozen; `LeadFundedStatuses` is the likely replacement but unconfirmed.
-   **No commission or conversion reporting can be trusted until this is
-   answered** — it is the first thing to ask.
+1. ~~Where did funding data go after October 2024?~~ **Answered:**
+   nowhere. Lenders do not provide it. The funnel ends at the sale; see
+   above.
 2. **What is the business timezone for a reporting day?**
 3. **Which metrics matter, and who owns their definitions?** The model
    above is a shape, not a specification. Conversion rate, cost per
-   funded lead, affiliate quality — each needs an owner and a written
+   sale, affiliate quality — each needs an owner and a written
    definition before it goes on a dashboard.
 4. **Is `LeadMetrics.Age` trustworthy** where `LeadApplications.DateOfBirth`
    is not?
 5. **What does `SortCode` hold?** A UK term in an Australian system.
 
-Questions 1 and 2 block real work. Question 3 decides what gets built
-first.
+Question 2 blocks correct daily numbers. Question 3 decides what gets
+built next. The rest can be answered as the model grows.
+
+Also open: **`StageId` in `LeadApplicationStages` has no lookup table**
+anywhere in either database. It is the funnel's stage identifier, so the
+meaning of each value has to come from the business before the funnel
+can be labelled.
 
 ---
 
@@ -247,8 +270,9 @@ first.
 2. Stand up the warehouse database and the extract for the spine only —
    `LeadApplications`, `Leads`, `Affiliates`, `Lenders`. Small, fast,
    proves the pattern end to end.
-3. Add `LeadApplicationStages` and `LeadFundedStatuses` — that is enough
-   for a funnel and a funding view, which is most of what anyone wants.
+3. Add `LeadApplicationStages` and `LeadApplicationAccepts` — that is
+   enough for a funnel and a conversion view, which is most of what
+   anyone wants.
 4. Add `LeadMetrics` for affordability and quality reporting.
 5. Aggregate `FailedFiltersV2` only once someone asks a question that
    needs it.

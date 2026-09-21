@@ -1,0 +1,6 @@
+# The extract needs an ODBC driver as well as this package:
+#   Microsoft ODBC Driver 18 for SQL Server
+# It is a separate install and is usually already present on a machine
+# that has SSMS. https://learn.microsoft.com/sql/connect/odbc/download-odbc-driver-for-sql-server
+pyodbc>=5.1
+PyYAML>=6.0
