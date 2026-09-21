@@ -54,14 +54,18 @@ it needs to read and write.
 
 ### 3. Run the DDL
 
-In SSMS, against the **warehouse**, in order:
+In SSMS, against the **warehouse**, in this order:
 
 ```
-warehouse/ddl/001_control.sql     -- watermark and run-history tables
-warehouse/ddl/002_staging.sql     -- staging tables and their indexes
+warehouse/ddl/001_control.sql      -- watermark and run-history tables
+warehouse/ddl/002_staging.sql      -- staging tables and their indexes
+warehouse/ddl/003_dim_stage.sql    -- the stage lookup (hand-maintained)
+warehouse/ddl/004_dim_date.sql     -- AEST calendar, 2021-2032
+warehouse/ddl/005_model_views.sql  -- dim / fct / agg views
 ```
 
-Both are idempotent — safe to re-run.
+Order matters: `003` and `005` reference the staging tables `002`
+creates. All five are idempotent — safe to re-run.
 
 ### 4. Install Python and the dependencies
 
@@ -128,7 +132,25 @@ the end and the exit code is non-zero.
 
 ## Checking it worked
 
-In SSMS against the warehouse:
+Run the validation script in SSMS against the warehouse:
+
+```
+warehouse/validate.sql
+```
+
+13 checks, each returning PASS or FAIL with the numbers behind it:
+stage 1 is 1:1 with applications, de-duplication worked, every
+`StageId` is known, referential integrity the source never enforced,
+dates all resolve in `dim.Date`, responses never exceed requests,
+stages 12 and 13 are mutually exclusive, retired stages stay out of the
+funnel, no personal or banking column has appeared in staging, and the
+loads are recent.
+
+**A FAIL is worth stopping for.** Each one describes a way the numbers
+could be wrong while still looking plausible — which is the failure mode
+that matters here.
+
+For freshness alone:
 
 ```sql
 SELECT * FROM ctl.vwFreshness ORDER BY MinutesSinceLoad DESC;
@@ -137,6 +159,37 @@ SELECT * FROM ctl.vwFreshness ORDER BY MinutesSinceLoad DESC;
 One row per incremental table, showing the last value loaded and how
 long ago. Snapshot tables do not appear — they are replaced whole, so
 check `MAX(_LoadedUtc)` on the table itself.
+
+## The model
+
+| Object | Grain | Notes |
+|---|---|---|
+| `dim.Affiliate` | affiliate | Joined to its group |
+| `dim.Lender` | lender | `DateCreated` exposed as `MigrationStampUtc` — it is a 2025-03-04 bulk stamp, not a real date |
+| `dim.Lead` | lead | No personal data at all |
+| `dim.Stage` | stage | Hand-maintained; nothing upstream to extract |
+| `dim.Date` | AEST day | Includes Australian financial year |
+| `fct.LeadApplication` | application | The spine |
+| `fct.ApplicationStage` | stage event | De-duplicated on source `Id` |
+| `fct.Accept` | accept | The sale — the end of the funnel |
+| `agg.ApplicationFunnel` | application | How far each one got. The expensive one |
+| `agg.StageFunnelByAffiliateDay` | affiliate / day / stage | Reach relative to stage 1 **for the same affiliate** |
+| `agg.DailyPerformance` | affiliate / day | Applications, sales, sold rate |
+
+Every fact exposes `<Event>Utc`, `<Event>Aest` and `<Event>DateKey`.
+Staging holds UTC; the model shifts by +10 hours for the AEST reporting
+day.
+
+Two things to know before building a report on this:
+
+- **Funnel percentages must come from
+  `agg.StageFunnelByAffiliateDay`**, not from aggregating stages across
+  affiliates. Only 7 of 19 active affiliates emit stages 3 and 4, so an
+  affiliate that never emits a stage has not dropped out at it.
+  Aggregate percentages are wrong.
+- **Nothing is "funded".** Lenders do not report funded outcomes, so
+  the measurable end is the sale. `agg.DailyPerformance` calls it
+  `ApplicationsSold` and `SoldRatePct` for that reason.
 
 Remember the source runs about **two minutes behind live**, so anything
 built on this should say "data as at" rather than implying it is current.

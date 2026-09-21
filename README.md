@@ -14,7 +14,9 @@ is loading yet — the warehouse database has not been created.
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | The design, and the constraints that forced it |
 | [`aus_reporting/`](aus_reporting/) | The extract |
 | [`tables.yml`](tables.yml) | What gets copied, and how |
-| [`warehouse/ddl/`](warehouse/ddl/) | Warehouse schema |
+| [`warehouse/ddl/`](warehouse/ddl/) | Warehouse schema and the dim/fct model |
+| [`warehouse/validate.sql`](warehouse/validate.sql) | 13 post-load correctness checks |
+| [`STAGES.md`](STAGES.md) | The funnel: `StageId` order, evidence, open labels |
 | [`EXTRACT-RUNBOOK.md`](EXTRACT-RUNBOOK.md) | How to stand it up and run it |
 
 Next step is section "Suggested sequence" in `ARCHITECTURE.md`: create
