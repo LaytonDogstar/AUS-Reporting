@@ -340,11 +340,31 @@ Confirmed unaffected: `BankStatementSummaries`, whose per-year counts sum
 to 3,909,483 against a reported 3,909,457. Tables with no large object
 column have a single allocation unit and were always right.
 
-Suspect until re-measured: `CredfinStatus` (has `RefreshInputs
-nvarchar(max)`), and any other table with an unbounded text column —
-which includes the headline figures for `FailedFiltersV2` and
-`LenderApplicationResults`. Re-running the fixed inventory settles it in
-under a second.
+### Scope, now measured
+
+The fixed query was re-run against `OverflowReporting` on 2026-09-22.
+**Only three tables moved, all of them small:**
+
+| Table | Was | Is |
+|---|---|---|
+| `SystemAlerts` | 18,507 | 6,169 |
+| `OverflowUsers` | 312 | 104 |
+| `OfflineOffers` | 18 | 6 |
+
+Every other count changed only by the growth expected between two runs.
+The headline figures I was most worried about are **unaffected**:
+`FailedFiltersV2` at 194.3M, `LenderApplicationResults` at 98.9M,
+`FailedFilters` at 37.0M and `LeadApplicationStages` at 19.77M all hold.
+They have no large object columns, so they always had one allocation unit
+and were always right.
+
+So the flaw was real but narrow: it only ever touched tables with an
+unbounded text column. Everything the architecture and sizing work was
+based on stands.
+
+`Overflow` has not yet been re-measured. `CredfinStatus` has a
+`RefreshInputs nvarchar(max)` column and is expected to fall from 5.21M
+to roughly 1.74M.
 
 **`Overflow` is therefore materially smaller than reported.** Correcting
 this one table alone removes 45.2M rows from the total.
