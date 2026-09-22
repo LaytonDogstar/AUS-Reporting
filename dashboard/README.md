@@ -1,5 +1,21 @@
 # The dashboard
 
+## Updating your copy
+
+One line, from any PowerShell window:
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/LaytonDogstar/AUS-Reporting/claude/code-review-tsyca6/dashboard/Update-Pack.ps1 | iex
+```
+
+Downloads the current scripts, extracts them, clears the
+downloaded-from-the-internet flag, allows scripts in that window, and
+leaves you in the dashboard folder. It tells you how many files changed,
+or that nothing did.
+
+Safe to run from inside the folder it replaces.
+
+
 A single HTML file. No server, no port, no login, no database of our
 own — a scheduled script runs the queries and writes a page.
 
