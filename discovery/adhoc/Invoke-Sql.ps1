@@ -86,7 +86,16 @@ try {
 
     $adapter = New-Object System.Data.SqlClient.SqlDataAdapter $command
     $dataSet = New-Object System.Data.DataSet
+
+    # Timed, because how long a query takes is often the answer itself.
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     [void]$adapter.Fill($dataSet)
+    $stopwatch.Stop()
+
+    $rowTotal = 0
+    foreach ($t in $dataSet.Tables) { $rowTotal += $t.Rows.Count }
+    $seconds = [math]::Round($stopwatch.Elapsed.TotalSeconds, 2)
+    Write-Host ("Completed in {0}s, {1} row(s) returned" -f $seconds, $rowTotal) -ForegroundColor Yellow
 
     $setNumber = 0
     foreach ($table in $dataSet.Tables) {
