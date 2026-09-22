@@ -25,7 +25,8 @@ the constraint that forced them, so they can be argued with.
 
 The core funnel query — daily counts by affiliate and stage over 30
 days, scanning all 19.76M rows of `LeadApplicationStages` — returns in
-**5.13 seconds**.
+**5.13 seconds on a cold run**, straight from disk with no cache
+benefit. A warm run would be faster.
 
 That is far better than expected and it changes the conclusion. Five
 seconds is fine for a scheduled Power BI import refresh, and tolerable
