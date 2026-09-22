@@ -14,13 +14,16 @@
     replication subscriber it reads from.
 */
 -- Application volume and loan size per AEST day and affiliate.
+--
+-- COUNT(DISTINCT LeadId) was here and cost about 50 of this query's 55
+-- seconds: LeadId is a uniqueidentifier and there are 4.4M rows. The
+-- page never displayed it. AvgMonthlyIncome went with it for the same
+-- reason. Add either back only alongside something that shows it.
 SELECT
     CAST(DATEADD(HOUR, {{AEST_SHIFT_HOURS}}, DateCreated) AS date)  AS Day,
     AffiliateId,
-    COUNT(*)                   AS Applications,
-    COUNT(DISTINCT LeadId)     AS DistinctLeads,
-    AVG(CAST(LoanAmount AS float))    AS AvgLoanAmount,
-    AVG(CAST(MonthlyIncome AS float)) AS AvgMonthlyIncome
+    COUNT(*)                       AS Applications,
+    AVG(CAST(LoanAmount AS float)) AS AvgLoanAmount
 FROM dbo.LeadApplications WITH (NOLOCK)
 WHERE DateCreated >= DATEADD(DAY, {{WINDOW_DAYS}}, SYSUTCDATETIME())
 GROUP BY CAST(DATEADD(HOUR, {{AEST_SHIFT_HOURS}}, DateCreated) AS date), AffiliateId;

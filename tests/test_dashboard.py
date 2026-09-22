@@ -289,3 +289,47 @@ class TestBuilderParity(unittest.TestCase):
         self.assertEqual(
             {int(k) for k in meta["stages"]}, set(queries.STAGES)
         )
+
+
+class TestQueryPageContract(unittest.TestCase):
+    """The page and the queries have to agree on column names.
+
+    An earlier version of this tried to parse every selected column out
+    of the SQL and flag unused ones. That parser matched `AS float` from
+    a CAST and missed columns written without `AS` - more machinery than
+    the problem deserved. This checks the direction that actually breaks
+    things: a column the page reads must still be selected.
+    """
+
+    # what the page reads -> the query that must provide it
+    REQUIRED = {
+        "applications": ["Day", "AffiliateId", "Applications", "AvgLoanAmount"],
+        "accepts":      ["Day", "AffiliateId", "ApplicationsSold"],
+        "stage_counts": ["Day", "AffiliateId", "StageId", "Applications"],
+        "affiliates":   ["Id", "Name", "DisplayName"],
+    }
+
+    def test_every_column_the_page_reads_is_selected(self):
+        for name, columns in self.REQUIRED.items():
+            _, sql = queries.SOURCES[name]
+            for column in columns:
+                self.assertRegex(sql, r"\b" + column + r"\b",
+                                 f"{name}.sql no longer selects {column}")
+
+    def test_the_page_reads_every_required_column(self):
+        # Keeps the list above honest rather than aspirational.
+        page = TEMPLATE.read_text(encoding="utf-8")
+        for name, columns in self.REQUIRED.items():
+            for column in columns:
+                self.assertRegex(page, r"\b" + column + r"\b",
+                                 f"{column} is required but the page never reads it")
+
+    def test_the_expensive_distinct_is_gone(self):
+        # COUNT(DISTINCT LeadId) over 4.4M uniqueidentifiers cost about
+        # 50 of a 65-second build, for a column nothing displayed.
+        # Comments are stripped: the file explains the removal by name.
+        _, sql = queries.SOURCES["applications"]
+        body = re.sub(r"/\*.*?\*/", " ", sql, flags=re.S)
+        body = re.sub(r"--[^\n]*", " ", body)
+        self.assertNotIn("COUNT(DISTINCT LeadId)", body)
+        self.assertNotIn("MonthlyIncome", body)
