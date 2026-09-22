@@ -3,43 +3,38 @@
     Publish the built dashboard to Azure Static Web Apps.
 
 .DESCRIPTION
-    Uploads a built dashboard.html to a Static Web App using its
-    deployment token, so the page gets a URL behind a real Entra sign-in.
+    Stages the page as index.html with an auth config, then deploys it
+    with the Azure Static Web Apps CLI.
 
-    Deliberately avoids the SWA CLI, which needs Node.js - one more thing
-    to install on a machine where installing things is the problem.
-    It posts a zip to the Static Web App's deployment endpoint instead.
-
-    *** This route is less well-trodden than the CLI or GitHub Actions.
-    If it fails, see HOSTING.md for the App Service alternative, which
-    reaches the same place - a URL with Entra login - over a much better
-    documented deployment API. ***
+    The CLI is run through npx, so nothing is installed globally - but it
+    does need Node.js on this machine. An earlier version of this script
+    tried a plain REST call to avoid that; the deployment endpoint is not
+    documented for this use and the app's hostname is auto-generated
+    rather than derived from its name, so that approach was guesswork.
+    This is the supported path.
 
     The deployment token is a credential: it can publish to your site.
-    Treat it like a password.
+    Treat it like a password, and rotate it if it is ever exposed.
 
 .EXAMPLE
     .\Publish-StaticWebApp.ps1 -File C:\reports\dashboard.html -DeploymentToken "..."
 
 .EXAMPLE
     # Token from the environment, for a scheduled run
-    $env:AUS_SWA_TOKEN = "..."
-    .\Publish-StaticWebApp.ps1 -File C:\reports\dashboard.html -AppName aus-reporting
+    [Environment]::SetEnvironmentVariable("AUS_SWA_TOKEN", "...", "User")
+    .\Publish-StaticWebApp.ps1 -File C:\reports\dashboard.html
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
     [string] $File,
 
-    [Parameter(Mandatory = $true)]
-    [string] $AppName,
-
     [string] $DeploymentToken = $env:AUS_SWA_TOKEN,
 
-    # Must match the role you assign when inviting people in the Portal.
+    # Must match the role assigned when inviting people in the Portal.
     [string] $RequiredRole = "reader",
 
-    [int] $TimeoutSeconds = 300
+    [string] $Environment = "production"
 )
 
 $ErrorActionPreference = 'Stop'
@@ -47,15 +42,23 @@ $ErrorActionPreference = 'Stop'
 if (-not (Test-Path $File)) { throw "no such file: $File" }
 if (-not $DeploymentToken) {
     throw ("No deployment token. Pass -DeploymentToken, or set " +
-           "`$env:AUS_SWA_TOKEN. Find it in the Azure Portal under the " +
-           "Static Web App > Overview > Manage deployment token.")
+           "`$env:AUS_SWA_TOKEN. Portal > the Static Web App > Overview > " +
+           "Manage deployment token.")
 }
 
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+# --- prerequisite -----------------------------------------------------
+$npx = Get-Command npx -ErrorAction SilentlyContinue
+if (-not $npx) {
+    throw @"
+Node.js is not installed, and the Static Web Apps CLI needs it.
+
+Install it from https://nodejs.org (the LTS build), reopen PowerShell,
+and run this again. Nothing else is required - the CLI itself is fetched
+on demand by npx and is not installed permanently.
+"@
+}
 
 # --- stage the site ---------------------------------------------------
-# A Static Web App serves a folder. Ours is one file, named index.html so
-# it is served at the root.
 $staging = Join-Path ([System.IO.Path]::GetTempPath()) ("swa-" + [guid]::NewGuid().ToString("N"))
 $siteDir = Join-Path $staging "site"
 New-Item -ItemType Directory -Path $siteDir -Force | Out-Null
@@ -63,15 +66,13 @@ New-Item -ItemType Directory -Path $siteDir -Force | Out-Null
 try {
     Copy-Item -Path $File -Destination (Join-Path $siteDir "index.html") -Force
 
-    # staticwebapp.config.json is what turns on the sign-in requirement.
-    # Without it the site is public, whatever the portal shows.
+    # This file is what enforces the sign-in. Without it the site is
+    # public, whatever the Portal shows.
     #
     # The role is a CUSTOM one, not the built-in "authenticated".
-    # "authenticated" means "signed in with any Microsoft account" - on
-    # the Free tier that is any Microsoft account in the world, not just
-    # people in this tenant. A custom role is only held by someone
-    # explicitly invited under Role management, so everyone else is
-    # refused after signing in.
+    # "authenticated" means signed in with any Microsoft account - any
+    # account anywhere, not just someone in this tenant. A custom role
+    # is held only by people explicitly invited under Role management.
     $config = @{
         routes = @(
             @{ route = "/*"; allowedRoles = @($RequiredRole) }
@@ -80,8 +81,8 @@ try {
             "401" = @{ statusCode = 302; redirect = "/.auth/login/aad" }
         }
         globalHeaders = @{
-            # The page is rebuilt on a schedule; a cached copy is worse
-            # than a re-fetch.
+            # Rebuilt on a schedule, so a cached copy is worse than a
+            # re-fetch.
             "cache-control" = "no-cache, max-age=0"
         }
     } | ConvertTo-Json -Depth 6
@@ -89,45 +90,29 @@ try {
     Set-Content -Path (Join-Path $siteDir "staticwebapp.config.json") `
         -Value $config -Encoding UTF8
 
-    $zipPath = Join-Path $staging "site.zip"
-    Compress-Archive -Path (Join-Path $siteDir "*") -DestinationPath $zipPath -Force
+    $sizeMb = [math]::Round((Get-Item (Join-Path $siteDir "index.html")).Length / 1MB, 2)
+    Write-Host "Staged index.html ($sizeMb MB) and the auth config" -ForegroundColor DarkGray
+    Write-Host "Deploying..." -ForegroundColor Cyan
+    Write-Host "(the first run downloads the CLI, so it takes a minute longer)" -ForegroundColor DarkGray
+    Write-Host ""
 
-    $sizeKb = [math]::Round((Get-Item $zipPath).Length / 1KB, 1)
-    Write-Host "Staged $sizeKb KB (index.html + auth config)" -ForegroundColor DarkGray
+    # --deployment-token keeps the token off the command line where
+    # possible; npx passes it through to the CLI.
+    & npx --yes @azure/static-web-apps-cli deploy $siteDir `
+        --deployment-token $DeploymentToken `
+        --env $Environment
 
-    # --- deploy -------------------------------------------------------
-    $uri = "https://$AppName.scm.azurestaticapps.net/api/zipdeploy"
-    Write-Host "Deploying to $AppName..." -ForegroundColor Cyan
-
-    $headers = @{
-        Authorization = "Bearer $DeploymentToken"
-        "Content-Type" = "application/zip"
-    }
-
-    try {
-        Invoke-RestMethod -Uri $uri -Method Post -Headers $headers `
-            -InFile $zipPath -TimeoutSec $TimeoutSeconds | Out-Null
-    }
-    catch {
-        $status = $null
-        if ($_.Exception.Response) { $status = $_.Exception.Response.StatusCode.value__ }
-        $hint = switch ($status) {
-            401 { "the deployment token is wrong or has been rotated" }
-            403 { "the token is valid but not for this app" }
-            404 { "no Static Web App named '$AppName' - check the name, it is the resource name not the URL" }
-            default { "this deployment route is less well-trodden than the SWA CLI; see HOSTING.md for the App Service alternative" }
-        }
-        throw "Deploy failed$(if ($status) { " (HTTP $status)" }): $hint`n$($_.Exception.Message)"
+    if ($LASTEXITCODE -ne 0) {
+        throw ("swa deploy exited with code $LASTEXITCODE. A 401 or 403 usually " +
+               "means the deployment token is wrong or has been rotated.")
     }
 
     Write-Host ""
     Write-Host "Published." -ForegroundColor Green
-    Write-Host "  https://$AppName.azurestaticapps.net" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "Access requires the '$RequiredRole' role." -ForegroundColor Yellow
-    Write-Host "In the Portal: Role management > Invite > assign '$RequiredRole'." -ForegroundColor Yellow
-    Write-Host "Until someone holds that role, they will sign in and then be refused" -ForegroundColor Yellow
-    Write-Host "- including you. Invite yourself first." -ForegroundColor Yellow
+    Write-Host "Portal > Role management > Invite > assign '$RequiredRole'." -ForegroundColor Yellow
+    Write-Host "Invite yourself first, or your own site will refuse you." -ForegroundColor Yellow
 }
 finally {
     if (Test-Path $staging) { Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue }
