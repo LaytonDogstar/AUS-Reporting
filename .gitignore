@@ -15,6 +15,12 @@ discovery/output/
 appsettings.*.json
 !appsettings.example.json
 
+# Generated dashboard output. demo.html IS committed - it is built from
+# synthetic data and is how someone sees the dashboard without running
+# anything.
+dashboard.html
+/reports/
+
 # Python
 __pycache__/
 *.py[cod]

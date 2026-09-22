@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AUS Lead Reporting</title>
+<style>
+  /* Colours are defined once as roles. Dark mode is a selected set of
+     steps for the dark surface, not an automatic inversion. */
+  :root {
+    color-scheme: light;
+    --page:        #f9f9f7;
+    --surface:     #fcfcfb;
+    --ink:         #0b0b0b;
+    --ink-2:       #52514e;
+    --muted:       #898781;
+    --grid:        #e1e0d9;
+    --baseline:    #c3c2b7;
+    --border:      rgba(11,11,11,0.10);
+    --series-1:    #2a78d6;
+    --series-2:    #eb6834;
+    --good:        #0ca30c;
+    --critical:    #d03b3b;
+    --shadow:      0 1px 2px rgba(11,11,11,.05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --page:     #0d0d0d;  --surface:  #1a1a19;
+      --ink:      #ffffff;  --ink-2:    #c3c2b7;
+      --muted:    #898781;  --grid:     #2c2c2a;
+      --baseline: #383835;  --border:   rgba(255,255,255,0.10);
+      --series-1: #3987e5;  --series-2: #d95926;
+      --good:     #0ca30c;  --critical: #d03b3b;
+      --shadow:   0 1px 2px rgba(0,0,0,.4);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page:     #0d0d0d;  --surface:  #1a1a19;
+    --ink:      #ffffff;  --ink-2:    #c3c2b7;
+    --muted:    #898781;  --grid:     #2c2c2a;
+    --baseline: #383835;  --border:   rgba(255,255,255,0.10);
+    --series-1: #3987e5;  --series-2: #d95926;
+    --good:     #0ca30c;  --critical: #d03b3b;
+    --shadow:   0 1px 2px rgba(0,0,0,.4);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--page); color: var(--ink);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 24px 16px 64px; }
+
+  header { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 4px; }
+  h1 { font-size: 21px; font-weight: 640; margin: 0; letter-spacing: -0.01em; }
+  .asof { color: var(--muted); font-size: 13px; }
+  .spacer { flex: 1 1 auto; }
+
+  button.ghost {
+    background: none; border: 1px solid var(--border); color: var(--ink-2);
+    border-radius: 7px; padding: 5px 11px; font: inherit; font-size: 13px;
+    cursor: pointer;
+  }
+  button.ghost:hover { background: var(--surface); color: var(--ink); }
+
+  /* Filters sit in one row above the charts. */
+  .filters {
+    display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+    margin: 18px 0 20px; padding-bottom: 18px; border-bottom: 1px solid var(--border);
+  }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .seg button {
+    background: var(--surface); border: 0; border-right: 1px solid var(--border);
+    color: var(--ink-2); font: inherit; font-size: 13px; padding: 6px 13px; cursor: pointer;
+  }
+  .seg button:last-child { border-right: 0; }
+  .seg button[aria-pressed="true"] { background: var(--series-1); color: #fff; font-weight: 560; }
+  select {
+    font: inherit; font-size: 13px; padding: 6px 10px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--surface); color: var(--ink);
+    max-width: 280px;
+  }
+  label.lbl { font-size: 13px; color: var(--muted); }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px,1fr)); gap: 12px; margin-bottom: 22px; }
+  .tile {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 11px;
+    padding: 14px 16px; box-shadow: var(--shadow);
+  }
+  .tile .k { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .tile .v { font-size: 28px; font-weight: 640; margin-top: 4px; letter-spacing: -0.02em; }
+  .tile .s { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 11px;
+    padding: 18px 18px 12px; margin-bottom: 18px; box-shadow: var(--shadow);
+  }
+  .card h2 { font-size: 15px; font-weight: 620; margin: 0 0 2px; }
+  .card .sub { font-size: 13px; color: var(--muted); margin: 0 0 14px; }
+
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; color: var(--ink-2); margin-bottom: 10px; }
+  .legend i { width: 11px; height: 11px; border-radius: 3px; display: inline-block; margin-right: 6px; vertical-align: -1px; }
+
+  svg { display: block; width: 100%; overflow: visible; }
+  .gridline { stroke: var(--grid); stroke-width: 1; }
+  .axis     { stroke: var(--baseline); stroke-width: 1; }
+  .tick     { fill: var(--muted); font-size: 11px; }
+  .tick.num { font-variant-numeric: tabular-nums; }
+  .lbl-direct { font-size: 12px; font-weight: 560; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: right; padding: 7px 10px; border-bottom: 1px solid var(--border); }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 560; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  td.num { font-variant-numeric: tabular-nums; }
+  tbody tr:hover { background: var(--page); }
+
+  .note {
+    font-size: 13px; color: var(--ink-2); background: var(--page);
+    border: 1px solid var(--border); border-left: 3px solid var(--series-2);
+    border-radius: 7px; padding: 10px 12px; margin: 0 0 14px;
+  }
+  .hidden { display: none !important; }
+
+  #tip {
+    position: fixed; pointer-events: none; z-index: 9;
+    background: var(--surface); color: var(--ink);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 10px; font-size: 12.5px; box-shadow: 0 4px 14px rgba(0,0,0,.14);
+    opacity: 0; transition: opacity .09s;
+  }
+  #tip b { font-weight: 620; }
+  #tip .row { display: flex; gap: 10px; justify-content: space-between; }
+  #tip .row span:last-child { font-variant-numeric: tabular-nums; }
+
+  footer { color: var(--muted); font-size: 12.5px; margin-top: 26px; line-height: 1.7; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>AUS Lead Reporting</h1>
+    <span class="asof" id="asof"></span>
+    <span class="spacer"></span>
+    <button class="ghost" id="themeBtn" type="button">Dark mode</button>
+  </header>
+
+  <div class="filters">
+    <div class="seg" id="rangeSeg" role="group" aria-label="Date range">
+      <button type="button" data-days="7">7 days</button>
+      <button type="button" data-days="30" aria-pressed="true">30 days</button>
+      <button type="button" data-days="90">90 days</button>
+    </div>
+    <label class="lbl" for="affSel">Affiliate</label>
+    <select id="affSel"><option value="all">All affiliates</option></select>
+    <span class="spacer"></span>
+    <button class="ghost" id="tableBtn" type="button">Show data tables</button>
+  </div>
+
+  <div class="tiles" id="tiles"></div>
+
+  <section class="card">
+    <h2>Daily volume</h2>
+    <p class="sub" id="trendSub"></p>
+    <div class="legend">
+      <span><i style="background:var(--series-1)"></i>Applications</span>
+      <span><i style="background:var(--series-2)"></i>Sold to a lender</span>
+    </div>
+    <svg id="trend" height="260" role="img" aria-label="Daily applications and sales"></svg>
+  </section>
+
+  <section class="card">
+    <h2>Funnel</h2>
+    <p class="sub" id="funnelSub"></p>
+    <p class="note hidden" id="funnelNote"></p>
+    <svg id="funnel" role="img" aria-label="Applications reaching each stage"></svg>
+  </section>
+
+  <section class="card">
+    <h2>Affiliates</h2>
+    <p class="sub">Applications and sales over the selected period.</p>
+    <table id="affTable">
+      <thead><tr>
+        <th>Affiliate</th><th>Applications</th><th>Sold</th>
+        <th>Sold rate</th><th>Offer</th><th>Decline</th><th>Avg loan</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section class="card hidden" id="tablesCard">
+    <h2>Data tables</h2>
+    <p class="sub">The numbers behind the charts, for reading or copying.</p>
+    <h3 style="font-size:13px;margin:16px 0 6px">Daily volume</h3>
+    <table id="trendTable"><thead><tr>
+      <th>Day</th><th>Applications</th><th>Sold</th><th>Sold rate</th>
+    </tr></thead><tbody></tbody></table>
+    <h3 style="font-size:13px;margin:22px 0 6px">Funnel</h3>
+    <table id="funnelTable"><thead><tr>
+      <th>Stage</th><th>Applications</th><th>Of received</th>
+    </tr></thead><tbody></tbody></table>
+  </section>
+
+  <footer id="foot"></footer>
+</div>
+
+<div id="tip" role="status" aria-live="polite"></div>
+
+<script>
+const DATA = /*__DASHBOARD_DATA__*/null;
+
+(function () {
+  "use strict";
+  if (!DATA) { document.body.innerHTML = "<p style='padding:2rem'>No data was built into this page.</p>"; return; }
+
+  const $ = (id) => document.getElementById(id);
+  const fmt = (n) => (n == null ? "—" : Math.round(n).toLocaleString("en-AU"));
+  const pct = (n) => (n == null ? "—" : n.toFixed(1) + "%");
+  const money = (n) => (n == null ? "—" : "$" + Math.round(n).toLocaleString("en-AU"));
+
+  // ---- state -------------------------------------------------------
+  let days = 30;
+  let affiliate = "all";
+  let showTables = false;
+
+  // ---- lookups -----------------------------------------------------
+  const affName = new Map();
+  for (const a of DATA.affiliates) {
+    affName.set(String(a.Id), a.DisplayName || a.Name || ("Affiliate " + a.Id));
+  }
+  const stages = DATA.stages;
+  // Funnel stages in journey order. Stages with no order are error
+  // conditions or were never emitted, and are not funnel steps.
+  const funnelStages = Object.keys(stages)
+    .filter((id) => stages[id].order !== null)
+    .sort((a, b) => stages[a].order - stages[b].order || a - b);
+
+  const RECEIVED = "1", OFFER = "10", DECLINE = "13";
+
+  // ---- date window -------------------------------------------------
+  const allDays = [...new Set(DATA.applications.map((r) => r.Day))].sort();
+  const latest = allDays.length ? allDays[allDays.length - 1] : null;
+
+  function windowStart() {
+    if (!latest) return null;
+    const d = new Date(latest + "T00:00:00Z");
+    d.setUTCDate(d.getUTCDate() - (days - 1));
+    return d.toISOString().slice(0, 10);
+  }
+  const inWindow = (row) => {
+    const from = windowStart();
+    return from && row.Day >= from && row.Day <= latest;
+  };
+  const matchAff = (row) =>
+    affiliate === "all" || String(row.AffiliateId) === affiliate;
+  const keep = (row) => inWindow(row) && matchAff(row);
+
+  // ---- aggregation -------------------------------------------------
+  function dailySeries() {
+    const apps = new Map(), sold = new Map();
+    for (const r of DATA.applications) if (keep(r))
+      apps.set(r.Day, (apps.get(r.Day) || 0) + r.Applications);
+    for (const r of DATA.accepts) if (keep(r))
+      sold.set(r.Day, (sold.get(r.Day) || 0) + r.ApplicationsSold);
+    const dayList = [...new Set([...apps.keys(), ...sold.keys()])].sort();
+    return dayList.map((d) => ({
+      day: d, apps: apps.get(d) || 0, sold: sold.get(d) || 0
+    }));
+  }
+
+  function funnelCounts() {
+    const byStage = new Map();
+    for (const r of DATA.stage_counts) if (keep(r))
+      byStage.set(String(r.StageId), (byStage.get(String(r.StageId)) || 0) + r.Applications);
+    return byStage;
+  }
+
+  function affiliateRows() {
+    const out = new Map();
+    const row = (id) => {
+      const k = String(id);
+      if (!out.has(k)) out.set(k, {
+        id: k, name: affName.get(k) || ("Affiliate " + k),
+        apps: 0, sold: 0, offer: 0, decline: 0, loanSum: 0, loanDays: 0
+      });
+      return out.get(k);
+    };
+    for (const r of DATA.applications) if (inWindow(r)) {
+      const a = row(r.AffiliateId);
+      a.apps += r.Applications;
+      if (r.AvgLoanAmount != null) { a.loanSum += r.AvgLoanAmount * r.Applications; a.loanDays += r.Applications; }
+    }
+    for (const r of DATA.accepts) if (inWindow(r)) row(r.AffiliateId).sold += r.ApplicationsSold;
+    for (const r of DATA.stage_counts) if (inWindow(r)) {
+      const s = String(r.StageId);
+      if (s === OFFER)   row(r.AffiliateId).offer   += r.Applications;
+      if (s === DECLINE) row(r.AffiliateId).decline += r.Applications;
+    }
+    return [...out.values()]
+      .filter((a) => a.apps > 0)
+      .sort((a, b) => b.apps - a.apps);
+  }
+
+  // ---- tooltip -----------------------------------------------------
+  const tip = $("tip");
+  function showTip(evt, html) {
+    tip.innerHTML = html;
+    tip.style.opacity = "1";
+    const pad = 14, r = tip.getBoundingClientRect();
+    let x = evt.clientX + pad, y = evt.clientY + pad;
+    if (x + r.width > innerWidth - 8) x = evt.clientX - r.width - pad;
+    if (y + r.height > innerHeight - 8) y = evt.clientY - r.height - pad;
+    tip.style.left = x + "px"; tip.style.top = y + "px";
+  }
+  const hideTip = () => { tip.style.opacity = "0"; };
+
+  const SVGNS = "http://www.w3.org/2000/svg";
+  function el(name, attrs, parent) {
+    const n = document.createElementNS(SVGNS, name);
+    for (const k in attrs) n.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(n);
+    return n;
+  }
+  const niceMax = (v) => {
+    if (v <= 0) return 10;
+    const mag = Math.pow(10, Math.floor(Math.log10(v)));
+    return Math.ceil(v / mag * 2) / 2 * mag;
+  };
+
+  // ---- daily volume ------------------------------------------------
+  function drawTrend(series) {
+    const svg = $("trend");
+    svg.innerHTML = "";
+    if (!series.length) return;
+
+    const W = svg.clientWidth || 900, H = 260;
+    const m = { t: 14, r: 58, b: 26, l: 48 };
+    const iw = W - m.l - m.r, ih = H - m.t - m.b;
+    const max = niceMax(Math.max(...series.map((d) => Math.max(d.apps, d.sold)), 1));
+    const x = (i) => m.l + (series.length === 1 ? iw / 2 : (i / (series.length - 1)) * iw);
+    const y = (v) => m.t + ih - (v / max) * ih;
+
+    for (let i = 0; i <= 4; i++) {
+      const gy = m.t + (i / 4) * ih;
+      el("line", { x1: m.l, x2: m.l + iw, y1: gy, y2: gy, class: "gridline" }, svg);
+      const t = el("text", { x: m.l - 9, y: gy + 4, class: "tick num", "text-anchor": "end" }, svg);
+      t.textContent = fmt(max - (i / 4) * max);
+    }
+    el("line", { x1: m.l, x2: m.l + iw, y1: m.t + ih, y2: m.t + ih, class: "axis" }, svg);
+
+    const step = Math.max(1, Math.ceil(series.length / 7));
+    series.forEach((d, i) => {
+      if (i % step && i !== series.length - 1) return;
+      const t = el("text", { x: x(i), y: H - 6, class: "tick", "text-anchor": "middle" }, svg);
+      t.textContent = d.day.slice(8) + "/" + d.day.slice(5, 7);
+    });
+
+    // 2px lines, one per series
+    for (const [key, colour] of [["apps", "var(--series-1)"], ["sold", "var(--series-2)"]]) {
+      const pts = series.map((d, i) => `${x(i)},${y(d[key])}`).join(" ");
+      el("polyline", {
+        points: pts, fill: "none", stroke: colour, "stroke-width": 2,
+        "stroke-linejoin": "round", "stroke-linecap": "round"
+      }, svg);
+      // Direct label at the last point - identity without relying on colour.
+      const last = series[series.length - 1];
+      const t = el("text", {
+        x: m.l + iw + 8, y: y(last[key]) + 4, class: "lbl-direct", fill: colour
+      }, svg);
+      t.textContent = fmt(last[key]);
+    }
+
+    // crosshair + tooltip
+    const cross = el("line", {
+      x1: 0, x2: 0, y1: m.t, y2: m.t + ih, stroke: "var(--baseline)",
+      "stroke-width": 1, opacity: 0
+    }, svg);
+    const dotA = el("circle", { r: 4.5, fill: "var(--series-1)", stroke: "var(--surface)", "stroke-width": 2, opacity: 0 }, svg);
+    const dotB = el("circle", { r: 4.5, fill: "var(--series-2)", stroke: "var(--surface)", "stroke-width": 2, opacity: 0 }, svg);
+
+    const hit = el("rect", { x: m.l, y: m.t, width: iw, height: ih, fill: "transparent" }, svg);
+    hit.addEventListener("mousemove", (evt) => {
+      const bb = svg.getBoundingClientRect();
+      const rel = evt.clientX - bb.left - m.l;
+      const i = Math.max(0, Math.min(series.length - 1,
+        Math.round((rel / iw) * (series.length - 1))));
+      const d = series[i];
+      cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("opacity", 1);
+      dotA.setAttribute("cx", x(i)); dotA.setAttribute("cy", y(d.apps)); dotA.setAttribute("opacity", 1);
+      dotB.setAttribute("cx", x(i)); dotB.setAttribute("cy", y(d.sold)); dotB.setAttribute("opacity", 1);
+      const rate = d.apps ? (100 * d.sold / d.apps) : null;
+      showTip(evt,
+        `<b>${d.day}</b>
+         <div class="row"><span>Applications</span><span>${fmt(d.apps)}</span></div>
+         <div class="row"><span>Sold</span><span>${fmt(d.sold)}</span></div>
+         <div class="row"><span>Sold rate</span><span>${pct(rate)}</span></div>`);
+    });
+    hit.addEventListener("mouseleave", () => {
+      hideTip(); cross.setAttribute("opacity", 0);
+      dotA.setAttribute("opacity", 0); dotB.setAttribute("opacity", 0);
+    });
+  }
+
+  // ---- funnel ------------------------------------------------------
+  function drawFunnel(counts) {
+    const svg = $("funnel");
+    svg.innerHTML = "";
+
+    const rows = funnelStages
+      .map((id) => ({ id, label: stages[id].label, outcome: stages[id].outcome, n: counts.get(id) || 0 }))
+      .filter((r) => r.n > 0);
+
+    if (!rows.length) { svg.setAttribute("height", 40); return; }
+
+    const received = counts.get(RECEIVED) || 0;
+    const single = affiliate !== "all";
+
+    const rowH = 30, gap = 2, labelW = 190, valueW = 96;
+    const H = rows.length * (rowH + gap) + 8;
+    const W = svg.clientWidth || 900;
+    const barW = Math.max(60, W - labelW - valueW);
+    svg.setAttribute("height", H);
+
+    const max = Math.max(...rows.map((r) => r.n), 1);
+
+    rows.forEach((r, i) => {
+      const y = i * (rowH + gap);
+      const w = Math.max(2, (r.n / max) * barW);
+
+      const t = el("text", { x: labelW - 12, y: y + rowH / 2 + 4, class: "tick", "text-anchor": "end", fill: "var(--ink-2)" }, svg);
+      t.textContent = r.label;
+
+      // Colour is reserved for the two outcomes; every other stage is
+      // one hue, because position and label already carry identity.
+      const fill = r.outcome === "good" ? "var(--good)"
+                 : r.outcome === "bad"  ? "var(--critical)"
+                 : "var(--series-1)";
+
+      const bar = el("rect", {
+        x: labelW, y: y + 3, width: w, height: rowH - 6,
+        rx: 4, ry: 4, fill: fill
+      }, svg);
+
+      const v = el("text", { x: labelW + w + 10, y: y + rowH / 2 + 4, class: "tick num", fill: "var(--ink)" }, svg);
+      v.textContent = fmt(r.n) + (single && received ? "  ·  " + pct(100 * r.n / received) : "");
+
+      bar.addEventListener("mousemove", (evt) => showTip(evt,
+        `<b>${r.label}</b>
+         <div class="row"><span>Applications</span><span>${fmt(r.n)}</span></div>` +
+        (single && received
+          ? `<div class="row"><span>Of received</span><span>${pct(100 * r.n / received)}</span></div>`
+          : "")));
+      bar.addEventListener("mouseleave", hideTip);
+    });
+  }
+
+  // ---- render ------------------------------------------------------
+  function render() {
+    const series = dailySeries();
+    const counts = funnelCounts();
+    const affs = affiliateRows();
+
+    const apps = series.reduce((s, d) => s + d.apps, 0);
+    const sold = series.reduce((s, d) => s + d.sold, 0);
+    const offer = counts.get(OFFER) || 0;
+    const decline = counts.get(DECLINE) || 0;
+
+    $("tiles").innerHTML = [
+      ["Applications", fmt(apps), `${days} days`],
+      ["Sold to a lender", fmt(sold), apps ? pct(100 * sold / apps) + " of applications" : "—"],
+      ["Offers", fmt(offer), (counts.get(RECEIVED) ? pct(100 * offer / counts.get(RECEIVED)) + " of received" : "—")],
+      ["Declines", fmt(decline), (counts.get(RECEIVED) ? pct(100 * decline / counts.get(RECEIVED)) + " of received" : "—")],
+      affiliate === "all"
+        ? ["Active affiliates", fmt(affs.length), "with applications"]
+        : ["Avg loan", (() => { const a = affs.find((r) => r.id === affiliate);
+            return a && a.loanDays ? money(a.loanSum / a.loanDays) : "—"; })(),
+           affName.get(affiliate)]
+    ].map(([k, v, s]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s}</div></div>`).join("");
+
+    const who = affiliate === "all" ? "all affiliates" : affName.get(affiliate);
+    $("trendSub").textContent = `Applications and sales per day, ${who}. Days are AEST.`;
+    $("funnelSub").textContent = `Applications reaching each stage, ${who}.`;
+
+    // The per-affiliate rule, enforced rather than documented: stage
+    // sets differ between affiliates, so a combined percentage is not
+    // meaningful and is not shown.
+    const note = $("funnelNote");
+    if (affiliate === "all") {
+      note.classList.remove("hidden");
+      note.innerHTML = "Showing counts only. Affiliates run different journeys — " +
+        "only 7 of 19 emit “Accepted T&Cs”, for instance — so a combined " +
+        "percentage would misread a missing step as a drop-out. " +
+        "<b>Select one affiliate to see percentages.</b>";
+    } else {
+      note.classList.add("hidden");
+    }
+
+    drawTrend(series);
+    drawFunnel(counts);
+
+    $("affTable").querySelector("tbody").innerHTML = affs.map((a) => `
+      <tr${a.id === affiliate ? ' style="background:var(--page);font-weight:560"' : ""}>
+        <td>${a.name}</td>
+        <td class="num">${fmt(a.apps)}</td>
+        <td class="num">${fmt(a.sold)}</td>
+        <td class="num">${a.apps ? pct(100 * a.sold / a.apps) : "—"}</td>
+        <td class="num">${fmt(a.offer)}</td>
+        <td class="num">${fmt(a.decline)}</td>
+        <td class="num">${a.loanDays ? money(a.loanSum / a.loanDays) : "—"}</td>
+      </tr>`).join("");
+
+    $("trendTable").querySelector("tbody").innerHTML = series.map((d) => `
+      <tr><td>${d.day}</td><td class="num">${fmt(d.apps)}</td>
+      <td class="num">${fmt(d.sold)}</td>
+      <td class="num">${d.apps ? pct(100 * d.sold / d.apps) : "—"}</td></tr>`).join("");
+
+    const received = counts.get(RECEIVED) || 0;
+    $("funnelTable").querySelector("tbody").innerHTML = funnelStages
+      .filter((id) => (counts.get(id) || 0) > 0)
+      .map((id) => `<tr><td>${stages[id].label}</td>
+        <td class="num">${fmt(counts.get(id))}</td>
+        <td class="num">${affiliate !== "all" && received ? pct(100 * counts.get(id) / received) : "—"}</td></tr>`)
+      .join("");
+  }
+
+  // ---- controls ----------------------------------------------------
+  const sel = $("affSel");
+  [...affName.keys()]
+    .map((id) => ({ id, name: affName.get(id) }))
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .forEach((a) => {
+      const o = document.createElement("option");
+      o.value = a.id; o.textContent = a.name; sel.appendChild(o);
+    });
+  sel.addEventListener("change", () => { affiliate = sel.value; render(); });
+
+  $("rangeSeg").addEventListener("click", (evt) => {
+    const b = evt.target.closest("button"); if (!b) return;
+    days = +b.dataset.days;
+    [...evt.currentTarget.children].forEach((c) =>
+      c.setAttribute("aria-pressed", c === b ? "true" : "false"));
+    render();
+  });
+
+  $("tableBtn").addEventListener("click", () => {
+    showTables = !showTables;
+    $("tablesCard").classList.toggle("hidden", !showTables);
+    $("tableBtn").textContent = showTables ? "Hide data tables" : "Show data tables";
+  });
+
+  const themeBtn = $("themeBtn");
+  const isDark = () =>
+    document.documentElement.getAttribute("data-theme") === "dark"
+    || (!document.documentElement.hasAttribute("data-theme")
+        && matchMedia("(prefers-color-scheme: dark)").matches);
+  // Label names the action, and starts correct even when the OS is dark.
+  const syncThemeLabel = () => {
+    themeBtn.textContent = isDark() ? "Light mode" : "Dark mode";
+  };
+  themeBtn.addEventListener("click", () => {
+    document.documentElement.setAttribute("data-theme", isDark() ? "light" : "dark");
+    syncThemeLabel();
+    render();
+  });
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", syncThemeLabel);
+  syncThemeLabel();
+
+  addEventListener("resize", () => render());
+
+  // ---- chrome ------------------------------------------------------
+  const gen = new Date(DATA.generatedUtc);
+  $("asof").textContent = "Data as at " + gen.toISOString().slice(0, 16).replace("T", " ") +
+    " UTC · " + DATA.windowDays + " days loaded";
+  $("foot").innerHTML =
+    "Reporting days are AEST (UTC+" + DATA.aestShiftHours + "). " +
+    "The source runs about two minutes behind live, so these figures are near-current rather than live.<br>" +
+    "“Sold” means sold to a lender. Funded outcomes are not reported back by lenders, so nothing here is a funded figure.";
+
+  render();
+})();
+</script>
+</body>
+</html>
