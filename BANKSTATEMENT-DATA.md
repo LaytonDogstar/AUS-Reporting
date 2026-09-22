@@ -138,3 +138,112 @@ Newly identified:
 4. **Why does `LenderApplicationResults` differ between databases** —
    31.2M in `Overflow`, 98.9M in `OverflowReporting`?
 5. **`LeadScores` (604,665 rows)** — not examined.
+
+---
+
+# Follow-up: the two open tables
+
+Measured 2026-09-22 from `discovery/adhoc/custom_values_and_history.sql`.
+
+## 7. `BankStatementSummaries` effectively starts March 2022
+
+| Year | Rows | Range |
+|---|---|---|
+| 2021 | 875 | 01 Jul – 02 Dec |
+| 2022 | 415,093 | 09 Mar – 31 Dec |
+| 2023 | **1,456,983** | full year |
+| 2024 | 806,871 | full year |
+| 2025 | 747,869 | full year |
+| 2026 | 481,792 | to 22 Sep |
+
+The 875 rows in 2021 are a pilot, not history. Usable affordability data
+runs from **March 2022** — about ten months more than `LeadMetrics`,
+which starts 2023-01-24.
+
+Rows are per bank account. Against `LeadMetrics` over the same period
+(3,493,515 against 1,617,269) that is 2.16 accounts per application,
+which supports reading one as per-account and the other as
+per-application.
+
+**Volume has fallen by more than half since 2023.** 1.46M in 2023, 807k
+in 2024, 748k in 2025, and 2026 is tracking about 663k annualised — 55%
+below the peak. This is bank statement retrievals, not applications, so
+it could be a change in how many accounts are pulled per applicant rather
+than a fall in business. Worth checking against application volume before
+anyone reads it as a trend, but the 45% drop from 2023 to 2024 is too
+large to be account-count drift alone.
+
+## 8. `LeadApplicationCustomValues` is a key/value store
+
+`Id`, `LeadApplicationId`, `AffiliateId`, `Name` (nvarchar 200),
+`Value` (nvarchar(max)), `DateCreated`.
+
+Affiliate-supplied custom fields, one row per field per application.
+`Value` being unbounded text means it can hold anything an affiliate
+chose to send, personal data included, so it stays unread until the field
+names are known. `custom_value_names.sql` counts the names without
+touching the values.
+
+## 9. `LenderApplicationResults` differs between the two databases
+
+| | `Overflow` | `OverflowReporting` |
+|---|---|---|
+| Rows | 31,185,133 | 98,939,438 |
+| Columns | 9 | 13 |
+| Extra | — | `AffiliateName`, `LenderTierName`, `LoanAmount`, **`Email`** |
+
+The reporting copy is denormalised and holds 3.2× the history, so it is
+the one to use — but it carries `Email`, a direct identifier.
+
+**Both carry `Cost`.** Combined with
+`BankStatementRetrievals.Cost` (1.7M rows), the cost side of every lead
+is recorded: what it cost to pull statements and what it cost to submit
+to each lender. Lead quality can be measured as margin, not just
+conversion rate. Nothing in the reporting built so far uses this.
+
+## 10. A risk model already exists
+
+`Overflow.LeadScores` — 604,665 rows.
+
+`Score`, `RiskGrade`, `ModelId`, `ScoreId`, `ScoreDateTime`,
+`TotalRequestTime`. A third-party scoring service, with response time
+recorded per call.
+
+| Year | Scores |
+|---|---|
+| 2024 | 46,999 |
+| 2025 | 342,010 |
+| 2026 | 215,668 |
+
+Coverage is partial — 604k scores against 4.44M applications, and nothing
+before 2024 — so it cannot carry a long-run trend. But an existing
+`RiskGrade` is a ready-made benchmark to test any new customer model
+against, and `TotalRequestTime` makes the provider's latency measurable.
+
+## 11. `SellHistory` and `FailedFiltersLookup`
+
+`SellHistory` (592,538 rows, from 2025-02-20): `LeadId`,
+`LeadApplicationId`, `AffiliateId`, `LenderId`, `LenderTierId`,
+`DateCreated`. No personal data. A third candidate for "sold", alongside
+`LeadApplicationAccepts` (1.27M) and the `Offer` stage (356k) — three
+different numbers for what looks like one event, which is the
+accept-definition question still outstanding.
+
+`FailedFiltersLookup` (1,347 rows): `Id`, `Message`. The decode table for
+`FailedFiltersV2`'s 194M rows. Tiny, safe, and the only way to report on
+why leads fail.
+
+## 12. Personal data, further amended
+
+A third direct identifier in `OverflowReporting`:
+`LenderApplicationResults.Email`, on 98.9M rows.
+
+That database was originally recorded as holding no sensitive columns.
+It holds at least two email columns. The name-based scan in `06` looked
+for banking terms and identity words on tables whose names suggested
+personal data, and did not flag an email column on an event table.
+
+**The lesson is about method, not these two columns.** Name-based
+classification finds what it is told to look for. Any table going into
+reporting needs its columns read individually, which is what these
+follow-up queries have been doing.

@@ -354,6 +354,11 @@ the sensitive material largely is not there.
 > identifiers after all: `BankstatementEmailQueue.Email` is one. The
 > name-based scan in `06` missed both because it looked for banking
 > terms, not for an email column on a queue table.
+>
+> **Further amended.** A third: `LenderApplicationResults.Email`, on
+> 98.9M rows in `OverflowReporting`. Treat the claim that this
+> database is free of identifiers as withdrawn — read the columns of
+> any table before using it.
 
 `Overflow.Leads` carries `FirstName`, `LastName`, `Email`,
 `MobileNumber`, `DateOfBirth`. `LeadApplications` carries all of that
