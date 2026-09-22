@@ -21,12 +21,40 @@ the constraint that forced them, so they can be argued with.
 4. **Volumes are real.** 65.5 GB / 378M rows in `OverflowReporting`,
    14.7 GB / 117M rows in `Overflow`.
 
-Points 1–3 together mean **querying these databases directly is not a
-viable reporting architecture**. Not a preference — a dashboard doing a
-26 GB scan per tile, against a server that live-ish processes share, is
-a production incident waiting for a Monday morning.
+### Measured, 22 Sep 2026 — this is weaker than it first appeared
 
-The work is therefore an extract into a store we own and index.
+The core funnel query — daily counts by affiliate and stage over 30
+days, scanning all 19.76M rows of `LeadApplicationStages` — returns in
+**5.13 seconds**.
+
+That is far better than expected and it changes the conclusion. Five
+seconds is fine for a scheduled Power BI import refresh, and tolerable
+even interactively. **The performance argument for a warehouse does not
+hold for this workload at this size.**
+
+What survives the measurement:
+
+- **Cross-database joins still do not work** (point 1). But Power BI can
+  import from both databases separately and relate them in its own
+  model, which solves it without a warehouse.
+- **`FailedFiltersV2` is untested and 10x larger** — 194M rows, 26.9 GB
+  against the 1.2 GB just measured. If failed-filter analysis is ever
+  needed, that query is likely a different story.
+- **Logic in version-controlled SQL rather than inside a `.pbix`** is a
+  governance preference, not a technical blocker.
+
+**Revised recommendation: start with Power BI importing from both
+sources.** Cheaper, faster to stand up, no infrastructure. Revisit the
+warehouse when one of these appears: `FailedFiltersV2` analysis is
+needed, refresh times grow uncomfortable, several people need shared
+governed definitions, or the load on the source becomes visible.
+
+Little of the work so far is wasted either way — the model views become
+Power BI's source queries almost directly, and the schema findings and
+stage definitions carry over whole.
+
+The rest of this document describes the warehouse design, which remains
+the right answer if and when those conditions arrive.
 
 ---
 

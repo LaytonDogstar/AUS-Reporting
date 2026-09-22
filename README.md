@@ -20,8 +20,12 @@ is loading yet — the warehouse database has not been created.
 | [`WAREHOUSE-SETUP.md`](WAREHOUSE-SETUP.md) | **Start here:** creating the warehouse, step by step |
 | [`EXTRACT-RUNBOOK.md`](EXTRACT-RUNBOOK.md) | Running and maintaining the extract |
 
-Next step is [`WAREHOUSE-SETUP.md`](WAREHOUSE-SETUP.md): create the
-database, run the DDL, load the spine. About 30 minutes.
+**On hold pending a decision.** A timing test on 22 Sep 2026 showed the
+core funnel query returning in 5.13 seconds against the source, which is
+fast enough that Power BI importing directly from both databases is
+likely the better first move — see the measured note at the top of
+[`ARCHITECTURE.md`](ARCHITECTURE.md). The warehouse design stands and is
+ready to build if and when it is needed.
 
 ## Background
 
