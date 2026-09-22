@@ -346,6 +346,15 @@ The only account-level banking columns found are in `Overflow`:
 meaningful argument for building reporting against it wherever possible:
 the sensitive material largely is not there.
 
+> **Amended 2026-09-22.** Two corrections from
+> `BANKSTATEMENT-DATA.md`. `BankStatementSummaries` is not a thin account
+> summary — it is 92 columns and 4.4 GB, the largest table in `Overflow`
+> by storage, and it also carries `AccountName` and `Employer`, which are
+> personal identifiers. And `OverflowReporting` is not free of direct
+> identifiers after all: `BankstatementEmailQueue.Email` is one. The
+> name-based scan in `06` missed both because it looked for banking
+> terms, not for an email column on a queue table.
+
 `Overflow.Leads` carries `FirstName`, `LastName`, `Email`,
 `MobileNumber`, `DateOfBirth`. `LeadApplications` carries all of that
 plus `DriversLicense` and full address.
