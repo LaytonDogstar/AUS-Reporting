@@ -175,6 +175,7 @@ RDP clipboard, or email it to yourself, then send it on.
 | `Login failed for user` | Wrong username or password | Check them in SSMS first |
 | `Cannot open server ... requested by the login` | Firewall — your IP is not allow-listed | Run it from FLOWWEB4, not your local machine |
 | `The server was not found or was not accessible` | Server name typo, or no route | Check the name against SSMS |
+| `VIEW DATABASE PERFORMANCE STATE permission denied` | A script reached for a dynamic management view. The reporting login only has catalog-view access | Send me the error text — the script needs rewriting against `sys.partitions`, not `sys.dm_db_*` |
 | `Invalid object name` or similar in `_run_summary.csv` | A script needs adjusting for this schema | Send me the error text |
 
 Anything else: send me the red text. Because everything is read-only, a
