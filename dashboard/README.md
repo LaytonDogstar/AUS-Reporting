@@ -28,20 +28,61 @@ USB stick, and still work.
 
 ## Building it
 
-Needs the same `.env` as the extract — see the repository root. Only the
-`AUS_SOURCE_*` values are used; nothing writes anywhere.
+Two builders, same job. **FLOWWEB4 has no Python, and installing it is a
+change to a machine someone else owns — so PowerShell is the one to
+use there.**
+
+### PowerShell (nothing to install)
+
+```powershell
+.\Build-Dashboard.ps1 -Days 90 -Out C:\reports\dashboard.html
+```
+
+Prompts for the SQL login and password. Windows PowerShell 5.1, the
+blue console — the same one the discovery scripts ran in.
+
+For Task Scheduler, set the credentials in the environment instead and
+it runs unattended:
+
+```powershell
+$env:AUS_SOURCE_USERNAME = "svc_reporting"
+$env:AUS_SOURCE_PASSWORD = "..."
+.\Build-Dashboard.ps1 -Out C:\reports\dashboard.html
+```
+
+### Python (where Python exists)
 
 ```powershell
 python -m dashboard.build --days 90 --out C:\reports\dashboard.html
 ```
 
-Takes about 15 seconds: four queries across two databases, then the file
-is written. `--days 90` sets how much history is embedded; 90 days of
-six affiliates is roughly 600 KB.
+Needs `pyodbc` and the `.env` described in the repository root. Only the
+`AUS_SOURCE_*` values are read; nothing writes anywhere.
 
-Schedule it in Task Scheduler the same way as the extract — hourly is
-comfortable, and the page shows its own build time so nobody has to
-guess how current it is.
+### They cannot drift apart
+
+Both read the same files:
+
+| File | Holds |
+|---|---|
+| `sql/*.sql` | Every query. Neither builder contains SQL of its own |
+| `stages.json` | Stage labels, funnel order, which database each query uses, the timezone shift |
+
+A test asserts the PowerShell builder contains no inline `SELECT`, so a
+query can only ever come from a shared file.
+
+Two values are substituted rather than bound — the timezone shift and
+the look-back window — because `pyodbc` uses `?` placeholders and
+SqlClient uses `@name`, and no single syntax works for both. Both
+builders type them as integers first, and a non-integer is refused
+rather than sanitised.
+
+Takes about 15 seconds either way: four queries across two databases,
+then the file is written. `-Days 90` sets how much history is embedded;
+90 days of six affiliates is roughly 600 KB.
+
+Schedule it hourly in Task Scheduler. The page shows its own build time,
+so nobody has to guess how current it is.
 
 ## What it shows
 
@@ -85,10 +126,12 @@ The page says "Sold", never "Funded", for that reason.
 
 | To change | Edit |
 |---|---|
-| The SQL | `queries.py` |
-| Stage labels or funnel order | `STAGES` in `queries.py` |
-| The reporting timezone | `AEST_SHIFT_HOURS` in `queries.py` |
+| The SQL | `sql/*.sql` |
+| Stage labels or funnel order | `stages.json` |
+| The reporting timezone | `aestShiftHours` in `stages.json` |
 | Layout, charts, colours | `template.html` |
+
+Each of those is read by both builders, so a change lands in both.
 
 Colours come from a validated palette: the two series pass colour-vision
 separation checks in both light and dark mode, and the funnel uses a

@@ -67,13 +67,14 @@ def collect(settings: Settings, days: int) -> dict:
 
     results: dict[str, list[dict]] = {}
 
+    ready = queries.sources(days)
+
     for database, names in by_database.items():
         log.info("%s: %d quer(ies)", database, len(names))
         with db.source(settings, database) as connection:
             for name in names:
-                _, sql = queries.SOURCES[name]
-                params = (-abs(days),) if name in queries.WINDOWED else ()
-                results[name] = fetch(connection, sql, params)
+                _, sql = ready[name]
+                results[name] = fetch(connection, sql)
                 log.info("  %-14s %6d row(s)", name, len(results[name]))
 
     return {

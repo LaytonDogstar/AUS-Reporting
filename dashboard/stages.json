@@ -1,0 +1,101 @@
+{
+  "aestShiftHours": 10,
+  "sources": {
+    "stage_counts": "OverflowReporting",
+    "applications": "Overflow",
+    "accepts": "Overflow",
+    "affiliates": "Overflow"
+  },
+  "windowed": [
+    "accepts",
+    "applications",
+    "stage_counts"
+  ],
+  "stages": {
+    "1": {
+      "label": "Received",
+      "order": 10,
+      "outcome": null
+    },
+    "2": {
+      "label": "Landed",
+      "order": 20,
+      "outcome": null
+    },
+    "3": {
+      "label": "Accepted T&Cs",
+      "order": 30,
+      "outcome": null
+    },
+    "4": {
+      "label": "Bank statement required",
+      "order": 40,
+      "outcome": null
+    },
+    "5": {
+      "label": "Credfin landed",
+      "order": 50,
+      "outcome": null
+    },
+    "6": {
+      "label": "Proviso landed",
+      "order": 50,
+      "outcome": null
+    },
+    "7": {
+      "label": "Bank statement extracted",
+      "order": 60,
+      "outcome": null
+    },
+    "8": {
+      "label": "Sell begun",
+      "order": 70,
+      "outcome": null
+    },
+    "9": {
+      "label": "Sell completed",
+      "order": 80,
+      "outcome": null
+    },
+    "12": {
+      "label": "Interstitial",
+      "order": 85,
+      "outcome": null
+    },
+    "10": {
+      "label": "Offer",
+      "order": 90,
+      "outcome": "good"
+    },
+    "13": {
+      "label": "Decline",
+      "order": 90,
+      "outcome": "bad"
+    },
+    "11": {
+      "label": "Offer accepted",
+      "order": null,
+      "outcome": null
+    },
+    "14": {
+      "label": "Duplicate bank statement",
+      "order": null,
+      "outcome": null
+    },
+    "15": {
+      "label": "Refresh bank statement",
+      "order": null,
+      "outcome": null
+    },
+    "16": {
+      "label": "Bank statement retry",
+      "order": null,
+      "outcome": null
+    },
+    "17": {
+      "label": "No primary income source",
+      "order": null,
+      "outcome": null
+    }
+  }
+}

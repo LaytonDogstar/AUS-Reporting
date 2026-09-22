@@ -104,15 +104,41 @@ class TestQueries(unittest.TestCase):
             self.assertIn(database, ("Overflow", "OverflowReporting"), name)
             self.assertTrue(sql.strip(), name)
 
-    def test_windowed_queries_take_exactly_one_parameter(self):
+    def test_windowed_queries_carry_the_window_token(self):
         for name in queries.WINDOWED:
             _, sql = queries.SOURCES[name]
-            self.assertEqual(sql.count("?"), 1, name)
+            self.assertIn("{{WINDOW_DAYS}}", sql, name)
 
-    def test_unwindowed_queries_take_none(self):
+    def test_unwindowed_queries_have_no_window_token(self):
         for name in set(queries.SOURCES) - queries.WINDOWED:
             _, sql = queries.SOURCES[name]
-            self.assertEqual(sql.count("?"), 0, name)
+            self.assertNotIn("{{WINDOW_DAYS}}", sql, name)
+
+    def test_window_is_substituted_as_a_negative_integer(self):
+        for name in queries.WINDOWED:
+            sql = queries.load_sql(name, 90)
+            self.assertIn("DATEADD(DAY, -90,", sql, name)
+            self.assertNotIn("{{", sql, name)
+
+    def test_non_integer_window_is_refused_outright(self):
+        # The token is not a bound parameter, so only an integer may ever
+        # reach it. Anything else raises rather than being sanitised -
+        # failing loudly beats silently rewriting what the caller asked for.
+        for bad in ("30; DROP TABLE x", "1 OR 1=1", 3.5, [30], True):
+            with self.assertRaises(TypeError, msg=repr(bad)):
+                queries.load_sql("stage_counts", bad)
+
+    def test_none_means_leave_the_token_alone(self):
+        # The documented default: load the SQL for reading, unsubstituted.
+        self.assertIn("{{WINDOW_DAYS}}", queries.load_sql("stage_counts"))
+
+    def test_negative_or_positive_days_both_look_back(self):
+        self.assertIn("DATEADD(DAY, -30,", queries.load_sql("accepts", -30))
+        self.assertIn("DATEADD(DAY, -30,", queries.load_sql("accepts", 30))
+
+    def test_no_tokens_survive_a_full_load(self):
+        for name, (_, _) in queries.sources(45).items():
+            self.assertNotIn("{{", queries.sources(45)[name][1], name)
 
     def test_all_queries_are_read_only(self):
         for name, (_, sql) in queries.SOURCES.items():
@@ -203,3 +229,63 @@ class TestDemoPage(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBuilderParity(unittest.TestCase):
+    """The Python and PowerShell builders must not drift apart.
+
+    They read the same .sql files and the same stages.json, which is the
+    real guarantee. These check that the PowerShell side still agrees on
+    the contract around those files.
+    """
+
+    PS = REPO / "dashboard" / "Build-Dashboard.ps1"
+
+    def setUp(self):
+        self.ps = self.PS.read_text(encoding="utf-8")
+
+    def test_powershell_builder_exists(self):
+        self.assertTrue(self.PS.exists())
+
+    def test_both_substitute_the_same_tokens(self):
+        for token in ("{{AEST_SHIFT_HOURS}}", "{{WINDOW_DAYS}}"):
+            self.assertIn(token, self.ps, token)
+
+    def test_both_use_the_same_placeholder(self):
+        self.assertIn(PLACEHOLDER, self.ps)
+        self.assertIn(PLACEHOLDER, TEMPLATE.read_text(encoding="utf-8"))
+
+    def test_both_escape_closing_script_tags(self):
+        self.assertIn(r'Replace("</", "<\/")', self.ps)
+
+    def test_powershell_reads_the_shared_files(self):
+        for fragment in ("stages.json", "template.html", '"sql"'):
+            self.assertIn(fragment, self.ps, fragment)
+
+    def test_powershell_names_no_query_of_its_own(self):
+        # Every query must come from a .sql file; a SELECT written inline
+        # here is exactly the drift this arrangement exists to prevent.
+        for word in ("SELECT ", "FROM dbo."):
+            self.assertNotIn(word, self.ps, f"inline SQL: {word!r}")
+
+    def test_powershell_emits_every_key_the_page_reads(self):
+        for key in ("generatedUtc", "windowDays", "aestShiftHours", "stages",
+                    "stage_counts", "applications", "accepts", "affiliates"):
+            self.assertIn(key, self.ps, key)
+
+    def test_powershell_sets_json_depth(self):
+        # PowerShell's ConvertTo-Json defaults to depth 2, which would
+        # silently flatten every row into a type name.
+        self.assertIn("-Depth 10", self.ps)
+
+    def test_powershell_connects_read_only(self):
+        self.assertIn("ApplicationIntent", self.ps)
+        self.assertIn("READ UNCOMMITTED", self.ps)
+
+    def test_stage_metadata_is_the_single_source(self):
+        meta = json.loads((REPO / "dashboard" / "stages.json").read_text())
+        self.assertEqual(set(meta["sources"]), set(queries.SOURCES))
+        self.assertEqual(set(meta["windowed"]), queries.WINDOWED)
+        self.assertEqual(
+            {int(k) for k in meta["stages"]}, set(queries.STAGES)
+        )
