@@ -362,9 +362,28 @@ So the flaw was real but narrow: it only ever touched tables with an
 unbounded text column. Everything the architecture and sizing work was
 based on stands.
 
-`Overflow` has not yet been re-measured. `CredfinStatus` has a
-`RefreshInputs nvarchar(max)` column and is expected to fall from 5.21M
-to roughly 1.74M.
+`Overflow` re-measured the same day. Five tables moved, all exactly 3x:
+
+| Table | Was | Is |
+|---|---|---|
+| `LeadApplicationCustomValues` | 67,841,415 | 22,614,090 |
+| `CredfinStatus` | 5,211,330 | 1,737,126 |
+| `LenderTierBaseFilters` | 7,641 | 2,547 |
+| `LenderTiers` | 573 | **191** |
+| `ConditionalFilterItems` | 12 | 4 |
+
+`BankStatementSummaries` and `LeadApplications` were unaffected, as
+predicted.
+
+**`Overflow` holds 68,997,988 rows, not 117,641,030.** 48.6M of the rows
+previously reported were an artefact of the query, and the "111M
+unaccounted rows" that prompted this whole investigation were largely my
+own arithmetic. The two genuinely large tables are
+`LenderApplicationResults` (31.2M) and `LeadApplicationCustomValues`
+(22.6M), which together are 78% of the database.
+
+`LenderTiers` at 191 rather than 573 matters beyond bookkeeping: it is a
+dimension table, and lender attribution runs through it.
 
 **`Overflow` is therefore materially smaller than reported.** Correcting
 this one table alone removes 45.2M rows from the total.
