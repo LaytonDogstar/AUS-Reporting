@@ -10,9 +10,8 @@ customer looks like. Before designing anything we ran a read-only survey
 of what is actually in the two databases, because the internal access
 document turned out to describe something different from what is there.
 
-This document sets out what we found, what we propose to build, and the
-five questions only your team can answer. It does not ask for any change
-to the existing databases.
+This document sets out what we found and what we propose to build. It
+does not ask for any change to the existing databases.
 
 ## What was done
 
@@ -110,42 +109,6 @@ currently approved, and a test enforces it.
 
 Access is business owners only. No affiliate or client login sees any of
 this.
-
-## Five questions for your team
-
-Everything above can proceed without these. No published figure should
-proceed without the first three.
-
-**1. What does "accept" mean?** Three tables appear to describe one
-event, and they disagree: `LeadApplicationAccepts` holds 1,270,433 rows,
-`SellHistory` holds 592,557, and the `Offer` stage has fired 356,000
-times. A conversion rate built on the wrong one is wrong by up to 3.5x.
-This is the single most important question here.
-
-**2. Why did bank statement retrievals fall 55% from the 2023 peak?**
-1.46M in 2023, 807k in 2024, 748k in 2025, and 2026 is tracking around
-663k annualised. These are accounts rather than applications, so some
-of it could be pulling fewer accounts per applicant — but a 45% drop
-between 2023 and 2024 looks larger than that would explain. Until we
-know whether it is volume or a journey change, no trend crossing 2023
-can be trusted.
-
-**3. Is `LeadMetrics.Age` trustworthy?** We would rather use it than
-calculate age, because `LeadApplications.DateOfBirth` contains 1753
-sentinels and dates as late as the year 2881.
-
-**4. Credfin or Talefin?** The journey stages record `CredfinLanded` on
-47% of applications, and there are `CredfinStatus` and
-`CredfinLeadStatus` tables. There is no Talefin table, but
-`Affiliates.TalefinClientSecret` and `Lenders.ShowTaleFinScore` both
-exist. Our reading is that Credfin retrieves the statements and Talefin
-scores them. If that is wrong, any metric labelled "bank statement
-success rate" would be measuring the wrong step.
-
-**5. A live bug.** 43,240 rows in `LeadApplicationCustomValues` have an
-empty `Name`, all from a single affiliate, written continuously since
-14 May 2025. Whatever field that was meant to be is being lost, and it
-is still happening.
 
 ## Two things that would help
 
