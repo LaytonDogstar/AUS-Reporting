@@ -170,6 +170,38 @@ def render(md, width):
     flush()
     return out
 
+def drop_sections(md, titles):
+    """Remove `## Heading` sections by title, up to the next heading of the
+    same or higher level. Used to build a shareable PDF from a working
+    document without deleting anything from the document itself."""
+    if not titles:
+        return md
+    wanted = {t.strip().lower() for t in titles}
+    out, lines, i, dropped = [], md.split("\n"), 0, []
+    while i < len(lines):
+        l = lines[i]
+        m = re.match(r"^##\s+(.*)$", l)
+        if m and m.group(1).strip().lower() in wanted:
+            dropped.append(m.group(1).strip())
+            i += 1
+            while i < len(lines) and not re.match(r"^#{1,2}\s+\S", lines[i]):
+                i += 1
+            # A rule left immediately before the removed section is now
+            # separating nothing.
+            while out and not out[-1].strip():
+                out.pop()
+            if out and out[-1].strip() in ("---", "***", "___"):
+                out.pop()
+            out.append("")
+            continue
+        out.append(l)
+        i += 1
+    missing = wanted - {d.lower() for d in dropped}
+    if missing:
+        raise SystemExit("no such section: " + ", ".join(sorted(missing)))
+    return "\n".join(out)
+
+
 def make(md, path, footer):
     doc = BaseDocTemplate(path, pagesize=A4,
                           leftMargin=22*mm, rightMargin=22*mm,
@@ -192,6 +224,14 @@ def make(md, path, footer):
     doc.build(render(md, fw))
 
 if __name__ == "__main__":
-    src, dst, footer = sys.argv[1], sys.argv[2], sys.argv[3]
-    make(open(src, encoding="utf-8").read(), dst, footer)
-    print("wrote", dst)
+    import argparse
+    ap = argparse.ArgumentParser(description="Render a Markdown subset to PDF.")
+    ap.add_argument("source")
+    ap.add_argument("output")
+    ap.add_argument("footer")
+    ap.add_argument("--omit", action="append", default=[], metavar="HEADING",
+                    help="drop a '## Heading' section; repeatable")
+    a = ap.parse_args()
+    md = drop_sections(open(a.source, encoding="utf-8").read(), a.omit)
+    make(md, a.output, a.footer)
+    print("wrote", a.output)

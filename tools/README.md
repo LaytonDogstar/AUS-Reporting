@@ -15,8 +15,20 @@ nothing else.
   > /tmp/combined.md
 
 python3 tools/mdpdf.py /tmp/combined.md AUS-Reporting-Scope-and-Rationale.pdf \
-  "AUS Reporting - scope and rationale - 22 September 2026"
+  "AUS Reporting - scope and rationale - 22 September 2026" \
+  --omit "Blocked before any figure is published" \
+  --omit "Outstanding, unrelated to scope"
 ```
+
+`--omit` drops a `## Heading` section and everything under it, up to the
+next heading of the same or higher level. It is repeatable, and it fails
+loudly if a named section does not exist, so a renamed heading cannot
+silently start appearing in a document meant to be shared.
+
+The two omitted above are internal: open questions for the dev team, and
+housekeeping items unrelated to the data scope. They stay in
+`REPORTING-SCOPE.md` because that is the working record; they just do not
+belong in the copy that goes outside.
 
 Table columns are sized by measured text width rather than character
 count, because inline code renders in Courier and is wider per character
