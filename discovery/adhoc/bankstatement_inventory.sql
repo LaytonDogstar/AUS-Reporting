@@ -13,6 +13,10 @@
     Read-only, metadata only. Row counts come from partition stats, so
     nothing is scanned and nothing is read from any column.
 
+    Also dumps the 82 LeadMetrics column names, which the original
+    discovery summarised but never listed. Those are the affordability
+    and risk indicators, so we need the names to choose between them.
+
     Run against BOTH Overflow and OverflowReporting.
 
     .\Invoke-Sql.ps1 -Database Overflow -File .\bankstatement_inventory.sql -OutCsv C:\discovery\bankstatements.csv
@@ -59,4 +63,5 @@ WHERE LOWER(t.name) LIKE '%bankstatement%'
    OR LOWER(t.name) LIKE '%credfin%'
    OR LOWER(t.name) LIKE '%talefin%'
    OR LOWER(t.name) LIKE '%proviso%'
+   OR LOWER(t.name) LIKE '%leadmetrics%'
 ORDER BY t.name, c.column_id;
