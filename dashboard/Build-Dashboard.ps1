@@ -32,6 +32,8 @@ param(
     [string] $ServerName = $(if ($env:AUS_SOURCE_SERVER) { $env:AUS_SOURCE_SERVER }
                             else { "fw04-sqlreporting01.database.windows.net" }),
     [string] $Username,
+    [string] $CredentialPath = (Join-Path $env:LOCALAPPDATA "AUS-Reporting\source.cred"),
+    [string] $PublishSasUrl,
     [int]    $TimeoutSeconds = 900
 )
 
@@ -55,14 +57,38 @@ foreach ($p in @($metaPath, $templatePath)) {
 $meta = Get-Content $metaPath -Raw | ConvertFrom-Json
 
 # --- credentials ------------------------------------------------------
+# Order: the DPAPI-protected file (how a scheduled run gets them), then
+# the environment, then a prompt. A scheduled task cannot answer a
+# prompt, so the file is what makes unattended builds possible.
+$securePassword = $null
+
+if ((-not $env:AUS_SOURCE_PASSWORD) -and (Test-Path $CredentialPath)) {
+    try {
+        $stored = Get-Content $CredentialPath -Raw | ConvertFrom-Json
+        if (-not $Username) { $Username = $stored.Username }
+        $securePassword = ConvertTo-SecureString $stored.Password
+        Write-Host "Using stored credentials for '$Username'." -ForegroundColor DarkGray
+    }
+    catch {
+        # DPAPI refuses when the account or machine differs from the one
+        # that saved it. Say so plainly rather than falling through to a
+        # prompt no scheduled task can answer.
+        throw ("Could not read $CredentialPath. DPAPI ties it to the account " +
+               "and machine that saved it, so re-run Save-DashboardCredential.ps1 " +
+               "as the account this build runs under. Original error: $($_.Exception.Message)")
+    }
+}
+
 if (-not $Username) {
     $Username = if ($env:AUS_SOURCE_USERNAME) { $env:AUS_SOURCE_USERNAME }
                 else { Read-Host "SQL login" }
 }
-if ($env:AUS_SOURCE_PASSWORD) {
-    $securePassword = ConvertTo-SecureString $env:AUS_SOURCE_PASSWORD -AsPlainText -Force
-} else {
-    $securePassword = Read-Host "Password for '$Username'" -AsSecureString
+if (-not $securePassword) {
+    $securePassword = if ($env:AUS_SOURCE_PASSWORD) {
+        ConvertTo-SecureString $env:AUS_SOURCE_PASSWORD -AsPlainText -Force
+    } else {
+        Read-Host "Password for '$Username'" -AsSecureString
+    }
 }
 $securePassword.MakeReadOnly()
 
@@ -213,4 +239,49 @@ $sizeMb  = [math]::Round((Get-Item $outPath).Length / 1MB, 2)
 
 Write-Host ""
 Write-Host "wrote $outPath ($sizeMb MB) in ${seconds}s" -ForegroundColor Cyan
-Write-Host "Open it in a browser - it needs no internet connection." -ForegroundColor Yellow
+
+# --- publish ----------------------------------------------------------
+# Uploads to Azure Blob Storage using a container SAS URL. Deliberately
+# a plain REST PUT: no Az module, nothing to install, and the SAS is the
+# only credential involved - it grants write to one container and
+# nothing else.
+if ($PublishSasUrl) {
+    Write-Host ""
+    Write-Host "Publishing..." -ForegroundColor Cyan
+
+    $separator = if ($PublishSasUrl.Contains("?")) { $PublishSasUrl.Split("?") } else { $null }
+    if (-not $separator -or $separator.Count -ne 2) {
+        throw ("-PublishSasUrl must be a container URL with a SAS query string, " +
+               "e.g. https://<account>.blob.core.windows.net/`$web?sv=...&sig=...")
+    }
+    $containerUrl = $separator[0].TrimEnd("/")
+    $sasToken     = $separator[1]
+    $blobUrl      = "$containerUrl/index.html?$sasToken"
+
+    $bytes = [System.IO.File]::ReadAllBytes($outPath)
+    $headers = @{
+        "x-ms-blob-type"          = "BlockBlob"
+        "x-ms-blob-content-type"  = "text/html; charset=utf-8"
+        # The page is rebuilt on a schedule, so a stale cached copy is
+        # worse than a re-fetch.
+        "x-ms-blob-cache-control" = "no-cache, max-age=0"
+    }
+
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        Invoke-RestMethod -Uri $blobUrl -Method Put -Headers $headers -Body $bytes | Out-Null
+        Write-Host "Published to $containerUrl/index.html" -ForegroundColor Green
+    }
+    catch {
+        $status = $_.Exception.Response.StatusCode.value__
+        $hint = switch ($status) {
+            403 { "the SAS is expired, lacks write permission, or the clock is off" }
+            404 { "the container does not exist - check the URL" }
+            default { "see the message above" }
+        }
+        throw "Publish failed (HTTP $status): $hint. The file was still written to $outPath."
+    }
+}
+else {
+    Write-Host "Open it in a browser - it needs no internet connection." -ForegroundColor Yellow
+}
