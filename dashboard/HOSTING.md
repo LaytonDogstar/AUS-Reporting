@@ -49,70 +49,84 @@ To stop it: `.\Register-DashboardTask.ps1 -Remove`
 
 ---
 
-## Step 2 — Publish it
+## Step 2 — Publish it, with a login
+
+**Decided: Azure Static Web Apps with Entra sign-in.** Free tier, real
+work-account login, revocable per person, and it stays inside Azure.
 
 ### What to ask for
 
-Someone with rights to create Azure resources needs to do this once. It
-costs pennies a month.
+Someone with rights to create Azure resources does this once. The free
+tier costs nothing.
 
-> Please create a **storage account** in the same subscription and region
-> as `fw04-sqlreporting01`, with:
+> Please create an **Azure Static Web App**:
 >
-> - **Static website** enabled (Settings → Static website → Enabled,
->   index document `index.html`). This creates a `$web` container and
->   gives a primary endpoint URL.
-> - A **container SAS** for `$web` with **Write** and **Create**
->   permission only, expiring in 12 months.
+> - Any resource group; region nearest us
+> - **Hosting plan: Free**
+> - **Deployment source: Other** (not GitHub — the page is generated on a
+>   server, not built from the repo)
 >
-> Then send me the primary endpoint URL and the SAS URL.
+> Once created, from the app's **Overview** blade please send me:
+>
+> 1. The **URL** (like `https://<name>.azurestaticapps.net`)
+> 2. The **deployment token** — *Manage deployment token* on that blade
+>
+> Then under **Role management**, please add the people who should have
+> access. Everyone else is refused at sign-in.
 
-Nothing else is needed. No VM, no app service, no deployment pipeline.
+The deployment token is a credential — it can publish to the site.
+Treat it like a password.
 
-### Point the build at it
+### Publishing
 
 ```powershell
-.\Register-DashboardTask.ps1 -Minutes 60 `
-  -Out C:\reports\dashboard.html `
-  -PublishSasUrl "https://<account>.blob.core.windows.net/`$web?sv=...&sig=..."
+.\Publish-StaticWebApp.ps1 -File C:\reports\dashboard.html `
+  -AppName <name> -DeploymentToken "..."
 ```
 
-Each run writes the file locally **and** uploads it. If the upload
-fails, the local file is still written and the error says why.
+The upload includes a `staticwebapp.config.json` that requires
+authentication on every route. **That file is what enforces the login** —
+without it the site is public whatever the portal shows.
 
-The URL is then the static website endpoint, something like:
+To have every scheduled build publish, set the token once for the
+account the task runs as:
 
+```powershell
+[Environment]::SetEnvironmentVariable("AUS_SWA_TOKEN", "...", "User")
 ```
-https://<account>.z8.web.core.windows.net/
-```
+
+### If the deploy fails
+
+The script posts a zip to the Static Web App deployment endpoint. That
+avoids the SWA CLI, which needs Node.js — one more install on a machine
+where installing things is the problem. It is a **less well-trodden
+route** than the CLI or GitHub Actions, and it is the one part of this
+project I have not been able to test.
+
+If it does not work, **Azure App Service on the free tier reaches the
+same place** — a URL with Entra sign-in — over a much better documented
+deployment API:
+
+> Please create an **App Service** (Free F1, Windows) and enable
+> **Authentication** with Microsoft Entra ID, restricted to our tenant.
+> Send me the **publish profile** from the Overview blade.
+
+Deployment there is a ZIP POST to `/api/zipdeploy` with the publish
+profile credentials — the standard, heavily documented Kudu endpoint.
+Say the word and I will write it; it is about twenty lines.
 
 ---
 
-## Read this before turning it on
+## Before you turn it on
 
-**A static website endpoint is public.** Anyone with the URL can read
-it, with no login. The page carries no personal data and no bank
-details — aggregated daily counts, affiliate names, loan averages — but
-it is commercially sensitive, and an unlisted URL is not access control.
+The page carries no personal data and no bank details — aggregated daily
+counts, affiliate names, loan averages — but it is commercially
+sensitive. With Entra sign-in that is handled: only people you add under
+Role management can see it.
 
-Three ways to handle that, in increasing order of effort:
-
-| Option | Effort | Access control |
-|---|---|---|
-| Static website endpoint | None | **None.** Anyone with the link |
-| Private container + read SAS in the link | Minutes | The link *is* the credential; expires; can be revoked |
-| **Azure Static Web Apps with Entra login** | An hour | Real accounts, real sign-in, revocable per person |
-
-**Azure Static Web Apps is the right answer** if this will be shared
-beyond a couple of people: free tier, sign in with existing work
-accounts, and it stays inside Azure. The upload step differs — it uses a
-deployment token rather than a blob SAS — so say the word and I will add
-it.
-
-The blob route is the fastest way to have a working URL today. Just
-decide it deliberately rather than by default.
-
----
+Worth confirming the sign-in actually works before sharing the URL. Open
+it in a private browser window; you should be asked to sign in rather
+than shown the dashboard.
 
 ## What the URL will and will not be
 
