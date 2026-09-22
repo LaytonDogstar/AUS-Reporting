@@ -3,9 +3,9 @@
 Decided from the measured inventory in `BANKSTATEMENT-DATA.md` and
 `SCHEMA-FINDINGS.md`, on corrected row counts as at 2026-09-22.
 
-Target is the Dogstar Insights model — SQLite on a Railway volume, fed by
-a collector running on FLOWWEB4, which is the only machine with a route
-to the source server (port 1433 is firewalled; verified).
+Target is a dedicated Overflow reporting application — SQLite on a hosted
+volume, fed by a collector running on FLOWWEB4, which is the only machine
+with a route to the source server (port 1433 is firewalled; verified).
 
 ---
 

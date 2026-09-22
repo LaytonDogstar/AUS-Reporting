@@ -64,9 +64,17 @@ against synthetic data.
 
 ## What we are proposing
 
-Extend **Dogstar Insights**, the reporting application already running
-in production for the US business. No new platform, no new vendor, no
-new database server.
+A dedicated reporting application for Overflow. Deliberately modest: a
+SQLite database and a small web service. No new platform, no new vendor,
+no new database server, and nothing added to the Azure estate.
+
+That is sized to the problem rather than under-specified. The dataset is
+about 6 GB and the audience is a handful of business owners, so a
+managed analytics platform would cost several thousand a year to answer
+questions a single file and a scheduled job answer just as well. If that
+changes — many concurrent analysts, or data sources beyond these two
+databases — the decision is worth revisiting, and we have written down
+the thresholds that would trigger it.
 
 A small collector runs on **FLOWWEB4**, on a schedule. It reads a defined
 list of columns, aggregates two very large tables on the way through, and

@@ -15,7 +15,7 @@ BAND  = colors.HexColor("#f2f4f6")
 ACCENT= colors.HexColor("#1f4e79")
 
 def style(name, **kw):
-    base = dict(fontName="Helvetica", fontSize=9.6, leading=14.2, textColor=INK)
+    base = dict(fontName="Helvetica", fontSize=9.6, leading=13.6, textColor=INK)
     base.update(kw)
     return ParagraphStyle(name, **base)
 
