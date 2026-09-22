@@ -36,6 +36,9 @@ param(
 
     [string] $DeploymentToken = $env:AUS_SWA_TOKEN,
 
+    # Must match the role you assign when inviting people in the Portal.
+    [string] $RequiredRole = "reader",
+
     [int] $TimeoutSeconds = 300
 )
 
@@ -62,9 +65,16 @@ try {
 
     # staticwebapp.config.json is what turns on the sign-in requirement.
     # Without it the site is public, whatever the portal shows.
+    #
+    # The role is a CUSTOM one, not the built-in "authenticated".
+    # "authenticated" means "signed in with any Microsoft account" - on
+    # the Free tier that is any Microsoft account in the world, not just
+    # people in this tenant. A custom role is only held by someone
+    # explicitly invited under Role management, so everyone else is
+    # refused after signing in.
     $config = @{
         routes = @(
-            @{ route = "/*"; allowedRoles = @("authenticated") }
+            @{ route = "/*"; allowedRoles = @($RequiredRole) }
         )
         responseOverrides = @{
             "401" = @{ statusCode = 302; redirect = "/.auth/login/aad" }
@@ -114,8 +124,10 @@ try {
     Write-Host "Published." -ForegroundColor Green
     Write-Host "  https://$AppName.azurestaticapps.net" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "First visit will ask for a work account sign-in." -ForegroundColor Yellow
-    Write-Host "Who may sign in is controlled in the Portal under Role management." -ForegroundColor Yellow
+    Write-Host "Access requires the '$RequiredRole' role." -ForegroundColor Yellow
+    Write-Host "In the Portal: Role management > Invite > assign '$RequiredRole'." -ForegroundColor Yellow
+    Write-Host "Until someone holds that role, they will sign in and then be refused" -ForegroundColor Yellow
+    Write-Host "- including you. Invite yourself first." -ForegroundColor Yellow
 }
 finally {
     if (Test-Path $staging) { Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue }

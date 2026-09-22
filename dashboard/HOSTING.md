@@ -71,8 +71,18 @@ tier costs nothing.
 > 1. The **URL** (like `https://<name>.azurestaticapps.net`)
 > 2. The **deployment token** — *Manage deployment token* on that blade
 >
-> Then under **Role management**, please add the people who should have
-> access. Everyone else is refused at sign-in.
+> Then under **Role management**, please invite the people who should
+> have access and assign them the role **`reader`**.
+
+**The role name matters.** The uploaded config requires a *custom* role
+rather than the built-in `authenticated`. On the Free tier
+`authenticated` means "signed in with any Microsoft account" — any
+Microsoft account anywhere, not just someone in your tenant. A custom
+role is held only by people explicitly invited, so everyone else is
+refused after signing in.
+
+**Invite yourself first**, or the first thing you will see is your own
+site refusing you.
 
 The deployment token is a credential — it can publish to the site.
 Treat it like a password.
