@@ -82,26 +82,60 @@ $settings = New-ScheduledTaskSettingsSet `
     -ExecutionTimeLimit (New-TimeSpan -Minutes 30) `
     -MultipleInstances IgnoreNew    # a slow build must not stack up
 
-# S4U: runs whether or not anyone is logged on, and keeps the DPAPI
-# identity, without storing a Windows password anywhere.
-$principal = New-ScheduledTaskPrincipal `
-    -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType S4U -RunLevel Limited
-
 if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
     Write-Host "Replacing the existing task." -ForegroundColor DarkGray
 }
 
-Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
-    -Settings $settings -Principal $principal `
-    -Description "Rebuilds the AUS lead reporting dashboard." | Out-Null
+# Two logon types, best first.
+#
+#   S4U         - runs logged off, keeps the DPAPI identity, stores no
+#                 Windows password. Needs elevation or "Log on as a
+#                 batch job", so it is often refused.
+#   Interactive - no special rights, but only runs while signed in.
+#
+# Registering is attempted with S4U and falls back, because a task that
+# only runs while signed in beats no task at all.
+$logonUsed = $null
+foreach ($logonType in @("S4U", "Interactive")) {
+    $principal = New-ScheduledTaskPrincipal `
+        -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType $logonType -RunLevel Limited
+    try {
+        Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
+            -Settings $settings -Principal $principal `
+            -Description "Rebuilds the AUS lead reporting dashboard." `
+            -ErrorAction Stop | Out-Null
+        $logonUsed = $logonType
+        break
+    }
+    catch {
+        Write-Host ("  $logonType logon refused: {0}" -f $_.Exception.Message) -ForegroundColor DarkYellow
+    }
+}
+
+# Verify rather than trust. Register-ScheduledTask can report a CIM
+# failure without stopping the script, which once produced a cheerful
+# "Registered" message for a task that did not exist.
+$registered = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+if (-not $registered) {
+    throw ("Could not register '$TaskName' - both S4U and Interactive were " +
+           "refused. Re-run this in a PowerShell started with 'Run as " +
+           "administrator'. Nothing was changed.")
+}
 
 Write-Host ""
 Write-Host "Registered '$TaskName'" -ForegroundColor Green
 Write-Host "  Every      : $Minutes minute(s)"
 Write-Host "  Window     : $Days days"
 Write-Host "  Output     : $Out"
-Write-Host "  Runs as    : $env:USERDOMAIN\$env:USERNAME"
+Write-Host "  Runs as    : $env:USERDOMAIN\$env:USERNAME on $env:COMPUTERNAME"
+Write-Host "  Logon type : $logonUsed"
+if ($logonUsed -eq "Interactive") {
+    Write-Host ""
+    Write-Host "  NOTE: Interactive means it only runs while you are signed in to" -ForegroundColor Yellow
+    Write-Host "  $env:COMPUTERNAME. It will not refresh overnight or while logged off." -ForegroundColor Yellow
+    Write-Host "  For that, re-run this as administrator to get an S4U task." -ForegroundColor Yellow
+}
 if ($PublishSasUrl) { Write-Host "  Publishing : yes" }
 Write-Host ""
 Write-Host "Run it now to check it works:" -ForegroundColor Yellow
