@@ -13,20 +13,30 @@ SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
 
 /* --- Tables ------------------------------------------------------- */
 SELECT
-    DB_NAME()                                               AS database_name,
-    s.name                                                  AS schema_name,
-    t.name                                                  AS table_name,
-    SUM(CASE WHEN i.index_id IN (0,1) THEN p.rows ELSE 0 END) AS approx_row_count,
-    CAST(SUM(a.total_pages) * 8.0 / 1024 AS decimal(18,2))  AS total_mb,
-    MAX(t.create_date)                                      AS created,
-    MAX(t.modify_date)                                      AS schema_last_modified
+    DB_NAME()      AS database_name,
+    s.name         AS schema_name,
+    t.name         AS table_name,
+    r.row_count    AS approx_row_count,
+    z.total_mb     AS total_mb,
+    t.create_date  AS created,
+    t.modify_date  AS schema_last_modified
 FROM sys.tables  t
 JOIN sys.schemas s ON s.schema_id = t.schema_id
-JOIN sys.indexes i ON i.object_id  = t.object_id
-JOIN sys.partitions p ON p.object_id = i.object_id AND p.index_id = i.index_id
-JOIN sys.allocation_units a ON a.container_id = p.partition_id
-GROUP BY s.name, t.name
-ORDER BY approx_row_count DESC, s.name, t.name;
+CROSS APPLY (
+    -- Rows from sys.partitions ALONE. Joining allocation units here
+    -- multiplies the count by the number of allocation units the table
+    -- has, so a table with an nvarchar(max) column reads 3x too high.
+    SELECT SUM(p.rows) AS row_count
+    FROM sys.partitions p
+    WHERE p.object_id = t.object_id AND p.index_id IN (0, 1)
+) r
+CROSS APPLY (
+    SELECT CAST(SUM(a.total_pages) * 8.0 / 1024 AS decimal(18,2)) AS total_mb
+    FROM sys.partitions p
+    JOIN sys.allocation_units a ON a.container_id = p.partition_id
+    WHERE p.object_id = t.object_id
+) z
+ORDER BY r.row_count DESC, s.name, t.name;
 
 /* --- Views -------------------------------------------------------
    Worth knowing: the reporting replica may already expose curated

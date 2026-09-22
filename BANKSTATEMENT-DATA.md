@@ -247,3 +247,104 @@ personal data, and did not flag an email column on an event table.
 classification finds what it is told to look for. Any table going into
 reporting needs its columns read individually, which is what these
 follow-up queries have been doing.
+
+---
+
+# `LeadApplicationCustomValues` is marketing attribution
+
+Measured 2026-09-22 from `discovery/adhoc/custom_value_names.sql`.
+31 distinct field names, 22,614,058 rows. Field names only; no value was
+read.
+
+## 13. What is in it
+
+**Web session and campaign** — 26 affiliates, ~1.91M rows each, from
+March 2022 (`UserAgent` from November 2021):
+
+`UtmSource`, `UtmMedium`, `UtmCampaign`, `OverflowSource`, `CookieId`,
+`UserAgent`
+
+**Google Ads ValueTrack** — 4 to 6 affiliates, from July 2022:
+
+`gclid`, `kw` (keyword), `crtv` (creative), `adgrp`, `cmpid`, `mt` (match
+type), `nw` (network), `dev` and `devmod` (device), `trgt`, `locms`
+(location), `plc`
+
+**Facebook** — `fbp`, 1.10M rows, 9 affiliates
+
+**Partner and lender references** — `MoneyspotLeadKey` (233,848 rows
+across 56 affiliates, the widest-used field in the table),
+`CredfinApplicationId` (441,905), `2eziLeadId`, `Credit24ApplicationId`,
+`QuickzyLeadId`, `StayFinanceLeadId`, `FasterFinancialLeadId`,
+`LenderCode`
+
+**Business flags** — `InExcessiveDebt` (210,635, 20 affiliates, from
+March 2022), `IsDirectDeposit` (181,204, 15 affiliates, from November
+2025), `min_price`
+
+## 14. Why this matters
+
+Campaign attribution can be joined to affordability metrics and lender
+outcomes on `LeadApplicationId`. That makes the real question answerable:
+not just which affiliates send good leads, but **which campaign, keyword
+and creative produce applicants who pass affordability and get accepted**.
+Nothing built so far has had a channel dimension at all.
+
+**Coverage is the limit.** 1.91M applications carry UTM data against
+4,445,486 total — 43%, and only 26 of 185 affiliates. The Google Ads
+fields cover 4 to 6 affiliates, almost certainly the internal sources
+(`Affiliates.IsInternalSource` exists). So this supports channel analysis
+of your own marketing, not of affiliate traffic.
+
+**`MoneyspotLeadKey` may matter more than it looks.** A lender-side
+reference on 233,848 applications across 56 affiliates is a way to
+reconcile against a lender's own records — which is the problem that
+killed funded-data reporting when `FundedLeads` froze in October 2024.
+Worth raising with whoever manages that relationship.
+
+## 15. Personal data in this table
+
+`CookieId`, `fbp`, `gclid` and `UserAgent` are online identifiers. They
+are not names, but they identify a device or a browser and are treated as
+personal information under Australian privacy guidance. They belong in
+the restricted tier.
+
+None of them are needed for analysis. `UtmSource`, `UtmMedium`,
+`UtmCampaign`, `kw`, `crtv` and `adgrp` describe the campaign, not the
+person, and answer every channel question worth asking. Take those and
+leave the tracking identifiers where they are.
+
+## 16. A bug worth reporting
+
+**43,240 rows have an empty field name**, all from one affiliate, written
+continuously since 14 May 2025. Something is writing custom values with
+no name attached. Whatever that field was meant to be is being lost, and
+it is still happening.
+
+## 17. Correction: the row counts were inflated
+
+`LeadApplicationCustomValues` holds **22,614,058 rows, not 67,841,415**.
+The count in section 1 was exactly 3x too high.
+
+The inventory query counted rows while joined to
+`sys.allocation_units`. A table gets one allocation unit per storage
+type, so a table with an `nvarchar(max)` column has three — `IN_ROW_DATA`,
+`LOB_DATA` and `ROW_OVERFLOW_DATA` — and its row count is tripled.
+
+`01_tables_and_views.sql` contained the same join, so **every row count
+in the original discovery has this flaw**, and any table with a large
+object column reads high. Both scripts are now fixed: rows come from
+`sys.partitions` alone, sizes still come from the allocation units.
+
+Confirmed unaffected: `BankStatementSummaries`, whose per-year counts sum
+to 3,909,483 against a reported 3,909,457. Tables with no large object
+column have a single allocation unit and were always right.
+
+Suspect until re-measured: `CredfinStatus` (has `RefreshInputs
+nvarchar(max)`), and any other table with an unbounded text column —
+which includes the headline figures for `FailedFiltersV2` and
+`LenderApplicationResults`. Re-running the fixed inventory settles it in
+under a second.
+
+**`Overflow` is therefore materially smaller than reported.** Correcting
+this one table alone removes 45.2M rows from the total.
