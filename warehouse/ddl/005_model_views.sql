@@ -206,18 +206,30 @@ SELECT
     MAX(s.StageUtc)                             AS LastStageUtc,
     DATEDIFF(SECOND, MIN(s.StageUtc), MAX(s.StageUtc)) AS JourneySeconds,
     CAST(CONVERT(char(8), DATEADD(HOUR, 10, MIN(s.StageUtc)), 112) AS int) AS FirstStageDateKey,
-    MAX(CASE WHEN s.StageId = 7  THEN 1 ELSE 0 END) AS ReachedBankStatement,
-    MAX(CASE WHEN s.StageId = 8  THEN 1 ELSE 0 END) AS LenderCallSent,
-    MAX(CASE WHEN s.StageId = 9  THEN 1 ELSE 0 END) AS LenderCallReturned,
-    MAX(CASE WHEN s.StageId = 12 THEN 1 ELSE 0 END) AS ReachedStage12,
-    MAX(CASE WHEN s.StageId = 13 THEN 1 ELSE 0 END) AS ReachedStage13,
-    /*  A lender call sent with no matching return. 220 in 4.09M
-        overall - a free reliability metric.  */
+    MAX(CASE WHEN s.StageId = 3  THEN 1 ELSE 0 END) AS AcceptedTC,
+    MAX(CASE WHEN s.StageId = 7  THEN 1 ELSE 0 END) AS BankStatementExtracted,
+    MAX(CASE WHEN s.StageId = 8  THEN 1 ELSE 0 END) AS BeganSell,
+    MAX(CASE WHEN s.StageId = 9  THEN 1 ELSE 0 END) AS CompletedSell,
+    MAX(CASE WHEN s.StageId = 12 THEN 1 ELSE 0 END) AS ReachedInterstitial,
+    /*  The two competing outcomes. Offer is the positive one; note it
+        repeats, so one application can receive several offers.  */
+    MAX(CASE WHEN s.StageId = 10 THEN 1 ELSE 0 END) AS ReceivedOffer,
+    MAX(CASE WHEN s.StageId = 13 THEN 1 ELSE 0 END) AS Declined,
+    SUM(CASE WHEN s.StageId = 10 THEN 1 ELSE 0 END) AS OfferCount,
+    /*  OfferAccepted has never been emitted in five years - lenders do
+        not report acceptance back. Carried so the gap stays visible
+        rather than being quietly forgotten.  */
+    MAX(CASE WHEN s.StageId = 11 THEN 1 ELSE 0 END) AS OfferAccepted,
+    /*  A sell begun that never completed. 220 in 4.09M overall - a
+        reliability metric, not a business outcome.  */
     CAST(CASE WHEN MAX(CASE WHEN s.StageId = 8 THEN 1 ELSE 0 END) = 1
                AND MAX(CASE WHEN s.StageId = 9 THEN 1 ELSE 0 END) = 0
-              THEN 1 ELSE 0 END AS bit)         AS LenderCallUnanswered
+              THEN 1 ELSE 0 END AS bit)         AS SellNeverCompleted
 FROM fct.ApplicationStage AS s
-WHERE s.IncludeInFunnel = 1
+/*  Stage 11 (OfferAccepted) is excluded from funnel CHARTS because it
+    has never fired, but it is counted here so the flag above stays
+    truthful if it ever starts.  */
+WHERE s.IncludeInFunnel = 1 OR s.StageId = 11
 GROUP BY s.LeadApplicationId;
 GO
 

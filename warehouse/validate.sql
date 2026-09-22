@@ -124,32 +124,47 @@ SELECT
     CASE WHEN @s4 <= @s3 THEN 'PASS' ELSE 'FAIL' END,
     CONCAT('stage 3 = ', @s3, ', stage 4 = ', @s4, ', unanswered = ', @s3 - @s4);
 
-/* --- 7. Stages 12 and 13 should be competing outcomes ------------- */
+/* --- 7. Offer and Decline should be competing outcomes ------------ */
 DECLARE @both int = (
     SELECT COUNT(*) FROM agg.ApplicationFunnel
-    WHERE ReachedStage12 = 1 AND ReachedStage13 = 1);
+    WHERE ReceivedOffer = 1 AND Declined = 1);
 DECLARE @either int = (
     SELECT COUNT(*) FROM agg.ApplicationFunnel
-    WHERE ReachedStage12 = 1 OR ReachedStage13 = 1);
+    WHERE ReceivedOffer = 1 OR Declined = 1);
 
 INSERT INTO @results (Check_, Result, Detail)
 SELECT
-    'Stages 12 and 13 are mutually exclusive',
+    'Offer and Decline are competing outcomes',
     CASE WHEN @either = 0 THEN 'FAIL'
-         WHEN @both * 100.0 / @either < 1 THEN 'PASS'
+         WHEN @both * 100.0 / @either < 5 THEN 'PASS'
          ELSE 'FAIL' END,
-    CONCAT(@both, ' of ', @either, ' applications reached both (expect under 1%; if high, they are not competing outcomes and STAGES.md is wrong)');
+    CONCAT(@both, ' of ', @either, ' applications reached both Offer and Decline. Some overlap is expected where one lender offers and another declines; a high figure means they are not a clean win/lose split');
+
+/* --- 7b. OfferAccepted has never fired ----------------------------
+   Not a failure - it records that lenders do not report acceptance
+   back. If this ever returns a non-zero count, a feed has started and
+   funded reporting becomes possible for the first time. */
+DECLARE @accepted int = (
+    SELECT COUNT(*) FROM agg.ApplicationFunnel WHERE OfferAccepted = 1);
+
+INSERT INTO @results (Check_, Result, Detail)
+SELECT
+    'OfferAccepted status (informational)',
+    'PASS',
+    CASE WHEN @accepted = 0
+         THEN 'never emitted, as expected - lenders do not report acceptance back'
+         ELSE CONCAT(@accepted, ' applications now have OfferAccepted. A lender feed has started; funded reporting is newly possible') END;
 
 /* --- 8. Retired and never-used stages stay out of the funnel ------ */
 DECLARE @excluded int = (
     SELECT COUNT(*) FROM fct.ApplicationStage
-    WHERE StageId IN (6, 11, 14, 15, 16) AND IncludeInFunnel = 1);
+    WHERE StageId IN (11, 14, 15, 16, 17) AND IncludeInFunnel = 1);
 
 INSERT INTO @results (Check_, Result, Detail)
 SELECT
-    'Retired stages are excluded from the funnel',
+    'Error and unused stages are out of the funnel',
     CASE WHEN @excluded = 0 THEN 'PASS' ELSE 'FAIL' END,
-    CONCAT(@excluded, ' event(s) from stages 6/11/14/15/16 flagged for the funnel');
+    CONCAT(@excluded, ' event(s) from stages 11/14/15/16/17 flagged for the funnel');
 
 /* --- 9. Nothing personal has arrived ------------------------------
    The extract cannot configure a banking or credential column, but a

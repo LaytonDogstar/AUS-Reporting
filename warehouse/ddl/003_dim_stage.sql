@@ -4,15 +4,14 @@
     Hand-maintained. There is nothing upstream to extract it from:
     StageId has no lookup table anywhere in either source database.
 
-    The labels below are the hypotheses from STAGES.md, marked with
-    their confidence. UNCONFIRMED labels must not be published on a
-    dashboard - the IsLabelConfirmed flag exists so a report can show
-    "Stage 5" rather than a guess until someone who built the journey
-    signs it off.
+    Labels supplied by the development team, 22 Sep 2026, and confirmed
+    against the observed data. FunnelOrder comes from the journey paths
+    seen in the data, not from the label list.
 
-    FunnelOrder comes from observed journey paths and is established,
-    even where the label is not. NULL means the stage sits outside the
-    linear funnel.
+    Three stages have NEVER been emitted in five years: OfferAccepted,
+    RefreshBankStatement and NoPrimaryIncomeSource. OfferAccepted is the
+    notable one - it is where lender acceptance would be recorded, and
+    it corroborates that lenders do not report outcomes back.
 
     Idempotent - safe to re-run. Re-running resets labels to these
     values, so edit this file rather than the table.
@@ -42,38 +41,40 @@ GO
 WITH seed (StageId, StageLabel, FunnelOrder, PairedWithStageId,
            IsLabelConfirmed, IsActive, IncludeInFunnel, Notes) AS (
     SELECT * FROM (VALUES
-        (1,  N'Application created',              10,  NULL, 1, 1, 1,
-             N'Settled. Exactly one per application (4,443,774 / 4,443,774) and matches Overflow.LeadApplications to 0.00%. Use as the funnel denominator.'),
-        (2,  N'UNCONFIRMED - stage 2',            15,  NULL, 0, 1, 1,
-             N'Weak. Repeats 1.97x per application, 8 of 19 affiliates, can occur at position 1, and absent from all 20 sampled journeys. Volume matches no table.'),
-        (3,  N'UNCONFIRMED - pre-check request',  20,     4, 0, 1, 1,
-             N'Likely the salary pre-check request. Only 7 of 19 affiliates emit it and Affiliates.EnableSalaryPreCheck is a per-affiliate flag. Added 2022-03-09.'),
-        (4,  N'UNCONFIRMED - pre-check response', 30,     3, 0, 1, 1,
-             N'Response to stage 3. 17 of 192,802 requests unanswered.'),
-        (5,  N'UNCONFIRMED - stage 5',            40,  NULL, 0, 1, 1,
-             N'Weak. Added 2021-11-04, 17 of 19 affiliates, average position 2.75. Volume matches no table. Possibly terms agreed or landing page reached.'),
-        (6,  N'UNCONFIRMED - single-affiliate',  NULL,  NULL, 0, 0, 0,
-             N'One affiliate only, 1,258 events over four years, last seen 2026-08-26. Excluded from the funnel.'),
-        (7,  N'Bank statement retrieval',         50,  NULL, 0, 1, 1,
-             N'Strong. 1,705,395 against BankStatementRetrievals at 1,705,256 - 0.01%.'),
-        (8,  N'UNCONFIRMED - lender call sent',   60,     9, 0, 1, 1,
-             N'Likely the PingTree ping/post. Matches LeadMetadata (4,093,364) to 0.01%. Recurs after stage 10, consistent with trying successive lenders.'),
-        (9,  N'UNCONFIRMED - lender call returned', 70,   8, 0, 1, 1,
-             N'Response to stage 8. 220 of 4,093,727 unanswered - a reliability metric.'),
-        (10, N'UNCONFIRMED - decline / next lender', 80, NULL, 0, 1, 1,
-             N'Reasonable. Repeats 1.89x per application and sits between 8->9 cycles, so it looks like a retry boundary.'),
-        (11, N'Never used',                      NULL,  NULL, 1, 0, 0,
-             N'Allocated in code and never emitted. Nothing here is purged, so this is not a retired stage.'),
-        (12, N'UNCONFIRMED - sold to lender',    100,  NULL, 0, 1, 1,
-             N'Plausible. 1,242,741 against LeadApplicationAccepts at 1,269,729 - 2.17%. A terminal outcome; see 13.'),
-        (13, N'UNCONFIRMED - not sold',          100,  NULL, 0, 1, 1,
-             N'Plausible. The other terminal outcome: latest average position (9.30), follows the retry loop, and no sampled journey contained both 12 and 13. Same FunnelOrder as 12 because they compete.'),
-        (14, N'Retired experiment',              NULL,  NULL, 1, 0, 0,
-             N'7 events, 2022-11-21 to 2023-02-16.'),
-        (15, N'Never used',                      NULL,  NULL, 1, 0, 0,
-             N'Allocated in code and never emitted.'),
-        (16, N'Retired experiment',              NULL,  NULL, 1, 0, 0,
-             N'134 events, 2023-04-05 to 2023-05-16.')
+        (1,  N'Received',                 10,  NULL, 1, 1, 1,
+             N'Exactly one per application (4,443,774 / 4,443,774) and matches Overflow.LeadApplications to 0.00%. The funnel denominator.'),
+        (2,  N'Landed',                   20,  NULL, 1, 1, 1,
+             N'140,624 applications (3.2%). Repeats 1.97x. Emitted by 8 of 19 active affiliates.'),
+        (3,  N'AcceptedTC',               30,     4, 1, 1, 1,
+             N'191,907 applications (4.3%). Only 7 of 19 affiliates emit it, so most journeys capture consent elsewhere - consistent with affiliate pages that already collect it.'),
+        (4,  N'RequireBankStatement',     40,     3, 1, 1, 1,
+             N'Follows AcceptedTC immediately; 17 of 192,802 did not reach it.'),
+        (5,  N'CredfinLanded',            50,  NULL, 1, 1, 1,
+             N'2,089,331 applications (47.0%). The Credfin bank-statement path. Parallel to ProvisoLanded.'),
+        (6,  N'ProvisoLanded',            50,  NULL, 1, 1, 1,
+             N'The Proviso path, the alternative provider to Credfin. One affiliate only, 1,229 applications since 2022.'),
+        (7,  N'BankStatementExtracted',   60,  NULL, 1, 1, 1,
+             N'1,681,621 applications (37.8%). Matches OverflowReporting.BankStatementRetrievals to 0.01%.'),
+        (8,  N'BeginSell',                70,     9, 1, 1, 1,
+             N'3,876,526 applications (87.2%). Paired with SellCompleted.'),
+        (9,  N'SellCompleted',            80,     8, 1, 1, 1,
+             N'220 of 4,093,727 BeginSell events never completed - a reliability metric, not a business outcome.'),
+        (12, N'Interstitial',             85,  NULL, 1, 1, 1,
+             N'1,230,891 applications (27.7%). A page shown after the sell process, not an outcome. Do not treat as a conversion.'),
+        (10, N'Offer',                    90,  NULL, 1, 1, 1,
+             N'356,061 applications (8.0%). Repeats 1.89x, so one application can receive several offers. The positive outcome.'),
+        (13, N'Decline',                  90,  NULL, 1, 1, 1,
+             N'692,347 applications (15.6%). The negative outcome, competing with Offer at the same funnel level.'),
+        (11, N'OfferAccepted',           100,  NULL, 1, 0, 0,
+             N'NEVER EMITTED in five years. This is where lender acceptance would be recorded; lenders do not report outcomes back, so it never fires. Excluded from the funnel so charts do not carry a permanent zero.'),
+        (14, N'DuplicateBankstatement', NULL,  NULL, 1, 0, 0,
+             N'Error condition, not funnel progress. 7 events, 2022-11-21 to 2023-02-16.'),
+        (15, N'RefreshBankStatement',   NULL,  NULL, 1, 0, 0,
+             N'NEVER EMITTED. Defined but unused.'),
+        (16, N'BankstatementRetry',     NULL,  NULL, 1, 0, 0,
+             N'Retry condition, not funnel progress. 134 events, 2023-04-05 to 2023-05-16.'),
+        (17, N'NoPrimaryIncomeSource',  NULL,  NULL, 1, 0, 0,
+             N'NEVER EMITTED. A decline reason that has never been recorded.')
     ) AS v (StageId, StageLabel, FunnelOrder, PairedWithStageId,
             IsLabelConfirmed, IsActive, IncludeInFunnel, Notes)
 )
