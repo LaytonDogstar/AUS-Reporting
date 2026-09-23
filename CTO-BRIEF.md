@@ -1,6 +1,6 @@
 # AUS Reporting: scope and rationale
 
-Prepared for technical review, 22 September 2026.
+Prepared for technical review, 23 September 2026.
 
 ## Why you are reading this
 
@@ -86,7 +86,7 @@ raw transaction data, and no personal identifiers.
 
 ## Data protection
 
-Three points worth stating plainly, because this data includes
+Four points worth stating plainly, because this data includes
 affordability information about real applicants.
 
 **The raw bank statement transactions are not stored anywhere in the
@@ -95,17 +95,32 @@ income, gambling as a percentage of income, dishonour counts and similar
 indicators. The individual transaction lines, which are by far the most
 sensitive material, were never retained. Nothing we build changes that.
 
-**Banking details and credentials are blocked in code, with no
-configuration option to override.** That covers
-`BankStatementSummaries.AccountNumber` and `.SortCode`, and the
-credential columns on `Affiliates`.
+**Banking details, credentials and personal identifiers are blocked in
+code, with no configuration option to override.** That covers
+`BankStatementSummaries.AccountNumber` and `.SortCode`, the credential
+columns on `Affiliates`, and every name, email address, mobile number,
+date of birth, driver's licence and street address in either database.
 
-**Personal identifiers are excluded by default** and require an explicit,
-reviewable entry to change — names, email, mobile, date of birth,
-driver's licence and address. So are the online identifiers in the
-custom values table (`CookieId`, `fbp`, `gclid`, `UserAgent`); campaign
-analysis needs the campaign fields, not the device ones. Nothing is
-currently approved, and a test enforces it.
+Nothing in the reporting model needs to know who anyone is. Affordability,
+campaign and outcome analysis all work on attributes — age band, state,
+income, employment, gambling as a percentage of income — and a name has
+no predictive value. So the control is one that cannot be switched on
+rather than one that merely is not switched on today, and a test asserts
+that enabling an identifier is not something the configuration can
+express.
+
+**The online identifiers are a reviewable opt-in, and none is enabled.**
+`CookieId`, `fbp`, `gclid` and `UserAgent` in the custom values table
+identify a device rather than a person, and there is a conceivable reason
+to want one, so they can be turned on by a visible edit rather than not
+at all. Campaign analysis needs the campaign fields, not the device ones.
+
+**Geography is the deliberate exception, and worth naming.** State, city
+and postcode are extracted, because reporting needs them and none
+identifies a person on its own. A full postcode together with age and
+income can narrow to very few people, so that is handled where it
+belongs — figures are banded and any group below about ten is
+suppressed — rather than by refusing to hold the column.
 
 Access is business owners only. No affiliate or client login sees any of
 this.

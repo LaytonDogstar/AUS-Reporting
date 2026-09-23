@@ -21,10 +21,23 @@ class TestClassify(unittest.TestCase):
                        "CredfinSecretKey", "TalefinClientSecret", "cvv"):
             self.assertEqual(classify(column), "blocked", column)
 
-    def test_identifiers_are_restricted(self):
-        for column in ("FirstName", "Email", "MobileNumber",
-                       "DateOfBirth", "DriversLicense", "ContactName"):
+    def test_personal_identifiers_are_blocked(self):
+        for column in ("FirstName", "Email", "MobileNumber", "DateOfBirth",
+                       "DriversLicense", "ContactName", "AccountName", "Employer"):
+            self.assertEqual(classify(column), "blocked", column)
+
+    def test_online_identifiers_are_restricted(self):
+        # A device or browser, not a person, and occasionally defensible.
+        for column in ("CookieId", "fbp", "gclid", "UserAgent", "IpAddress"):
             self.assertEqual(classify(column), "restricted", column)
+
+    def test_geography_is_open(self):
+        # Deliberate. Reporting needs geography and none of these
+        # identifies a person alone. Re-identification in combination
+        # with age and income is handled by banding and small-cell
+        # suppression at presentation, not by refusing to extract.
+        for column in ("PostCode", "City", "StateCode"):
+            self.assertEqual(classify(column), "open", column)
 
     def test_ordinary_columns_are_open(self):
         for column in ("Id", "DateCreated", "StateCode", "LoanAmount", "AffiliateId"):
@@ -47,13 +60,20 @@ class TestCheckColumns(unittest.TestCase):
 
     def test_restricted_column_needs_approval(self):
         with self.assertRaises(UnapprovedRestrictedColumnError):
-            check_columns(("Id", "Email"))
+            check_columns(("Id", "CookieId"))
 
     def test_restricted_column_passes_when_approved(self):
-        check_columns(("Id", "Email"), approved=("Email",))  # no raise
+        check_columns(("Id", "CookieId"), approved=("CookieId",))  # no raise
 
     def test_approval_is_case_insensitive(self):
-        check_columns(("Id", "MobileNumber"), approved=("mobile_number",))
+        check_columns(("Id", "UserAgent"), approved=("user_agent",))
+
+    def test_personal_identifier_cannot_be_approved(self):
+        # The point of the change: approving a name or an email is not
+        # something the configuration can express any more.
+        for column in ("Email", "FirstName", "DateOfBirth", "MobileNumber"):
+            with self.assertRaises(BlockedColumnError):
+                check_columns(("Id", column), approved=(column,))
 
     def test_error_names_the_table(self):
         with self.assertRaises(BlockedColumnError) as ctx:

@@ -2,16 +2,32 @@
 
 Two tiers, deliberately:
 
-* ``BLOCKED`` - banking details and credentials. There is no reporting
-  question that needs them and no configuration option to override.
-  ``Overflow.Affiliates`` alone holds ``Password``, ``CredfinSecretKey``
-  and ``TalefinClientSecret``; ``BankStatementSummaries`` holds
-  ``AccountNumber`` and ``SortCode``. None of it is extracted.
+* ``BLOCKED`` - banking details, credentials and direct personal
+  identifiers. There is no reporting question that needs any of them and
+  no configuration option to override. ``Overflow.Affiliates`` alone
+  holds ``Password``, ``CredfinSecretKey`` and ``TalefinClientSecret``;
+  ``BankStatementSummaries`` holds ``AccountNumber`` and ``SortCode``;
+  ``Leads`` and ``LeadApplications`` hold names, email, mobile, date of
+  birth and address. None of it can be extracted.
 
-* ``RESTRICTED`` - direct personal identifiers. Legitimately needed
-  occasionally, so allowed, but only when the table spec names the
-  column in ``restricted_approved``. That makes every instance a visible,
+  Identifiers were previously a reviewable opt-in. They are not any
+  more. Nothing in the reporting model needs to know who someone is -
+  affordability, campaign and outcome analysis all work on attributes -
+  so the honest control is one that cannot be switched off rather than
+  one that is merely switched off today.
+
+* ``RESTRICTED`` - online identifiers. They identify a device or a
+  browser rather than a person, and there is a conceivable reason to
+  want one (reconciling a Google Ads click, say), so they are allowed -
+  but only when the table spec names the column in
+  ``restricted_approved``. That makes every instance a visible,
   reviewable line in ``tables.yml`` rather than an accident.
+
+Geography is deliberately neither. ``PostCode``, ``City`` and
+``StateCode`` are extracted openly because reporting needs them, and
+none identifies a person on its own. They are quasi-identifiers in
+combination with age and income, which is a presentation problem -
+band them and suppress small cells - not an extraction one.
 
 Matching is on a normalised column name (lowercased, underscores
 stripped), so ``Account_Number``, ``accountnumber`` and ``AccountNumber``
@@ -32,17 +48,23 @@ BLOCKED: frozenset[str] = frozenset({
     "password", "passwd", "secret", "secretkey", "clientsecret",
     "apikey", "token", "accesstoken", "refreshtoken",
     "credfinsecretkey", "talefinclientsecret", "passwordsalt",
+    # Name
+    "firstname", "lastname", "surname", "fullname", "middlename",
+    "contactname", "accountname", "employer", "employername",
+    # Contact
+    "email", "emailaddress",
+    "mobile", "mobilenumber", "phone", "phonenumber", "landlinenumber",
+    # Government and identity documents
+    "dateofbirth", "dob",
+    "driverslicense", "driverslicence", "passport", "medicare", "tfn",
+    # Address, below the level geography needs
+    "street", "streetnumber", "streetname", "unitnumber",
+    "addressline1", "addressline2",
 })
 
 RESTRICTED: frozenset[str] = frozenset({
-    "firstname", "lastname", "surname", "fullname", "middlename",
-    "contactname",
-    "email", "emailaddress",
-    "mobile", "mobilenumber", "phone", "phonenumber", "landlinenumber",
-    "dateofbirth", "dob",
-    "driverslicense", "driverslicence", "passport", "medicare", "tfn",
-    "street", "streetnumber", "unitnumber", "addressline1", "addressline2",
     "ipaddress",
+    "cookieid", "fbp", "gclid", "useragent", "deviceid",
 })
 
 

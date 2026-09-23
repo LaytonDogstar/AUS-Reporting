@@ -106,20 +106,35 @@ the one to watch against the 20 GB tripwire.
 
 ## Never extracted
 
-Enforced in `aus_reporting/sensitive.py`, no override:
+Enforced in `aus_reporting/sensitive.py`. There is no configuration that
+enables any of these, and a test asserts that `tables.yml` cannot express
+an approval for one:
 
-- `BankStatementSummaries.AccountNumber`, `.SortCode`
-- `Affiliates.Password`, `.CredfinSecretKey`, `.TalefinClientSecret`
+- **Banking** — `BankStatementSummaries.AccountNumber`, `.SortCode`
+- **Credentials** — `Affiliates.Password`, `.CredfinSecretKey`,
+  `.TalefinClientSecret`
+- **Names** — first, last, contact, and
+  `BankStatementSummaries.AccountName` and `.Employer`
+- **Contact** — every email column, `LenderApplicationResults.Email` and
+  `BankstatementEmailQueue.Email` among them, plus mobile and phone
+- **Identity documents** — date of birth, driver's licence, passport,
+  Medicare, tax file number
+- **Address below suburb** — street, unit and address lines
 
-Restricted — excluded, and requiring an explicit approved entry to
-change that:
+### Reviewable opt-in, none enabled
 
-- `BankStatementSummaries.AccountName`, `.Employer`
-- `LenderApplicationResults.Email`, `BankstatementEmailQueue.Email`
-- `LeadApplicationCustomValues` where `Name` is `CookieId`, `fbp`,
-  `gclid` or `UserAgent`
-- Everything on `Leads` and `LeadApplications` already in the restricted
-  tier: names, email, mobile, date of birth, driver's licence, address
+The online identifiers: `CookieId`, `fbp`, `gclid` and `UserAgent` in
+`LeadApplicationCustomValues`, and any `IpAddress`. These identify a
+device rather than a person, and there is a conceivable reason to want
+one, so enabling a column is a visible edit rather than impossible.
+
+### Extracted deliberately
+
+`StateCode`, `City` and `PostCode`. Reporting needs geography, and none
+of them identifies a person on its own. A full postcode with age and
+income can narrow to very few people — that is handled at presentation by
+banding and suppressing any group below about ten, not by refusing to
+hold the column.
 
 ## Size
 
