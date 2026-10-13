@@ -296,8 +296,16 @@ columns, and three are empty or all-NULL.
 
 ## 5. Access, time and collation
 
-- **Read-only is enforced.** `LaytonB` holds `db_datareader` with
-  `CONNECT` and `SELECT` only. No write is possible with this login.
+- **Read-only was enforced for the login used.** `LaytonB` holds
+  `db_datareader` with `CONNECT` and `SELECT` only. No write was
+  possible with it.
+
+  > **This is a property of that login, not of the server.** Discovery
+  > moved to `MaretOverflow` on 2026-10-13, and its permissions have not
+  > been measured. Re-run `discovery/00_server_context.sql`, which reads
+  > `sys.fn_my_permissions`, before assuming a different account is also
+  > read-only. Everything committed here is written to be read-only by
+  > intent, but intent is not a permission boundary.
 - **The server runs UTC.** Local time and UTC are identical, offset
   zero. Any Australian local time in the data was written by the
   application, so every datetime column needs its meaning confirmed

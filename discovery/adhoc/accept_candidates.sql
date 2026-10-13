@@ -28,8 +28,11 @@
     SLOW. LenderApplicationResults is 20.7 GB with no index on its date
     column, so that section is a full scan - allow two to three minutes.
 
-    .\Invoke-Sql.ps1 -Database OverflowReporting -Username LaytonB -File .\accept_candidates.sql -OutCsv C:\discovery\accepts-reporting.csv
-    .\Invoke-Sql.ps1 -Database Overflow          -Username LaytonB -File .\accept_candidates.sql -OutCsv C:\discovery\accepts-overflow.csv
+    .\Invoke-Sql.ps1 -Database OverflowReporting -File .\accept_candidates.sql -OutCsv C:\discovery\accepts-reporting.csv
+    .\Invoke-Sql.ps1 -Database Overflow          -File .\accept_candidates.sql -OutCsv C:\discovery\accepts-overflow.csv
+
+    No -Username here on purpose: it prompts for the login, so the
+    example cannot go stale when the account changes.
 */
 SET NOCOUNT ON;
 SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;

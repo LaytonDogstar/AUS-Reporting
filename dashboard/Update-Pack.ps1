@@ -43,11 +43,16 @@ if (-not (Test-Path $Destination)) {
 Write-Host "Fetching $Branch..." -ForegroundColor Cyan
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$before = if (Test-Path $folder) {
-    @(Get-ChildItem $folder -Recurse -File | ForEach-Object {
+# Assigned up front rather than from an if/else. PowerShell unrolls an
+# empty array returned from a scriptblock to nothing, so
+# `$x = if (...) { @() }` leaves $x null, not empty - which only shows up
+# on a first install, when the folder is not there yet.
+$before = @()
+if (Test-Path $folder) {
+    $before = @(Get-ChildItem $folder -Recurse -File | ForEach-Object {
         "$($_.FullName)|$($_.Length)|$($_.LastWriteTimeUtc.Ticks)"
     })
-} else { @() }
+}
 
 # -UseBasicParsing keeps this working where Internet Explorer's engine
 # is unavailable, which is most server builds.
@@ -64,8 +69,14 @@ Get-ChildItem $folder -Recurse -File | Unblock-File
 $after = @(Get-ChildItem $folder -Recurse -File | ForEach-Object {
     "$($_.FullName)|$($_.Length)|$($_.LastWriteTimeUtc.Ticks)"
 })
-$changed = @(Compare-Object -ReferenceObject $before -DifferenceObject $after |
-             Where-Object { $_.SideIndicator -eq "=>" }).Count
+# Compare-Object refuses an empty reference set, which is exactly the
+# first-install case, so handle that without it.
+$changed = if ($before.Count -eq 0) {
+    $after.Count
+} else {
+    @(Compare-Object -ReferenceObject $before -DifferenceObject $after |
+      Where-Object { $_.SideIndicator -eq "=>" }).Count
+}
 
 $dashboard = Join-Path $folder "dashboard"
 if (Test-Path $dashboard) { Set-Location $dashboard }
