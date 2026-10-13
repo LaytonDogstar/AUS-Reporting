@@ -44,6 +44,24 @@ so the lender outcome sits alongside the metrics.
 
 Starts 2023-01-24. About 300 MB.
 
+> **Amended 2026-10-13.** The API serves most of this already.
+> `LeadQualityReport` returns `LeadMetrics` row by row — 19 of its 20
+> fields are `LeadMetrics` columns, including the shared `CenterlinkMonthly`
+> misspelling. Twelve of the twenty-two shortlisted columns come straight
+> over HTTPS with no collector.
+>
+> Ten do not: `TotalMonthlyIncome`, `DaysSinceLastSalary`,
+> `IsLatestIncomePresent`, `EstimatedActiveSACCLoans`,
+> `NumberofSaccProviders`, `IsInsolvencyExists`,
+> `DebtAsPercentageOfIncomeExcludingCashDeposits90Days`,
+> `NumberofDishonours30Days`,
+> `ConfirmedAndInferredGamblingAsPercentageOfIncome` and `AffiliateId`.
+>
+> `AffiliateId` decides how much this helps. It filters but is not
+> returned, so affordability by affiliate is one call per affiliate
+> rather than one call and a group-by. If that is acceptable, this table
+> leaves the collector's scope entirely. See `PUBLIC-API.md` section 7.
+
 ### Attribution — `LeadApplicationCustomValues`, 22,614,090 rows
 
 **Pivot on extract, do not copy.** The table is key/value, one row per
@@ -144,10 +162,20 @@ than about 20 concurrent users are needed.
 
 ## Blocked before any figure is published
 
-1. **What "accept" means.** Three numbers for what looks like one event:
-   `LeadApplicationAccepts` 1,270,433, `SellHistory` 592,557, and the
-   `Offer` stage 356,000. A conversion rate built on the wrong one is
-   wrong by up to 3.5x. This is a question for the dev team, not a query.
+1. **What "accept" means.** Narrowed on 2026-10-13, not yet closed. The
+   API reports 6,126 accepted in seven days, about 319,000 a year, which
+   **rules out the `Offer` stage** at roughly 68,000 a year — a rate
+   built on it would have understated performance fivefold. Between
+   `LeadApplicationAccepts` (~242,900/year) and `SellHistory`
+   (~372,700/year) the annualised figures cannot decide. Running
+   `discovery/adhoc/accept_candidates.sql` over the same seven days
+   settles it exactly.
+
+   **The conversion rate itself is now defined.** The API computes
+   `TotalAccepted / TotalSent` — 6,126 / 30,372 = 20.1699%, matching its
+   own reported figure exactly. The denominator is leads sent to a
+   lender, not leads received. Every funnel percentage must use that or
+   it will disagree with the numbers people already quote.
 2. **Why bank statement retrievals fell 55% from the 2023 peak.**
    1.46M in 2023 against roughly 663k annualised in 2026. Until it is
    known whether that is volume or a journey change, no trend line

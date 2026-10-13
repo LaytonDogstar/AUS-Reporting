@@ -138,3 +138,127 @@ lender count matches one of our three accept candidates.
 Run it from your own machine rather than pasting credentials anywhere.
 The response may contain real lead data, so treat the output as
 restricted — the fields and shape are what matters here, not the rows.
+
+---
+
+# What the reports actually return
+
+Measured 2026-10-13 from the Railway service, seven-day window
+(2026-10-06 to 2026-10-13). All six endpoints returned 200.
+
+**The API requires credentials.** An anonymous call to
+`/api/PublicReports/Affiliates` returned 401. The ambiguity in section 5
+is resolved: a controller named `PublicReport` is not open.
+
+## 7. `LeadQualityReport` is `LeadMetrics`, served row by row
+
+14,610 rows for seven days — about 762,000 a year. Not a summary.
+
+Nineteen of its twenty fields are `LeadMetrics` columns, two of them
+lightly renamed (`Dishonours` → `TotalDishonours`, `SaccDishonours` →
+`TotalSaccDishonours`). The twentieth, `HasPrimaryIncomeSource`, is
+derived.
+
+The proof is a misspelling. Both the API and `LeadMetrics` column 19
+carry **`CenterlinkMonthly`** — "Centerlink", not "Centrelink". A typo
+survives being copied; it does not arise twice.
+
+So the affordability material — age, employment, wages, Centrelink
+proportion, gambling as a percentage of income, dishonours, SACC loans,
+income spent on day of deposit, and the lender `Result` — is already
+available over HTTPS, with no firewall and no collector.
+
+**Ten of the twenty-two shortlisted columns are not served**:
+`TotalMonthlyIncome`, `DaysSinceLastSalary`, `IsLatestIncomePresent`,
+`EstimatedActiveSACCLoans`, `NumberofSaccProviders`,
+`IsInsolvencyExists`, `DebtAsPercentageOfIncomeExcludingCashDeposits90Days`,
+`NumberofDishonours30Days`,
+`ConfirmedAndInferredGamblingAsPercentageOfIncome`, and **`AffiliateId`**.
+
+`AffiliateId` is the awkward one. It is a filter parameter but not a
+returned field, so slicing quality by affiliate means one call per
+affiliate rather than one call and a group-by. There is also no
+geography: no state, no postcode.
+
+## 8. `LenderLeadCountReport` carries the commercial numbers
+
+176 lender tiers (of 191 that exist), each with `TotalIgnored`,
+`TotalProccessed` *(sic)*, `TotalSent`, `TotalAccepted`,
+`TotalBlacklist`, `TotalRedirect`, `ConversionRate`, `EarningPerLead`,
+`ExtraIncome`, `TotalRevenue`, `TotalCommission`, `TotalProfit` and
+`TotalBlacklistPrice` — plus a totals block.
+
+For the seven days measured:
+
+| | |
+|---|---|
+| Ignored | 181,385 |
+| Processed | 605,108 |
+| Sent | 30,372 |
+| **Accepted** | **6,126** |
+| Redirect | 5,780 |
+| Blacklist | 0 |
+| Revenue | 122,813.00 |
+| Commission | 54,229.85 |
+| **Profit** | **68,583.15** |
+| Conversion rate | 20.1699% |
+
+Revenue minus commission equals profit to the cent, so the margin is
+simply what is not paid away. That is a 55.8% margin, about 20.05 of
+revenue per accepted lead, and roughly 3.58M of profit annualised.
+
+**We did not know the commercial figures were available at all.** The
+earlier finding was that cost lived only in the database, in
+`BankStatementRetrievals.Cost` and `LenderApplicationResults.Cost`. The
+API goes further and gives revenue, commission and profit already
+attributed per lender tier.
+
+## 9. The conversion rate is defined, and it is not what we assumed
+
+`TotalAccepted / TotalSent` = 6,126 / 30,372 = **20.169893322797%**,
+against the API's reported `20.169893322797314`. An exact match.
+
+So the business measures conversion as **accepted over sent**, not
+accepted over applications. The denominator is leads submitted to a
+lender, not leads received. Every funnel percentage in the dashboard has
+to use that definition or it will disagree with the numbers people
+already quote.
+
+## 10. The accept question, narrowed
+
+6,126 accepted in seven days is about 319,000 a year. Against the three
+candidates, annualised over the periods each one covers:
+
+| Candidate | Rate | Against the API |
+|---|---|---|
+| `SellHistory` | ~372,700/year | 0.86x |
+| `LeadApplicationAccepts` | ~242,900/year | 1.31x |
+| `Offer` stage | ~68,100/year | **4.69x** |
+
+**The `Offer` stage is ruled out.** It is nowhere near, and a conversion
+rate built on it would have understated performance roughly fivefold.
+
+Between the other two the annualised comparison cannot decide — they
+cover different periods and volume has not been flat. Running
+`discovery/adhoc/accept_candidates.sql` over the same seven days settles
+it exactly. That is now the only outstanding step on this question.
+
+## 11. Cost of calling it
+
+| Endpoint | Time | Size |
+|---|---|---|
+| `Affiliates` | 2,310 ms | 137,900 B |
+| `LenderTiers` | 1,999 ms | 104,204 B |
+| `LenderLeadCountReport` | 15,074 ms | 56,345 B |
+| `LeadQualityReport` | 17,173 ms | 9,050,340 B |
+| `AffiliateLeadCountReport` | 14,216 ms | 42,620 B |
+| `InternalAffiliateLeadCountReport` | 16,365 ms | 1,730 B |
+
+Fifteen to seventeen seconds for the reports. **Nothing can call these
+while a user waits.** They run on a schedule and the result is stored,
+which is what the service already does.
+
+`InternalAffiliateLeadCountReport` returning 1,730 bytes against
+`AffiliateLeadCountReport`'s 42,620 is worth a question: either internal
+volume genuinely is that small for the week, or the filter is excluding
+almost everything.
