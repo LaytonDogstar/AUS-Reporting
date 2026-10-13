@@ -42,7 +42,9 @@ All in the web UI. Nothing to install.
    Required. The repository root has a `requirements.txt` listing
    `pyodbc`, which needs a system ODBC driver and will fail the build.
    Pointing at `service` means Railway only sees this folder.
-3. **Settings → Source → Branch:** `claude/code-review-tsyca6`
+3. **Branch:** nothing to set. `claude/code-review-tsyca6` is the
+   repository's default branch, so Railway selects it and redeploys on
+   every push to it.
 4. **Variables** — add three:
 
    | Name | Value |
