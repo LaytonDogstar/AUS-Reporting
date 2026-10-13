@@ -26,6 +26,11 @@ TIMEOUT = int(os.environ.get("API_TIMEOUT", "120"))
 BACKFILL_DAYS = int(os.environ.get("BACKFILL_DAYS", "30"))
 DAYS_PER_WAKE = int(os.environ.get("DAYS_PER_WAKE", "4"))
 WAKE_SECONDS = int(os.environ.get("WAKE_SECONDS", "1800"))
+# On an empty database - a first deploy, or a restart without a volume -
+# fill the history in one unattended pass rather than four days every
+# half hour. Nothing collected here is a system of record: the API can
+# regenerate all of it, so a lost database should cost time, not data.
+INITIAL_DAYS = int(os.environ.get("INITIAL_DAYS", "90"))
 
 # Above this many distinct values a "categorical" field is not a
 # category at all, and storing its values would be storing content.
@@ -313,8 +318,47 @@ def reset(conn):
             conn.execute(f"DELETE FROM {table}")
 
 
+def rebuild(db_path, days=None):
+    """Collect every missing day back to back until there are none left.
+
+    Used on an empty database. Roughly 32 seconds a day, so 90 days takes
+    about 50 minutes - unattended, and nobody has to press anything.
+    """
+    days = days or INITIAL_DAYS
+    conn = store.connect(db_path)
+    try:
+        total = len(missing_days(conn, days))
+        if not total:
+            return 0
+        print(f"empty history: rebuilding {total} day(s) from the API", flush=True)
+        done = 0
+        while True:
+            batch = missing_days(conn, days)
+            if not batch:
+                break
+            day = batch[0]
+            collect_day(conn, day)
+            done += 1
+            if done % 10 == 0 or done == total:
+                print(f"  rebuilt {done}/{total} ({day.isoformat()})", flush=True)
+            if done > days + 5:                     # cannot outrun the window
+                break
+        return done
+    finally:
+        conn.close()
+
+
 def scheduler(db_path):
-    """Fill in missing days, a few at a time, for as long as we run."""
+    """Rebuild once if there is nothing stored, then keep up with new days."""
+    try:
+        conn = store.connect(db_path)
+        empty = not store.collected_days(conn, "tiers")
+        conn.close()
+        if empty:
+            rebuild(db_path)
+    except Exception as exc:                        # noqa: BLE001
+        print(f"rebuild error: {type(exc).__name__}: {exc}", flush=True)
+
     while True:
         try:
             conn = store.connect(db_path)

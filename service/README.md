@@ -23,6 +23,18 @@ read what was already stored.
 At roughly 32 seconds a day, 90 days takes about 50 minutes in the
 background.
 
+**An empty database rebuilds itself.** On start, if nothing has been
+collected, the service fills its whole history in one unattended pass.
+Nothing stored here is a system of record — the API can regenerate all of
+it — so losing the database should cost time, not data. That makes the
+Railway volume a convenience rather than a requirement: without one a
+redeploy clears the file and the service spends its first fifty minutes
+rebuilding, with nobody pressing anything.
+
+Mount a volume at `/data` to skip that. The service checks for the
+directory and falls back to a local file when it is absent, so there is
+no setting to change either way.
+
 ## What it stores
 
 Not the responses. For each call it keeps the *shape* — every field
