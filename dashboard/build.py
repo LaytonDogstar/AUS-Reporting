@@ -80,7 +80,7 @@ def collect(settings: Settings, days: int) -> dict:
     return {
         "generatedUtc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
         "windowDays": days,
-        "aestShiftHours": queries.AEST_SHIFT_HOURS,
+        "reportingTimeZone": queries.REPORTING_TIME_ZONE,
         "stages": {str(k): v for k, v in queries.STAGES.items()},
         **results,
     }

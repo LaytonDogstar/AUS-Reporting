@@ -105,11 +105,15 @@ which turns lead quality from a conversion question into a margin one.
 Applications can be grouped per person using a key the system already
 has, so the salted-hash design proposed earlier is unnecessary.
 
-**Credfin, not Talefin, is the retrieval path.** `CredfinStatus` (5.2M)
-and `CredfinLeadStatus` (1.7M) exist; there is no Talefin table. With
-`CredfinLanded` on 47% of applications and `Affiliates.TalefinClientSecret`
-also present, the likeliest reading is Credfin retrieves and Talefin
-scores — but that is inference and needs confirming.
+**Credfin and Talefin are the same company.** `CredfinStatus` (5.2M)
+and `CredfinLeadStatus` (1.7M) exist; there is no Talefin table, and
+`CredfinLanded` is on 47% of applications. The dev team confirmed on
+2026-10-13 that Credfin renamed itself Talefin a few years ago, and that
+the Talefin score is a feature added about two years ago. So the two
+names are one vendor, and `Affiliates.TalefinClientSecret` beside
+`CredfinSecretKey` is the rename rather than a second supplier. A "bank
+statement success rate" is that one vendor's step, whichever name the
+column carries.
 
 ## 5. Personal data
 

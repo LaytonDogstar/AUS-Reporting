@@ -191,7 +191,7 @@ create schemas and tables), against **`AusReporting`**, in this order:
 warehouse/ddl/001_control.sql      -- watermark and run history
 warehouse/ddl/002_staging.sql      -- staging tables and their indexes
 warehouse/ddl/003_dim_stage.sql    -- the stage lookup
-warehouse/ddl/004_dim_date.sql     -- AEST calendar, 2021-2032
+warehouse/ddl/004_dim_date.sql     -- Sydney calendar, 2021-2032
 warehouse/ddl/005_model_views.sql  -- dim / fct / agg views
 ```
 

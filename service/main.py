@@ -272,6 +272,35 @@ def affiliates_page(days=30):
     return page("Affiliates", "".join(p))
 
 
+# What the dev team said these fields actually are, 13 Oct 2026. Each one
+# reads as something it is not, and the error is invisible in the numbers:
+# a share here is of the leads where the field was captured at all, which
+# for two of them is a subset of the funnel rather than all of it.
+METRIC_TITLES = {
+    "CenterlinkMonthly": "Wages and Centrelink, monthly",
+}
+
+METRIC_NOTES = {
+    "CenterlinkMonthly":
+        "<strong>Despite the name, this is not Centrelink income.</strong> It holds "
+        "wages plus Centrelink — the dev team confirmed the field is misnamed and "
+        "should read <code>WageAndCentrlinkMonthly</code>. Read the bands as total "
+        "monthly income, and do not set them against "
+        "<code>CentrelinkAsPercentOfIncome</code>.",
+    "HasPrimaryIncomeSource":
+        "<strong>Not a population rate.</strong> The field is only ever populated for "
+        "leads whose bank statements were downloaded, so <em>false</em> means not "
+        "determined rather than no income.",
+    "IsAustralianResident":
+        "<strong>Not a population rate.</strong> Only captured for iframe leads, so the "
+        "unknowns are leads that arrived another way, not questions left unanswered.",
+    "Age":
+        "Age as at application time, which is the figure to use — date of birth holds "
+        "values from 1753 to 2881 and cannot be calculated from. The "
+        "<code>&lt;18</code> band is test data, not real applicants.",
+}
+
+
 def quality_page(days=30):
     """Distributions, each band split by the lender's result.
 
@@ -315,7 +344,14 @@ def quality_page(days=30):
         grand_metric = sum(totals.values()) or 1
         base = {c: sum(v.get(c, 0) for v in bands.values()) for c in columns}
 
-        p.append(f'<h2>{html.escape(metric)}</h2><div class="card"><table><tr>'
+        title = METRIC_TITLES.get(metric, metric)
+        p.append(f'<h2>{html.escape(title)}</h2><div class="card">')
+        if title != metric:
+            p.append(f'<p class="note">Reported by the API as '
+                     f'<code>{html.escape(metric)}</code>.</p>')
+        if metric in METRIC_NOTES:
+            p.append(f'<p class="note">{METRIC_NOTES[metric]}</p>')
+        p.append('<table><tr>'
                  '<th>Band</th><th class="n">Leads</th><th class="n">Share</th>'
                  + "".join(f'<th class="n">{html.escape(c)}</th>' for c in columns)
                  + "</tr>")

@@ -1,5 +1,5 @@
 {
-  "aestShiftHours": 10,
+  "reportingTimeZone": "AUS Eastern Standard Time",
   "sources": {
     "stage_counts": "OverflowReporting",
     "applications": "Overflow",

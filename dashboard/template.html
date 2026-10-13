@@ -482,7 +482,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     ].map(([k, v, s]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s}</div></div>`).join("");
 
     const who = affiliate === "all" ? "all affiliates" : affName.get(affiliate);
-    $("trendSub").textContent = `Applications and sales per day, ${who}. Days are AEST.`;
+    $("trendSub").textContent = `Applications and sales per day, ${who}. Days are Sydney local time.`;
     $("funnelSub").textContent = `Applications reaching each stage, ${who}.`;
 
     // The per-affiliate rule, enforced rather than documented: stage
@@ -576,7 +576,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
   $("asof").textContent = "Data as at " + gen.toISOString().slice(0, 16).replace("T", " ") +
     " UTC · " + DATA.windowDays + " days loaded";
   $("foot").innerHTML =
-    "Reporting days are AEST (UTC+" + DATA.aestShiftHours + "). " +
+    "Reporting days are Sydney local time, including daylight saving. " +
     "The source runs about two minutes behind live, so these figures are near-current rather than live.<br>" +
     "“Sold” means sold to a lender. Funded outcomes are not reported back by lenders, so nothing here is a funded figure.";
 

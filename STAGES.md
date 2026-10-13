@@ -131,10 +131,14 @@ declines is plausible, so they are not necessarily exclusive.
 
 ## What still needs confirming
 
+- ~~**How does `LeadApplicationAccepts` (1.27M) relate to `Offer`
+  (356k)?**~~ **Answered 2026-10-13:** `LeadApplicationAccepts` is the
+  accept count, and that is the commercial event. `Offer` is a different
+  scenario, closer to a decline, which is why the two do not reconcile.
+  `SellHistory` (592k) is neither: it exists to compute daily caps and
+  daily email counts, and is purged when needed.
 - **Does `Offer` mean an offer was presented to the customer, or that a
-  lender bid?** It changes what "conversion" means.
-- **How does `LeadApplicationAccepts` (1.27M) relate to `Offer`
-  (356k)?** Accepts outnumber offers by 3.5×, so they are counting
-  different things. This matters: the commercial event drives commission
-  reporting.
+  lender bid?** Partly answered by the above — it is closer to a decline
+  than to a sale — but the exact event is still worth pinning before it
+  is used in a funnel.
 - **What is `Landed`, and why only 8 affiliates?**

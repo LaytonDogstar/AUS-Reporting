@@ -123,9 +123,14 @@ function Get-QuerySql {
     if (-not (Test-Path $path)) { throw "no such query: $path" }
     $sql = Get-Content $path -Raw
 
-    # Integers only - these are substituted into SQL, not bound. See the
-    # header comment in each .sql file for why they are tokens.
-    $sql = $sql.Replace("{{AEST_SHIFT_HOURS}}", [string][int]$meta.aestShiftHours)
+    # Substituted into SQL, not bound, so each is checked rather than
+    # trusted: an integer, and a time zone name matched against a strict
+    # pattern. See the header comment in each .sql file.
+    $tz = [string]$meta.reportingTimeZone
+    if ($tz -notmatch '^[A-Za-z][A-Za-z0-9 ./+_-]{0,63}$') {
+        throw "not a time zone name: $tz"
+    }
+    $sql = $sql.Replace("{{REPORTING_TIME_ZONE}}", $tz)
     $sql = $sql.Replace("{{WINDOW_DAYS}}", [string](-[Math]::Abs([int]$Window)))
 
     if ($sql -match '\{\{') { throw "$Name.sql still contains an unsubstituted token" }
@@ -204,7 +209,7 @@ foreach ($database in $byDatabase.Keys) {
 $data = [ordered]@{
     generatedUtc   = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
     windowDays     = $Days
-    aestShiftHours = [int]$meta.aestShiftHours
+    reportingTimeZone = [string]$meta.reportingTimeZone
     stages         = $meta.stages
     stage_counts   = $results['stage_counts']
     applications   = $results['applications']

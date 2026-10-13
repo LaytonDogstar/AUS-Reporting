@@ -9,15 +9,15 @@
     table and refresh it after each extract. Everything else is small.
 
     TIME. Staging holds UTC, because the source server runs UTC. The
-    reporting day is AEST, fixed UTC+10, so every fact exposes three
-    columns:
+    reporting day is SYDNEY LOCAL TIME, including AEDT, so every fact
+    exposes three columns:
         <Event>Utc      what the source recorded
-        <Event>Aest     the same instant shifted +10 hours
-        <Event>DateKey  the AEST day, joining to dim.Date
-    To switch to Sydney local time including AEDT, replace each
-    DATEADD(HOUR, 10, ...) with
-        TODATETIMEOFFSET(..., '+00:00') AT TIME ZONE 'AUS Eastern Standard Time'
-    See 004_dim_date.sql.
+        <Event>Local    the same instant in Sydney time
+        <Event>DateKey  the Sydney day, joining to dim.Date
+    Settled 2026-10-13: the dev team confirmed the PublicReports API
+    reports on Sydney time, and these numbers get compared with it. The
+    earlier fixed UTC+10 reading would have disagreed with it for the
+    five months a year that AEDT is in force. See 004_dim_date.sql.
 
     DE-DUPLICATION. Incremental staging tables can contain duplicate
     rows: a batch is committed before its watermark advances, so an
@@ -98,8 +98,12 @@ SELECT
     l.StateCode,
     l.City,
     l.DateCreated                               AS LeadCreatedUtc,
-    DATEADD(HOUR, 10, l.DateCreated)            AS LeadCreatedAest,
-    CAST(CONVERT(char(8), DATEADD(HOUR, 10, l.DateCreated), 112) AS int) AS LeadCreatedDateKey
+    CAST(l.DateCreated AT TIME ZONE 'UTC'
+         AT TIME ZONE 'AUS Eastern Standard Time' AS datetime2)
+        AS LeadCreatedLocal,
+    CAST(CONVERT(char(8), CAST(l.DateCreated AT TIME ZONE 'UTC'
+         AT TIME ZONE 'AUS Eastern Standard Time' AS datetime2), 112) AS int)
+        AS LeadCreatedDateKey
 FROM stg.Leads AS l;
 GO
 
@@ -117,8 +121,12 @@ SELECT
     a.AffiliateId,
     a.ReferenceId,
     a.DateCreated                               AS CreatedUtc,
-    DATEADD(HOUR, 10, a.DateCreated)            AS CreatedAest,
-    CAST(CONVERT(char(8), DATEADD(HOUR, 10, a.DateCreated), 112) AS int) AS CreatedDateKey,
+    CAST(a.DateCreated AT TIME ZONE 'UTC'
+         AT TIME ZONE 'AUS Eastern Standard Time' AS datetime2)
+        AS CreatedLocal,
+    CAST(CONVERT(char(8), CAST(a.DateCreated AT TIME ZONE 'UTC'
+         AT TIME ZONE 'AUS Eastern Standard Time' AS datetime2), 112) AS int)
+        AS CreatedDateKey,
     a.StateCode,
     a.PostCode,
     a.ResidentialStatus,
@@ -161,8 +169,12 @@ SELECT
     st.IsLabelConfirmed,
     st.IncludeInFunnel,
     d.DateCreated                               AS StageUtc,
-    DATEADD(HOUR, 10, d.DateCreated)            AS StageAest,
-    CAST(CONVERT(char(8), DATEADD(HOUR, 10, d.DateCreated), 112) AS int) AS StageDateKey
+    CAST(d.DateCreated AT TIME ZONE 'UTC'
+         AT TIME ZONE 'AUS Eastern Standard Time' AS datetime2)
+        AS StageLocal,
+    CAST(CONVERT(char(8), CAST(d.DateCreated AT TIME ZONE 'UTC'
+         AT TIME ZONE 'AUS Eastern Standard Time' AS datetime2), 112) AS int)
+        AS StageDateKey
 FROM deduped AS d
 LEFT JOIN dim.Stage AS st ON st.StageId = d.StageId
 WHERE d.rn = 1;
@@ -179,8 +191,12 @@ SELECT
     a.AffiliateId,
     a.LenderTierId,
     a.DateCreated                               AS AcceptedUtc,
-    DATEADD(HOUR, 10, a.DateCreated)            AS AcceptedAest,
-    CAST(CONVERT(char(8), DATEADD(HOUR, 10, a.DateCreated), 112) AS int) AS AcceptedDateKey
+    CAST(a.DateCreated AT TIME ZONE 'UTC'
+         AT TIME ZONE 'AUS Eastern Standard Time' AS datetime2)
+        AS AcceptedLocal,
+    CAST(CONVERT(char(8), CAST(a.DateCreated AT TIME ZONE 'UTC'
+         AT TIME ZONE 'AUS Eastern Standard Time' AS datetime2), 112) AS int)
+        AS AcceptedDateKey
 FROM stg.LeadApplicationAccepts AS a;
 GO
 
@@ -205,7 +221,9 @@ SELECT
     MIN(s.StageUtc)                             AS FirstStageUtc,
     MAX(s.StageUtc)                             AS LastStageUtc,
     DATEDIFF(SECOND, MIN(s.StageUtc), MAX(s.StageUtc)) AS JourneySeconds,
-    CAST(CONVERT(char(8), DATEADD(HOUR, 10, MIN(s.StageUtc)), 112) AS int) AS FirstStageDateKey,
+    CAST(CONVERT(char(8), CAST(MIN(s.StageUtc) AT TIME ZONE 'UTC'
+         AT TIME ZONE 'AUS Eastern Standard Time' AS datetime2), 112) AS int)
+        AS FirstStageDateKey,
     MAX(CASE WHEN s.StageId = 3  THEN 1 ELSE 0 END) AS AcceptedTC,
     MAX(CASE WHEN s.StageId = 7  THEN 1 ELSE 0 END) AS BankStatementExtracted,
     MAX(CASE WHEN s.StageId = 8  THEN 1 ELSE 0 END) AS BeganSell,
@@ -292,7 +310,7 @@ WITH accepts AS (
 )
 SELECT
     a.CreatedDateKey                            AS DateKey,
-    d.[Date]                                    AS AestDate,
+    d.[Date]                                    AS LocalDate,
     d.FinancialYearLabel,
     a.AffiliateId,
     af.AffiliateName,

@@ -13,6 +13,7 @@ block the replication subscriber it reads from.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 HERE = Path(__file__).parent
@@ -21,10 +22,19 @@ META_PATH = HERE / "stages.json"
 
 _meta = json.loads(META_PATH.read_text(encoding="utf-8"))
 
-# The source server runs UTC; the reporting day is AEST. Changing this
-# to follow Sydney local time including AEDT is a change here and
-# nowhere else - both builders substitute it into the SQL.
-AEST_SHIFT_HOURS: int = _meta["aestShiftHours"]
+# The source server runs UTC; the reporting day is Sydney local time,
+# including daylight saving. Settled 2026-10-13: the PublicReports API
+# reports on Sydney time, and these figures get compared with it. A
+# fixed +10 offset would disagree for the five months a year AEDT is in
+# force. Changing the zone is a change here and nowhere else - both
+# builders substitute it into the SQL.
+REPORTING_TIME_ZONE: str = _meta["reportingTimeZone"]
+
+# Substituted into SQL rather than bound, so it is checked rather than
+# trusted: a SQL Server zone name, nothing that could close the quote.
+_TIME_ZONE_OK = re.compile(r"^[A-Za-z][A-Za-z0-9 ./+_-]{0,63}$")
+if not _TIME_ZONE_OK.match(REPORTING_TIME_ZONE):
+    raise ValueError(f"not a time zone name: {REPORTING_TIME_ZONE!r}")
 
 # Which database each query runs against. Azure SQL Database cannot join
 # across the two, so they are fetched separately and related in the page.
@@ -48,14 +58,15 @@ def load_sql(name: str, window_days: int | None = None) -> str:
     token rather than a bound parameter because pyodbc uses ``?`` and
     SqlClient uses ``@name``, and these files are shared with the
     PowerShell builder - so neither placeholder style works for both.
-    An integer is the only thing that may ever be substituted here.
+    Only two things may ever be substituted: an integer, and the time
+    zone name, which is pattern-checked when this module loads.
     """
     path = SQL_DIR / f"{name}.sql"
     if not path.exists():
         raise FileNotFoundError(f"no such query: {path}")
 
     sql = path.read_text(encoding="utf-8").replace(
-        "{{AEST_SHIFT_HOURS}}", str(int(AEST_SHIFT_HOURS))
+        "{{REPORTING_TIME_ZONE}}", REPORTING_TIME_ZONE
     )
     if window_days is not None:
         # Strict: only a real int. bool is an int in Python, and a float
@@ -84,6 +95,7 @@ SOURCES: dict[str, tuple[str, str]] = {
 }
 
 
-def aest_day(column: str) -> str:
-    """The expression used to turn a UTC column into an AEST day."""
-    return f"CAST(DATEADD(HOUR, {AEST_SHIFT_HOURS}, {column}) AS date)"
+def local_day(column: str) -> str:
+    """The expression used to turn a UTC column into a reporting day."""
+    return (f"CAST({column} AT TIME ZONE 'UTC'"
+            f" AT TIME ZONE '{REPORTING_TIME_ZONE}' AS date)")

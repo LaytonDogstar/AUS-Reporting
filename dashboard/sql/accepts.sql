@@ -1,8 +1,10 @@
 /*
     accepts - read by both builders (Python and PowerShell).
 
-    {{AEST_SHIFT_HOURS}} is substituted before execution. The
-    source server runs UTC; the reporting day is AEST.
+    {{REPORTING_TIME_ZONE}} is substituted before execution. The
+    source server runs UTC; the reporting day is Sydney local time,
+    including daylight saving, which is how the PublicReports API
+    reports (confirmed by the dev team 2026-10-13).
 
     {{WINDOW_DAYS}} is a NEGATIVE integer, substituted by the builder.
     It is a token rather than a bound parameter because pyodbc and
@@ -17,10 +19,12 @@
 -- roughly 1% of applications have more than one accept and counting
 -- events would overstate conversion.
 SELECT
-    CAST(DATEADD(HOUR, {{AEST_SHIFT_HOURS}}, DateCreated) AS date)          AS Day,
+    CAST(DateCreated AT TIME ZONE 'UTC'
+         AT TIME ZONE '{{REPORTING_TIME_ZONE}}' AS date)          AS Day,
     AffiliateId,
     COUNT(DISTINCT LeadApplicationId)  AS ApplicationsSold,
     COUNT(*)                           AS AcceptEvents
 FROM dbo.LeadApplicationAccepts WITH (NOLOCK)
 WHERE DateCreated >= DATEADD(DAY, {{WINDOW_DAYS}}, SYSUTCDATETIME())
-GROUP BY CAST(DATEADD(HOUR, {{AEST_SHIFT_HOURS}}, DateCreated) AS date), AffiliateId;
+GROUP BY CAST(DateCreated AT TIME ZONE 'UTC'
+                  AT TIME ZONE '{{REPORTING_TIME_ZONE}}' AS date), AffiliateId;

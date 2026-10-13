@@ -71,7 +71,7 @@ def synthetic(days: int = 90, seed: int = 7) -> dict:
     return {
         "generatedUtc": dt.datetime(2026, 9, 22, 6, 15, tzinfo=dt.timezone.utc).isoformat(timespec="seconds"),
         "windowDays": days,
-        "aestShiftHours": queries.AEST_SHIFT_HOURS,
+        "reportingTimeZone": queries.REPORTING_TIME_ZONE,
         "stages": {str(k): v for k, v in queries.STAGES.items()},
         "affiliates": [
             {"Id": i, "Name": n, "DisplayName": n, "IsActive": True,
@@ -161,11 +161,21 @@ class TestQueries(unittest.TestCase):
         executable = re.sub(r"--[^\n]*", " ", bad).lower()
         self.assertIn("password", executable)
 
-    def test_dates_are_shifted_to_aest(self):
-        # Every day-grain query must use the AEST shift, or days are UTC.
+    def test_dates_are_converted_to_the_reporting_zone(self):
+        # Every day-grain query must convert, or days are UTC. A fixed
+        # offset is not enough: the zone carries daylight saving, which
+        # is what the API the figures get compared with uses.
         for name in queries.WINDOWED:
             _, sql = queries.SOURCES[name]
-            self.assertIn(f"DATEADD(HOUR, {queries.AEST_SHIFT_HOURS}", sql, name)
+            self.assertIn("AT TIME ZONE 'UTC'", sql, name)
+            self.assertIn(f"AT TIME ZONE '{queries.REPORTING_TIME_ZONE}'", sql, name)
+            self.assertNotIn("DATEADD(HOUR", sql, name)
+
+    def test_the_reporting_zone_cannot_carry_sql(self):
+        # It is substituted, not bound, so the pattern is the guard.
+        for bad in ("'; DROP TABLE dbo.Leads --", "AUS' OR '1'='1", ""):
+            self.assertIsNone(queries._TIME_ZONE_OK.match(bad), bad)
+        self.assertIsNotNone(queries._TIME_ZONE_OK.match("AUS Eastern Standard Time"))
 
     def test_funnel_stages_are_ordered_and_complete(self):
         funnel = {k: v for k, v in queries.STAGES.items() if v["order"] is not None}
@@ -248,7 +258,7 @@ class TestBuilderParity(unittest.TestCase):
         self.assertTrue(self.PS.exists())
 
     def test_both_substitute_the_same_tokens(self):
-        for token in ("{{AEST_SHIFT_HOURS}}", "{{WINDOW_DAYS}}"):
+        for token in ("{{REPORTING_TIME_ZONE}}", "{{WINDOW_DAYS}}"):
             self.assertIn(token, self.ps, token)
 
     def test_both_use_the_same_placeholder(self):
@@ -269,7 +279,7 @@ class TestBuilderParity(unittest.TestCase):
             self.assertNotIn(word, self.ps, f"inline SQL: {word!r}")
 
     def test_powershell_emits_every_key_the_page_reads(self):
-        for key in ("generatedUtc", "windowDays", "aestShiftHours", "stages",
+        for key in ("generatedUtc", "windowDays", "reportingTimeZone", "stages",
                     "stage_counts", "applications", "accepts", "affiliates"):
             self.assertIn(key, self.ps, key)
 

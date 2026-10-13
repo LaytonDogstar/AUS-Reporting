@@ -1,24 +1,24 @@
 /*
     004 - dim.Date
     ------------------------------------------------------------------
-    An AEST calendar.
+    A Sydney calendar.
 
-    THE REPORTING DAY IS AEST, FIXED UTC+10, as decided 2026-09-21.
+    THE REPORTING DAY IS SYDNEY LOCAL TIME, including AEDT. Decided
+    2026-09-21 as "AEST" and settled 2026-10-13, when the dev team
+    confirmed the PublicReports API reports on Sydney time. These
+    numbers get compared with that API, so they follow the same clock.
 
     The source server runs UTC (verified: local and UTC times are
     identical, offset zero), so every timestamp in staging is UTC and
-    the model shifts it by +10 hours to get the reporting day.
+    005_model_views.sql converts it:
 
-    Fixed UTC+10 is AEST read literally, which is what Queensland
-    observes year round. Sydney and Melbourne shift to AEDT (UTC+11) for
-    daylight saving. If the business day should follow Sydney instead,
-    change the AEST_OFFSET_HOURS shift in 005_model_views.sql to:
+        <col> AT TIME ZONE 'UTC' AT TIME ZONE 'AUS Eastern Standard Time'
 
-        TODATETIMEOFFSET(<col>, '+00:00') AT TIME ZONE 'AUS Eastern Standard Time'
-
-    That restates history for roughly five months of every year, so it
-    should be settled before these numbers are compared with another
-    system.
+    which carries daylight saving. The literal reading of AEST - fixed
+    UTC+10, what Queensland observes - was the earlier implementation
+    and would disagree with the API for the five months a year that AEDT
+    is in force. Nothing is loaded yet, so no history is restated by
+    the change.
 
     Financial year is the Australian one, starting 1 July. Note that the
     data floor of 2021-07-01 is exactly the start of FY2022.

@@ -144,7 +144,7 @@ The page says "Sold", never "Funded", for that reason.
 |---|---|
 | The SQL | `sql/*.sql` |
 | Stage labels or funnel order | `stages.json` |
-| The reporting timezone | `aestShiftHours` in `stages.json` |
+| The reporting timezone | `reportingTimeZone` in `stages.json` |
 | Layout, charts, colours | `template.html` |
 
 Each of those is read by both builders, so a change lands in both.
@@ -162,6 +162,7 @@ python -m unittest discover -s tests
 
 No database needed. They check that every query is read-only, that no
 banking, credential or personal column is selected, that day grains are
-shifted to AEST, that never-emitted and error stages stay out of the
-funnel, and that the page embeds its data safely. One test writes
+converted to Sydney local time, that the zone name cannot carry SQL,
+that never-emitted and error stages stay out of the funnel, and that the
+page embeds its data safely. One test writes
 `demo.html` from synthetic data.

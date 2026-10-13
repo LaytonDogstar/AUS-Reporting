@@ -99,7 +99,7 @@ INSERT INTO @results (Check_, Result, Detail)
 SELECT
     'Application dates resolve in dim.Date',
     CASE WHEN @orphanDate = 0 THEN 'PASS' ELSE 'FAIL' END,
-    CONCAT(@orphanDate, ' application(s) whose AEST date is outside dim.Date');
+    CONCAT(@orphanDate, ' application(s) whose Sydney date is outside dim.Date');
 
 /* --- 6. Request/response pairs -------------------------------------
    Responses can never exceed requests. The shortfall is the failure

@@ -381,6 +381,14 @@ An earlier estimate of roughly 3.1M annualised profit came from the
 lender report. On the affiliate report the same period annualises to
 about 750k. Until this is settled, neither number should be quoted.
 
+**Half answered 2026-10-13.** The affiliate lead count is two reports,
+not one: the normal report and the internal one, which can no longer be
+combined into a single figure, and `ExcludeInternalSources` is to be
+ignored because FF affiliates carry a special computation behind it. The
+collector now calls both and stores them apart. What is still open is
+whether the lender report spans both populations — if it does, it cannot
+be set against either affiliate figure on its own.
+
 ## 15. `TotalFinalProfit` looks wrong
 
 `TotalCommission - TotalBSCost = TotalFinalCommission` holds exactly:
@@ -394,6 +402,11 @@ So the bank statement cost is deducted from commission but never reaches
 profit. Final profit understates by the whole `TotalBSCost` — 521.12 over
 eight days here, 3.2% of profit. Worth raising: it is a small number now
 but it is systematic, and it is the figure most likely to be quoted.
+
+**Answered 2026-10-13.** Old behaviour rather than a bug: the bank statement cost
+does not affect profit for a non-FF affiliate. The two profit columns
+therefore agree by design for those affiliates, and the figure stands as
+reported.
 
 ---
 
@@ -425,8 +438,14 @@ certainly total monthly income under a Centrelink label — note it is also
 the one spelled "Centerlink", while the percentage field is spelled
 correctly, which suggests different origins.
 
-**Do not use it.** `CentrelinkAsPercentOfIncome` and `EmploymentStatus`
-agree with each other well enough to be usable; this does not.
+**Do not use it as Centrelink income.**
+`CentrelinkAsPercentOfIncome` and `EmploymentStatus` agree with each
+other well enough to be usable; this does not.
+
+**Answered 2026-10-13.** The name is wrong. The field holds wages plus Centrelink and should
+read `WageAndCentrlinkMonthly`, so it is usable as total monthly income
+and must never be set against `CentrelinkAsPercentOfIncome`. The quality
+page now carries that correction above the bands.
 
 ## 17. Two more fields that cannot carry weight
 
@@ -444,6 +463,13 @@ the same date-of-birth corruption seen in the database, where values run
 from 1753 to the year 2881. But lending to a minor is a regulatory
 problem rather than a data one, so it is worth confirming they are not
 real.
+
+**Answered 2026-10-13.** Neither field is broken, and neither is a
+population rate. `IsAustralianResident` is only captured for iframe
+leads; `HasPrimaryIncomeSource` is only populated for leads whose bank
+statements are downloaded, so false means not determined. The twelve
+under-18s are test data. The quality page states all three above the
+bands rather than leaving the share to be read as the whole funnel.
 
 ## 18. The risk signal looks sound
 

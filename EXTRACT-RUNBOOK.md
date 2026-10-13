@@ -60,7 +60,7 @@ In SSMS, against the **warehouse**, in this order:
 warehouse/ddl/001_control.sql      -- watermark and run-history tables
 warehouse/ddl/002_staging.sql      -- staging tables and their indexes
 warehouse/ddl/003_dim_stage.sql    -- the stage lookup (hand-maintained)
-warehouse/ddl/004_dim_date.sql     -- AEST calendar, 2021-2032
+warehouse/ddl/004_dim_date.sql     -- Sydney calendar, 2021-2032
 warehouse/ddl/005_model_views.sql  -- dim / fct / agg views
 ```
 
@@ -168,7 +168,7 @@ check `MAX(_LoadedUtc)` on the table itself.
 | `dim.Lender` | lender | `DateCreated` exposed as `MigrationStampUtc` — it is a 2025-03-04 bulk stamp, not a real date |
 | `dim.Lead` | lead | No personal data at all |
 | `dim.Stage` | stage | Hand-maintained; nothing upstream to extract |
-| `dim.Date` | AEST day | Includes Australian financial year |
+| `dim.Date` | Sydney day | Includes Australian financial year |
 | `fct.LeadApplication` | application | The spine |
 | `fct.ApplicationStage` | stage event | De-duplicated on source `Id` |
 | `fct.Accept` | accept | The sale — the end of the funnel |
@@ -176,9 +176,10 @@ check `MAX(_LoadedUtc)` on the table itself.
 | `agg.StageFunnelByAffiliateDay` | affiliate / day / stage | Reach relative to stage 1 **for the same affiliate** |
 | `agg.DailyPerformance` | affiliate / day | Applications, sales, sold rate |
 
-Every fact exposes `<Event>Utc`, `<Event>Aest` and `<Event>DateKey`.
-Staging holds UTC; the model shifts by +10 hours for the AEST reporting
-day.
+Every fact exposes `<Event>Utc`, `<Event>Local` and `<Event>DateKey`.
+Staging holds UTC; the model converts it with
+`AT TIME ZONE 'UTC' AT TIME ZONE 'AUS Eastern Standard Time'` for the
+Sydney reporting day, daylight saving included.
 
 Two things to know before building a report on this:
 

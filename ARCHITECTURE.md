@@ -217,21 +217,23 @@ and carries the least risk.
 
 - The warehouse stores UTC throughout. Conversion happens once, in the
   semantic layer.
-- **The reporting day is AEST**, as decided 2026-09-21. `dim_date` is
-  built against AEST and every daily figure means an AEST day.
+- **The reporting day is Sydney local time**, including AEDT. Decided
+  2026-09-21 as "AEST" and settled 2026-10-13, when the dev team
+  confirmed the PublicReports API reports on Sydney time. `dim_date` is
+  built against that and every daily figure means a Sydney day.
 
-> **One thing to confirm: AEST fixed, or Sydney local time?**
-> Taken literally, AEST is UTC+10 all year, which is what Queensland
-> observes. Sydney and Melbourne shift to AEDT (UTC+11) for daylight
-> saving, and many businesses say "AEST" when they mean "our local
-> time".
+> **Why not fixed UTC+10?** Taken literally, AEST is UTC+10 all year,
+> which is what Queensland observes. Sydney and Melbourne shift to AEDT
+> (UTC+11) for daylight saving, and many businesses say "AEST" when they
+> mean "our local time".
 >
 > It matters for about five months a year: with fixed UTC+10 a lead at
-> 00:30 Sydney summer time lands on the previous reporting day. The
-> model currently implements **fixed UTC+10**, matching the literal
-> reading. Switching to `Australia/Sydney` is a one-line change in
-> `dim_date` but restates history, so it is worth settling before
-> anyone compares numbers to another system.
+> 00:30 Sydney summer time lands on the previous reporting day. These
+> figures get compared with the PublicReports API, which uses Sydney
+> time, so the model follows it:
+> `AT TIME ZONE 'UTC' AT TIME ZONE 'AUS Eastern Standard Time'` in
+> `005_model_views.sql`, and the same zone in the dashboard queries.
+> Nothing is loaded yet, so no history was restated.
 
 ---
 
@@ -285,14 +287,16 @@ Either way:
    nowhere. Lenders do not provide it. The funnel ends at the sale; see
    above.
 2. ~~What is the business timezone for a reporting day?~~ **Answered:**
-   AEST. Confirm whether that means fixed UTC+10 or Sydney local time
-   including AEDT — see section "Time".
+   Sydney local time, including AEDT — settled 2026-10-13 against the
+   PublicReports API. See section "Time".
 3. **Which metrics matter, and who owns their definitions?** The model
    above is a shape, not a specification. Conversion rate, cost per
    sale, affiliate quality — each needs an owner and a written
    definition before it goes on a dashboard.
-4. **Is `LeadMetrics.Age` trustworthy** where `LeadApplications.DateOfBirth`
-   is not?
+4. ~~**Is `LeadMetrics.Age` trustworthy** where
+   `LeadApplications.DateOfBirth` is not?~~ **Answered 2026-10-13:** yes
+   — it is age at application time, which is the figure to report on.
+   `DateOfBirth` is not used.
 5. **What does `SortCode` hold?** A UK term in an Australian system.
 
 Question 3 decides what gets built next. The rest can be answered as the model grows.
@@ -308,7 +312,8 @@ conversation concrete.
 
 ## Suggested sequence
 
-1. Answer open questions 1 and 2.
+1. ~~Answer open questions 1 and 2.~~ Both answered; question 3, the
+   metric definitions, is the one that still decides what gets built.
 2. Stand up the warehouse database and the extract for the spine only —
    `LeadApplications`, `Leads`, `Affiliates`, `Lenders`. Small, fast,
    proves the pattern end to end.
