@@ -314,3 +314,83 @@ needs deciding rather than assuming — the same ambiguity applies to the
 affiliate reports and anything added later. And a figure that can be
 derived two ways should be, at least once, because this was invisible
 until two routes to the same number disagreed.
+
+---
+
+# `AffiliateLeadCountReport`
+
+Measured 2026-10-13, window 2026-10-06 to 2026-10-13 (eight days, given
+section 12). 110 affiliates returned.
+
+## 13. It carries the funnel
+
+Per affiliate: `TotalReceived`, `TotalAcceptedTC`, `TotalBsRefreshed`,
+`TotalDuplicate`, `TotalBsExtracted`, `TotalSubmitted`, `TotalSold`,
+`TotalDecline`, `TotalRedirect`, `TotalFunded`, then `TotalRevenue`,
+`TotalCommission`, `TotalBSCost`, `TotalFinalCommission`, `TotalProfit`,
+`TotalFinalProfit`, `VolumeComparisonPercentage`.
+
+Those step names map onto the journey stages recovered from the database:
+received, accepted T&Cs, bank statement extracted, submitted, sold or
+declined.
+
+**So the funnel does not need a database collector after all.** It is
+counts per affiliate rather than per-application stage events, so
+time-between-stages and individual stage paths still are not available —
+but funnel conversion by affiliate, which is what a funnel page shows, is
+served directly.
+
+`TotalSold + TotalDecline = TotalSubmitted` exactly (2,797 + 5,590 =
+8,387), which is a good sign the steps are internally consistent.
+
+**Read it per affiliate, not in aggregate.** `TotalAcceptedTC` is 2,601
+against `TotalSubmitted` of 8,387 — submitted is four times a step that
+supposedly precedes it. That is the same finding as the database: only
+some affiliates emit an accepted-T&Cs step, so an aggregate funnel mixes
+journeys and its step-to-step percentages are not a real sequence.
+
+`TotalFunded` is **0**, confirming from a second source that lenders
+report no funding back.
+
+## 14. The two reports disagree on revenue
+
+Same window, same business:
+
+| | Affiliate report | Lender report | Ratio |
+|---|---|---|---|
+| Revenue | 71,237.00 | 122,813.00 | 1.72 |
+| Commission | 54,795.15 | 54,229.85 | 0.99 |
+| **Profit** | **16,441.85** | **68,583.15** | **4.17** |
+
+Commission agrees to within 1%. Revenue does not, and profit is more than
+fourfold apart.
+
+The grain difference explains the volumes — lender `TotalSent` of 30,372
+against affiliate `TotalSubmitted` of 8,387 is 3.62 lender tiers per
+application, and 6,126 accepts against 2,797 sold is 2.19 accepts per sold
+application. So the lender report counts per application-and-tier while
+the affiliate report counts per application. That plausibly inflates
+lender-side revenue, but 1.72 does not match 2.19 either, so it is not a
+clean explanation.
+
+**Which revenue figure is real is a question for the dev team, and it
+blocks any published margin.** The fact that commission agrees while
+revenue does not points at the revenue side, but that is inference.
+
+An earlier estimate of roughly 3.1M annualised profit came from the
+lender report. On the affiliate report the same period annualises to
+about 750k. Until this is settled, neither number should be quoted.
+
+## 15. `TotalFinalProfit` looks wrong
+
+`TotalCommission - TotalBSCost = TotalFinalCommission` holds exactly:
+54,795.15 - 521.12 = 54,274.03.
+
+But `TotalFinalProfit` equals `TotalProfit`, both 16,441.85, which is
+`Revenue - Commission`. If `FinalCommission` is what is actually paid
+away, final profit should be `Revenue - FinalCommission` = 16,962.97.
+
+So the bank statement cost is deducted from commission but never reaches
+profit. Final profit understates by the whole `TotalBSCost` — 521.12 over
+eight days here, 3.2% of profit. Worth raising: it is a small number now
+but it is systematic, and it is the figure most likely to be quoted.

@@ -213,53 +213,114 @@ def reduce_tiers(payload):
     return rows, totals
 
 
+def reduce_affiliates(payload):
+    """One row per affiliate, plus the report's own totals.
+
+    AffiliateName is a trading name and the only identifier returned -
+    the API gives no AffiliateId - so the name is the key.
+    """
+    def row(src, name=None):
+        return {
+            "name": name,
+            "received": _num(src, "TotalReceived"),
+            "accepted_tc": _num(src, "TotalAcceptedTC"),
+            "bs_refreshed": _num(src, "TotalBsRefreshed"),
+            "duplicate": _num(src, "TotalDuplicate"),
+            "bs_extracted": _num(src, "TotalBsExtracted"),
+            "submitted": _num(src, "TotalSubmitted"),
+            "sold": _num(src, "TotalSold"),
+            "decline": _num(src, "TotalDecline"),
+            "redirect": _num(src, "TotalRedirect"),
+            "funded": _num(src, "TotalFunded"),
+            "revenue": _num(src, "TotalRevenue"),
+            "commission": _num(src, "TotalCommission"),
+            "bs_cost": _num(src, "TotalBSCost", "TotalBsCost"),
+            "final_commission": _num(src, "TotalFinalCommission"),
+            "profit": _num(src, "TotalProfit"),
+            "final_profit": _num(src, "TotalFinalProfit"),
+            "volume_comparison_pct": _num(src, "VolumeComparisonPercentage"),
+        }
+    items = payload.get("Items") or []
+    rows = [row(it, it.get("AffiliateName")) for it in items]
+    return rows, row(payload)
+
+
 # ---------------------------------------------------------------- collect
 
-def collect_day(conn, day: date):
-    """One day of both reports. Returns (kind -> status)."""
-    stamp, out = now(), {}
+KINDS = ("tiers", "quality", "affiliates")
+
+
+def _store_tiers(conn, iso, payload, ms, stamp):
+    rows, totals = reduce_tiers(json.loads(payload.decode("utf-8", "replace")))
+    store.save_tiers(conn, iso, rows, totals, stamp)
+    return f"{len(rows)} tier(s)"
+
+
+def _store_quality(conn, iso, payload, ms, stamp):
+    items = (json.loads(payload.decode("utf-8", "replace")) or {}).get("Items") or []
+    counts = reduce_quality(items)
+    n = len(items)
+    del items                                   # rows do not outlive this call
+    store.save_quality(conn, iso, counts, n, stamp)
+    return f"{n} row(s) -> {len(counts)} count(s)"
+
+
+def _store_affiliates(conn, iso, payload, ms, stamp):
+    rows, totals = reduce_affiliates(json.loads(payload.decode("utf-8", "replace")))
+    store.save_affiliates(conn, iso, rows, totals, stamp)
+    return f"{len(rows)} affiliate(s)"
+
+
+def _requests(day: date):
+    """(kind, method, url, body, handler) for one day."""
     qs = window(day)
+    prev = day - timedelta(days=1)
+    body = {"StartDate": f"{day.isoformat()}T00:00:00",
+            "EndDate": f"{day.isoformat()}T00:00:00",
+            "CompareStartDate": f"{prev.isoformat()}T00:00:00",
+            "CompareEndDate": f"{prev.isoformat()}T00:00:00",
+            "IsAllActiveOnly": False, "ExcludeInternalSources": False}
+    return [
+        ("tiers", "GET", f"{API_BASE}/api/PublicReports/LenderLeadCountReport?{qs}",
+         None, _store_tiers),
+        ("quality", "GET", f"{API_BASE}/api/PublicReports/LeadQualityReport?{qs}",
+         None, _store_quality),
+        ("affiliates", "POST", f"{API_BASE}/api/PublicReports/AffiliateLeadCountReport",
+         body, _store_affiliates),
+    ]
+
+
+def collect_day(conn, day: date, kinds=KINDS):
+    """One day. Skips any kind already recorded ok for that day, so adding
+    a new report backfills only itself rather than refetching everything."""
+    stamp, out = now(), {}
     iso = day.isoformat()
+    already = {k for (k,) in conn.execute(
+        "SELECT kind FROM collection WHERE business_date=? AND status='ok'", (iso,))}
 
-    status, payload, ms, error = fetch(
-        f"{API_BASE}/api/PublicReports/LenderLeadCountReport?{qs}")
-    if error or status != 200:
-        store.mark(conn, iso, "tiers", "failed", error or f"HTTP {status}", ms, stamp)
-        out["tiers"] = error or f"HTTP {status}"
-    else:
+    for kind, method, url, body, handler in _requests(day):
+        if kind not in kinds or kind in already:
+            continue
+        status, payload, ms, error = fetch(url, method, body)
+        if error or status != 200:
+            detail = error or f"HTTP {status}"
+            store.mark(conn, iso, kind, "failed", detail, ms, stamp)
+            out[kind] = detail
+            continue
         try:
-            rows, totals = reduce_tiers(json.loads(payload.decode("utf-8", "replace")))
-            store.save_tiers(conn, iso, rows, totals, stamp)
-            store.mark(conn, iso, "tiers", "ok", f"{len(rows)} tier(s)", ms, stamp)
-            out["tiers"] = "ok"
-        except Exception as exc:                    # noqa: BLE001
-            store.mark(conn, iso, "tiers", "failed", f"{type(exc).__name__}: {exc}", ms, stamp)
-            out["tiers"] = str(exc)
-
-    status, payload, ms, error = fetch(
-        f"{API_BASE}/api/PublicReports/LeadQualityReport?{qs}")
-    if error or status != 200:
-        store.mark(conn, iso, "quality", "failed", error or f"HTTP {status}", ms, stamp)
-        out["quality"] = error or f"HTTP {status}"
-    else:
-        try:
-            items = (json.loads(payload.decode("utf-8", "replace")) or {}).get("Items") or []
-            counts = reduce_quality(items)
-            n = len(items)
-            del items, payload                      # rows do not outlive this call
-            store.save_quality(conn, iso, counts, n, stamp)
-            store.mark(conn, iso, "quality", "ok", f"{n} row(s) -> {len(counts)} count(s)", ms, stamp)
-            out["quality"] = "ok"
-        except Exception as exc:                    # noqa: BLE001
-            store.mark(conn, iso, "quality", "failed", f"{type(exc).__name__}: {exc}", ms, stamp)
-            out["quality"] = str(exc)
+            detail = handler(conn, iso, payload, ms, stamp)
+            store.mark(conn, iso, kind, "ok", detail, ms, stamp)
+            out[kind] = "ok"
+        except Exception as exc:                # noqa: BLE001
+            store.mark(conn, iso, kind, "failed", f"{type(exc).__name__}: {exc}", ms, stamp)
+            out[kind] = str(exc)
     return out
 
 
 def missing_days(conn, days=BACKFILL_DAYS):
     """Days up to yesterday that are not fully collected. Today is never
     collected: it is still happening."""
-    done = store.collected_days(conn, "tiers") & store.collected_days(conn, "quality")
+    done = set.intersection(*(store.collected_days(conn, k) for k in KINDS))
     yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
     wanted = [yesterday - timedelta(days=i) for i in range(days)]
     return [d for d in wanted if d.isoformat() not in done]

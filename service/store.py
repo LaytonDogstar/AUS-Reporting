@@ -86,6 +86,31 @@ CREATE TABLE IF NOT EXISTS quality_day_meta (
     collected_at TEXT NOT NULL
 );
 
+-- One row per affiliate per day. AffiliateName is a trading name, not a
+-- person. The API returns no AffiliateId, so the name is the key.
+CREATE TABLE IF NOT EXISTS affiliate_day (
+    business_date TEXT NOT NULL,
+    affiliate_name TEXT NOT NULL,
+    received INTEGER, accepted_tc INTEGER, bs_refreshed INTEGER, duplicate INTEGER,
+    bs_extracted INTEGER, submitted INTEGER, sold INTEGER, decline INTEGER,
+    redirect INTEGER, funded INTEGER,
+    revenue REAL, commission REAL, bs_cost REAL, final_commission REAL,
+    profit REAL, final_profit REAL, volume_comparison_pct REAL,
+    collected_at TEXT NOT NULL,
+    PRIMARY KEY (business_date, affiliate_name)
+);
+CREATE INDEX IF NOT EXISTS ad_date ON affiliate_day(business_date);
+
+CREATE TABLE IF NOT EXISTS affiliate_totals_day (
+    business_date TEXT PRIMARY KEY,
+    received INTEGER, accepted_tc INTEGER, bs_refreshed INTEGER, duplicate INTEGER,
+    bs_extracted INTEGER, submitted INTEGER, sold INTEGER, decline INTEGER,
+    redirect INTEGER, funded INTEGER,
+    revenue REAL, commission REAL, bs_cost REAL, final_commission REAL,
+    profit REAL, final_profit REAL,
+    collected_at TEXT NOT NULL
+);
+
 -- Why a day is missing, so a gap is explained rather than silent.
 CREATE TABLE IF NOT EXISTS collection (
     business_date TEXT NOT NULL,
@@ -144,6 +169,39 @@ def save_quality(conn, business_date, counts, row_count, collected_at):
             [(business_date, m, b, o, r, n) for (m, b, o, r), n in sorted(counts.items())])
         conn.execute("INSERT OR REPLACE INTO quality_day_meta (business_date, rows, collected_at)"
                      " VALUES (?,?,?)", (business_date, row_count, collected_at))
+
+
+def save_affiliates(conn, business_date, rows, totals, collected_at):
+    with conn:
+        conn.execute("DELETE FROM affiliate_day WHERE business_date=?", (business_date,))
+        conn.executemany(
+            "INSERT INTO affiliate_day (business_date, affiliate_name, received, accepted_tc, bs_refreshed, duplicate, bs_extracted, submitted, sold, decline, redirect, funded, revenue, commission, bs_cost, final_commission, profit, final_profit,"
+            " volume_comparison_pct, collected_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            [(business_date, r["name"], r["received"], r["accepted_tc"], r["bs_refreshed"], r["duplicate"], r["bs_extracted"], r["submitted"], r["sold"], r["decline"], r["redirect"], r["funded"], r["revenue"], r["commission"], r["bs_cost"], r["final_commission"], r["profit"], r["final_profit"],
+              r["volume_comparison_pct"], collected_at) for r in rows])
+        if totals:
+            conn.execute(
+                "INSERT OR REPLACE INTO affiliate_totals_day (business_date, received, accepted_tc, bs_refreshed, duplicate, bs_extracted, submitted, sold, decline, redirect, funded, revenue, commission, bs_cost, final_commission, profit, final_profit,"
+                " collected_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (business_date, totals["received"], totals["accepted_tc"], totals["bs_refreshed"], totals["duplicate"], totals["bs_extracted"], totals["submitted"], totals["sold"], totals["decline"], totals["redirect"], totals["funded"], totals["revenue"], totals["commission"], totals["bs_cost"], totals["final_commission"], totals["profit"], totals["final_profit"], collected_at))
+
+
+def affiliate_league(conn, days=30):
+    return conn.execute(
+        "SELECT affiliate_name, SUM(received) r, SUM(accepted_tc) tc, SUM(bs_extracted) bs,"
+        " SUM(submitted) sub, SUM(sold) sold, SUM(decline) dec, SUM(revenue) rev,"
+        " SUM(commission) com, SUM(bs_cost) bsc, SUM(profit) p FROM affiliate_day"
+        " WHERE business_date >= date('now', ?) GROUP BY affiliate_name"
+        " HAVING r > 0 ORDER BY p DESC LIMIT 60", (f"-{days} days",)).fetchall()
+
+
+def affiliate_funnel(conn, days=30):
+    return conn.execute(
+        "SELECT SUM(received), SUM(accepted_tc), SUM(bs_extracted), SUM(submitted),"
+        " SUM(sold), SUM(decline), SUM(redirect), SUM(duplicate), SUM(funded)"
+        " FROM affiliate_totals_day WHERE business_date >= date('now', ?)",
+        (f"-{days} days",)).fetchone()
 
 
 def mark(conn, business_date, kind, status, detail=None, ms=None, ran_at=""):
