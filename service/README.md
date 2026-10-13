@@ -11,6 +11,18 @@ it. The funnel, the affordability indicators, campaign attribution and
 both cost columns all live there and still need a collector running
 inside the network.
 
+## How it runs
+
+A background thread wakes every 30 minutes, finds days that have not been
+collected, and collects a few at a time. Today is never collected — it is
+still happening — so the newest day is yesterday. Nothing is called while
+a page loads: the reports take 15–17 seconds each, so the pages only ever
+read what was already stored.
+
+`/collect` fills in missing days on demand. `/collect?days=90` backfills.
+At roughly 32 seconds a day, 90 days takes about 50 minutes in the
+background.
+
 ## What it stores
 
 Not the responses. For each call it keeps the *shape* — every field
@@ -28,9 +40,33 @@ $.Rows[0].LeadApplicationId     guid       len 36
 
 A name, an email or an address can only appear in a string, and none of
 that belongs outside Azure. The counts are what answer the open
-questions, and they survive intact. Verified by test: with a stub
-returning `Jane Citizen` and `jane.citizen@example.com.au`, neither
-string reaches the database.
+questions, and they survive intact.
+
+### Collected data
+
+Two kinds, in `store.py`:
+
+**Lender tier figures, stored whole.** A tier name with its counts,
+revenue, commission and profit describes a commercial relationship, not a
+person. One row per tier per day, plus the report's own totals block kept
+separately so a disagreement between the two stays visible.
+
+**Lead quality, stored only as counts per band.** A row of the quality
+report is one applicant's affordability, so the applicant never lands
+here — the distribution does. Age becomes a band, gambling becomes a
+range, and what is kept is how many fell in each, split by the lender's
+`Result` so acceptance rate by band is answerable. Categorical fields
+keep their value, because a label shared by thousands is not personal
+data; a cardinality cap of 50 guards the case where a field turns out to
+hold free text after all.
+
+Verified by test against a stub returning `Jane Citizen`,
+`jane.citizen@example.com.au`, a GUID and a timestamp on every one of 800
+rows a day across five days. None of the four reaches the database or any
+rendered page, while `FullTime`, `Decline` and the tier names all do, and
+the gambling-against-`Result` cross-tab comes out intact.
+
+Counts below ten are shown as `<10` rather than a number.
 
 ## Setting it up on Railway
 
