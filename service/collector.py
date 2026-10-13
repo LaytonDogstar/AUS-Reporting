@@ -64,10 +64,22 @@ def anonymous_check():
     return status, ms, error
 
 
-def window(day: date):
-    nxt = day + timedelta(days=1)
+def window(day: date, span: int = 1):
+    """A window of `span` days starting at `day`.
+
+    **endDate is inclusive, at day granularity.** Measured 2026-10-13: a
+    call with startDate=D and endDate=D+1 returns two days, not one. The
+    first backfill used that form and double-counted every day; summing
+    seven stored days came to 1.81x the same range fetched in one call,
+    and solving the overlap chain reproduced the single call's totals to
+    within 0.22% on sent, accepted and revenue alike.
+
+    So a single day is startDate=D, endDate=D. `verify()` re-checks this
+    against the live API rather than trusting the comment.
+    """
+    end = day + timedelta(days=span - 1)
     return (f"startDate={day.isoformat()}T00:00:00"
-            f"&endDate={nxt.isoformat()}T00:00:00")
+            f"&endDate={end.isoformat()}T00:00:00")
 
 
 # ------------------------------------------------------------------ bands
@@ -253,6 +265,52 @@ def catch_up(conn, limit=DAYS_PER_WAKE, days=BACKFILL_DAYS):
     for day in missing_days(conn, days)[:limit]:
         done.append((day.isoformat(), collect_day(conn, day)))
     return done
+
+
+def verify(days: int = 5):
+    """Fetch a range in one call, then each of its days separately, and
+    compare. Guards the window semantics: if the API ever changes, or the
+    reading above is wrong, the ratio says so instead of the numbers
+    quietly being wrong."""
+    end = datetime.now(timezone.utc).date() - timedelta(days=1)
+    start = end - timedelta(days=days - 1)
+
+    status, payload, ms, error = fetch(
+        f"{API_BASE}/api/PublicReports/LenderLeadCountReport?{window(start, days)}")
+    if error or status != 200:
+        return {"error": error or f"HTTP {status}"}
+    _, span_totals = reduce_tiers(json.loads(payload.decode("utf-8", "replace")))
+
+    daily = {"sent": 0, "accepted": 0, "revenue": 0.0}
+    per_day = []
+    for i in range(days):
+        d = start + timedelta(days=i)
+        st, pl, _ms, err = fetch(
+            f"{API_BASE}/api/PublicReports/LenderLeadCountReport?{window(d)}")
+        if err or st != 200:
+            return {"error": err or f"HTTP {st} on {d}"}
+        _, t = reduce_tiers(json.loads(pl.decode("utf-8", "replace")))
+        per_day.append((d.isoformat(), t["sent"], t["accepted"], t["revenue"]))
+        for k in daily:
+            daily[k] += t[k]
+
+    ratios = {k: (daily[k] / span_totals[k]) if span_totals[k] else None for k in daily}
+    good = [r for r in ratios.values() if r is not None]
+    verdict = ("single days sum to the range call - the window is correct"
+               if good and all(0.97 <= r <= 1.03 for r in good)
+               else "MISMATCH - single days do not sum to the range call")
+    return {"start": start.isoformat(), "end": end.isoformat(), "days": days,
+            "span": span_totals, "daily": daily, "ratios": ratios,
+            "per_day": per_day, "verdict": verdict, "ms": ms}
+
+
+def reset(conn):
+    """Drop everything collected. Used when the collection itself was
+    wrong, as opposed to merely out of date."""
+    with conn:
+        for table in ("lender_tier_day", "totals_day", "quality_day",
+                      "quality_day_meta", "collection"):
+            conn.execute(f"DELETE FROM {table}")
 
 
 def scheduler(db_path):

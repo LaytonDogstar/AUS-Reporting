@@ -92,7 +92,8 @@ def page(title, body):
 
 
 def nav(active=""):
-    items = [("/", "Overview"), ("/quality", "Lead quality"), ("/explore", "API explorer")]
+    items = [("/", "Overview"), ("/quality", "Lead quality"),
+             ("/verify", "Window check"), ("/explore", "API explorer")]
     return ('<p class="note">' + " &middot; ".join(
         f"<strong>{t}</strong>" if h == active else f'<a href="{h}">{t}</a>'
         for h, t in items) + "</p>")
@@ -137,7 +138,8 @@ def overview():
                  '<meta http-equiv="refresh" content="20">')
     else:
         p.append('<a class="btn" href="/collect">Collect missing days</a>'
-                 '<a class="btn quiet" href="/collect?days=90">Backfill 90 days</a>')
+                 '<a class="btn quiet" href="/collect?days=90">Backfill 90 days</a>'
+                 '<a class="btn quiet" href="/reset">Clear and start again</a>')
     p.append(f'<p class="note">{len(series)} day(s) stored &middot; '
              f'{len(missing)} missing in the last {collector.BACKFILL_DAYS} &middot; '
              f'the background collector wakes every {collector.WAKE_SECONDS // 60} min '
@@ -216,6 +218,47 @@ def quality_page(days=30):
         p.append("</table></div>")
     conn.close()
     return page("Lead quality", "".join(p))
+
+
+def confirm_reset():
+    return ("<h1>Clear everything collected?</h1>"
+            '<p class="sub">Removes every stored day — tiers, totals and quality counts — '
+            "so a backfill starts clean. Use it when the collection itself was wrong, not "
+            "merely stale. The API explorer's recorded shapes are kept.</p>"
+            '<div class="card"><a class="btn" href="/reset?confirm=yes">Yes, clear it</a>'
+            '<a class="btn quiet" href="/">Cancel</a></div>')
+
+
+def verify_page(days=5):
+    r = collector.verify(days)
+    p = ["<h1>Window check</h1>",
+         '<p class="sub">Fetches a range in one call, then each of its days separately, '
+         'and compares. If single days do not sum to the range, the window is wrong and '
+         'every stored figure is wrong with it.</p>', nav()]
+    if "error" in r:
+        p.append(f'<div class="card bad">{html.escape(r["error"])}</div>')
+        return page("Window check", "".join(p))
+    ok = r["verdict"].startswith("single days")
+    p.append(f'<div class="card"><strong class="{"ok" if ok else "bad"}">'
+             f'{html.escape(r["verdict"])}</strong><p class="note">'
+             f'{html.escape(r["start"])} to {html.escape(r["end"])}, {r["days"]} days</p>'
+             '<table><tr><th>Measure</th><th class="n">One range call</th>'
+             '<th class="n">Days summed</th><th class="n">Ratio</th></tr>')
+    for k in ("sent", "accepted", "revenue"):
+        ratio = r["ratios"][k]
+        cls = "ok" if ratio and 0.97 <= ratio <= 1.03 else "bad"
+        p.append(f'<tr><td>{k}</td><td class="n">{r["span"][k]:,.2f}</td>'
+                 f'<td class="n">{r["daily"][k]:,.2f}</td>'
+                 f'<td class="n {cls}">{ratio:.3f}</td></tr>' if ratio
+                 else f'<tr><td>{k}</td><td class="n">—</td><td class="n">—</td><td>—</td></tr>')
+    p.append("</table></div>")
+    p.append('<div class="card"><table><tr><th>Day</th><th class="n">Sent</th>'
+             '<th class="n">Accepted</th><th class="n">Revenue</th></tr>')
+    for d, sent, acc, rev in r["per_day"]:
+        p.append(f'<tr><td>{html.escape(d)}</td><td class="n">{sent:,}</td>'
+                 f'<td class="n">{acc:,}</td><td class="n">{rev:,.2f}</td></tr>')
+    p.append("</table></div>")
+    return page("Window check", "".join(p))
 
 
 def explore_page():
@@ -381,6 +424,15 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/explore/run":
                 explore_run()
                 return self._send(303, b"", "text/plain", {"Location": "/explore"})
+            if path == "/verify":
+                return self._send(200, verify_page(min(days, 10)))
+            if path == "/reset":
+                if params.get("confirm") == "yes":
+                    conn = store.connect(DB_PATH)
+                    collector.reset(conn)
+                    conn.close()
+                    return self._send(303, b"", "text/plain", {"Location": "/"})
+                return self._send(200, page("Reset", confirm_reset()))
             if path == "/collect":
                 collect_in_background(days if "days" in params else collector.DAYS_PER_WAKE)
                 return self._send(303, b"", "text/plain", {"Location": "/"})

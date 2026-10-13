@@ -262,3 +262,55 @@ which is what the service already does.
 `AffiliateLeadCountReport`'s 42,620 is worth a question: either internal
 volume genuinely is that small for the week, or the filter is excluding
 almost everything.
+
+---
+
+## 12. `endDate` is inclusive, at day granularity
+
+Measured 2026-10-13, after a 90-day backfill produced figures that could
+be checked against a call already made.
+
+A call with `startDate=D` and `endDate=D+1` returns **two days**, not
+one. The first collector used that form, so every stored day also
+contained the day after it.
+
+The proof is arithmetic. Seven stored days, 2026-10-06 to 2026-10-12,
+against the single call already made over 2026-10-06 to 2026-10-13:
+
+| | Days summed | One call | Ratio |
+|---|---|---|---|
+| Sent | 55,098 | 30,372 | 1.814 |
+| Accepted | 11,031 | 6,126 | 1.801 |
+| Revenue | 218,384.00 | 122,813.00 | 1.778 |
+
+Not 1.0, and not 2.0 either — which is the giveaway. If each call
+returns `d(D) + d(D+1)`, then summing consecutive calls counts the
+interior days twice and the two edges once. Unrolling that chain,
+`d(D+1) = call(D) - d(D)`, the unknown first day cancels and the implied
+eight-day total is fixed:
+
+| | Implied | Actual | Off by |
+|---|---|---|---|
+| Sent | 30,440 | 30,372 | 0.22% |
+| Accepted | 6,136 | 6,126 | 0.16% |
+| Revenue | 122,987.00 | 122,813.00 | 0.14% |
+
+Three independent measures landing within a quarter of a percent is not
+coincidence. **A single day is `startDate=D, endDate=D`.**
+
+The residual fraction of a percent is the gap between when the range call
+was made and when the backfill ran.
+
+### Guarded, not just commented
+
+`/verify` fetches a range in one call, then each of its days separately,
+and compares. Against a stub that reproduces the inclusive behaviour, the
+corrected window gives a ratio of 1.000 on all three measures and the
+original form gives 1.677, reported as a mismatch. A comment would not
+have caught this; a check does.
+
+**Two things follow for anything built on this API.** Every date window
+needs deciding rather than assuming — the same ambiguity applies to the
+affiliate reports and anything added later. And a figure that can be
+derived two ways should be, at least once, because this was invisible
+until two routes to the same number disagreed.
