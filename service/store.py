@@ -15,11 +15,47 @@ by band is answerable.
 Categorical fields keep their value because a label shared by thousands
 is not personal data. A cardinality cap guards the case where a field
 turns out to hold free text after all.
+
+Affiliate figures carry the report they came from. There are two - the
+normal affiliate report and the internal one - and the dev team confirmed
+on 13 Oct 2026 that the two populations cannot be combined into a single
+affiliate lead count. They are stored side by side and never added.
+
+Dates are business dates in the API's own timezone, which is Sydney.
+Every rolling window is cut on that date rather than on SQLite's UTC
+`date('now')`, so a window means the same thing at any hour of the day.
 """
 
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timedelta, timezone
+
+try:
+    from zoneinfo import ZoneInfo
+    REPORT_TZ = ZoneInfo("Australia/Sydney")
+except Exception:                               # noqa: BLE001 - no tzdata
+    # Fixed AEST. Half the year this reads an hour behind Sydney, which
+    # only ever delays calling a day complete - it never mislabels one.
+    REPORT_TZ = timezone(timedelta(hours=10))
+
+# The two affiliate reports. Kept apart, never summed: FF and non-FF
+# affiliates are different populations and the dev team confirmed they
+# can no longer be combined into one count. Which endpoint holds which
+# population is not confirmed, so they are named after the report.
+SOURCES = ("external", "internal")
+
+
+def business_today():
+    """Today as the API dates it. The reports run on Sydney time, so a
+    UTC date is up to a day out when deciding what is collectable."""
+    return datetime.now(REPORT_TZ).date()
+
+
+def business_cutoff(days: int) -> str:
+    """ISO date `days` back from today, for a rolling window."""
+    return (business_today() - timedelta(days=days)).isoformat()
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS call (
@@ -90,6 +126,7 @@ CREATE TABLE IF NOT EXISTS quality_day_meta (
 -- person. The API returns no AffiliateId, so the name is the key.
 CREATE TABLE IF NOT EXISTS affiliate_day (
     business_date TEXT NOT NULL,
+    source TEXT NOT NULL,
     affiliate_name TEXT NOT NULL,
     received INTEGER, accepted_tc INTEGER, bs_refreshed INTEGER, duplicate INTEGER,
     bs_extracted INTEGER, submitted INTEGER, sold INTEGER, decline INTEGER,
@@ -97,18 +134,20 @@ CREATE TABLE IF NOT EXISTS affiliate_day (
     revenue REAL, commission REAL, bs_cost REAL, final_commission REAL,
     profit REAL, final_profit REAL, volume_comparison_pct REAL,
     collected_at TEXT NOT NULL,
-    PRIMARY KEY (business_date, affiliate_name)
+    PRIMARY KEY (business_date, source, affiliate_name)
 );
 CREATE INDEX IF NOT EXISTS ad_date ON affiliate_day(business_date);
 
 CREATE TABLE IF NOT EXISTS affiliate_totals_day (
-    business_date TEXT PRIMARY KEY,
+    business_date TEXT NOT NULL,
+    source TEXT NOT NULL,
     received INTEGER, accepted_tc INTEGER, bs_refreshed INTEGER, duplicate INTEGER,
     bs_extracted INTEGER, submitted INTEGER, sold INTEGER, decline INTEGER,
     redirect INTEGER, funded INTEGER,
     revenue REAL, commission REAL, bs_cost REAL, final_commission REAL,
     profit REAL, final_profit REAL,
-    collected_at TEXT NOT NULL
+    collected_at TEXT NOT NULL,
+    PRIMARY KEY (business_date, source)
 );
 
 -- Why a day is missing, so a gap is explained rather than silent.
@@ -128,8 +167,32 @@ def connect(path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(path, timeout=30)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=30000")
+    _migrate_affiliate_source(conn)
     conn.executescript(SCHEMA)
     return conn
+
+
+def _migrate_affiliate_source(conn):
+    """Drop affiliate tables written before the two reports were split.
+
+    Those rows are the normal report alone, with no column saying so, and
+    the primary key cannot be changed in place. Nothing here is a system
+    of record - the API regenerates it - so they are dropped and the days
+    are marked uncollected, which costs a backfill and nothing else.
+    """
+    have = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    if "affiliate_day" not in have:
+        return
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(affiliate_day)")}
+    if "source" in columns:
+        return
+    with conn:
+        conn.execute("DROP TABLE IF EXISTS affiliate_day")
+        conn.execute("DROP TABLE IF EXISTS affiliate_totals_day")
+        if "collection" in have:
+            conn.execute("DELETE FROM collection WHERE kind IN ('affiliates',"
+                         " 'internal_affiliates')")
 
 
 # ------------------------------------------------------------------ writes
@@ -171,37 +234,45 @@ def save_quality(conn, business_date, counts, row_count, collected_at):
                      " VALUES (?,?,?)", (business_date, row_count, collected_at))
 
 
-def save_affiliates(conn, business_date, rows, totals, collected_at):
+def save_affiliates(conn, business_date, source, rows, totals, collected_at):
+    """One report's rows for one day. `source` is which report they came
+    from; rows from the two are never mixed or added together."""
+    if source not in SOURCES:
+        raise ValueError(f"unknown affiliate source: {source!r}")
     with conn:
-        conn.execute("DELETE FROM affiliate_day WHERE business_date=?", (business_date,))
+        conn.execute("DELETE FROM affiliate_day WHERE business_date=? AND source=?",
+                     (business_date, source))
         conn.executemany(
-            "INSERT INTO affiliate_day (business_date, affiliate_name, received, accepted_tc, bs_refreshed, duplicate, bs_extracted, submitted, sold, decline, redirect, funded, revenue, commission, bs_cost, final_commission, profit, final_profit,"
+            "INSERT INTO affiliate_day (business_date, source, affiliate_name, received, accepted_tc, bs_refreshed, duplicate, bs_extracted, submitted, sold, decline, redirect, funded, revenue, commission, bs_cost, final_commission, profit, final_profit,"
             " volume_comparison_pct, collected_at)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            [(business_date, r["name"], r["received"], r["accepted_tc"], r["bs_refreshed"], r["duplicate"], r["bs_extracted"], r["submitted"], r["sold"], r["decline"], r["redirect"], r["funded"], r["revenue"], r["commission"], r["bs_cost"], r["final_commission"], r["profit"], r["final_profit"],
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            [(business_date, source, r["name"], r["received"], r["accepted_tc"], r["bs_refreshed"], r["duplicate"], r["bs_extracted"], r["submitted"], r["sold"], r["decline"], r["redirect"], r["funded"], r["revenue"], r["commission"], r["bs_cost"], r["final_commission"], r["profit"], r["final_profit"],
               r["volume_comparison_pct"], collected_at) for r in rows])
         if totals:
             conn.execute(
-                "INSERT OR REPLACE INTO affiliate_totals_day (business_date, received, accepted_tc, bs_refreshed, duplicate, bs_extracted, submitted, sold, decline, redirect, funded, revenue, commission, bs_cost, final_commission, profit, final_profit,"
-                " collected_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (business_date, totals["received"], totals["accepted_tc"], totals["bs_refreshed"], totals["duplicate"], totals["bs_extracted"], totals["submitted"], totals["sold"], totals["decline"], totals["redirect"], totals["funded"], totals["revenue"], totals["commission"], totals["bs_cost"], totals["final_commission"], totals["profit"], totals["final_profit"], collected_at))
+                "INSERT OR REPLACE INTO affiliate_totals_day (business_date, source, received, accepted_tc, bs_refreshed, duplicate, bs_extracted, submitted, sold, decline, redirect, funded, revenue, commission, bs_cost, final_commission, profit, final_profit,"
+                " collected_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (business_date, source, totals["received"], totals["accepted_tc"], totals["bs_refreshed"], totals["duplicate"], totals["bs_extracted"], totals["submitted"], totals["sold"], totals["decline"], totals["redirect"], totals["funded"], totals["revenue"], totals["commission"], totals["bs_cost"], totals["final_commission"], totals["profit"], totals["final_profit"], collected_at))
 
 
-def affiliate_league(conn, days=30):
+def affiliate_league(conn, days=30, source="external"):
     return conn.execute(
         "SELECT affiliate_name, SUM(received) r, SUM(accepted_tc) tc, SUM(bs_extracted) bs,"
         " SUM(submitted) sub, SUM(sold) sold, SUM(decline) dec, SUM(revenue) rev,"
         " SUM(commission) com, SUM(bs_cost) bsc, SUM(profit) p FROM affiliate_day"
-        " WHERE business_date >= date('now', ?) GROUP BY affiliate_name"
-        " HAVING r > 0 ORDER BY p DESC LIMIT 60", (f"-{days} days",)).fetchall()
+        " WHERE business_date >= ? AND source=? GROUP BY affiliate_name"
+        " HAVING r > 0 ORDER BY p DESC LIMIT 60",
+        (business_cutoff(days), source)).fetchall()
 
 
-def affiliate_funnel(conn, days=30):
+def affiliate_funnel(conn, days=30, source="external"):
+    """One report's funnel. There is deliberately no call that sums the
+    two: the populations cannot be combined into one count."""
     return conn.execute(
         "SELECT SUM(received), SUM(accepted_tc), SUM(bs_extracted), SUM(submitted),"
         " SUM(sold), SUM(decline), SUM(redirect), SUM(duplicate), SUM(funded)"
-        " FROM affiliate_totals_day WHERE business_date >= date('now', ?)",
-        (f"-{days} days",)).fetchone()
+        " FROM affiliate_totals_day WHERE business_date >= ? AND source=?",
+        (business_cutoff(days), source)).fetchone()
 
 
 def mark(conn, business_date, kind, status, detail=None, ms=None, ran_at=""):
@@ -228,16 +299,16 @@ def tier_league(conn, days=30):
     return conn.execute(
         "SELECT lender_tier_name, SUM(sent) s, SUM(accepted) a, SUM(revenue) rev,"
         " SUM(commission) com, SUM(profit) p FROM lender_tier_day"
-        " WHERE business_date >= date('now', ?) GROUP BY lender_tier_id, lender_tier_name"
-        " HAVING s > 0 ORDER BY p DESC LIMIT 40", (f"-{days} days",)).fetchall()
+        " WHERE business_date >= ? GROUP BY lender_tier_id, lender_tier_name"
+        " HAVING s > 0 ORDER BY p DESC LIMIT 40", (business_cutoff(days),)).fetchall()
 
 
 def quality_distribution(conn, metric, days=30):
     return conn.execute(
         "SELECT band, band_order, result, SUM(n) FROM quality_day"
-        " WHERE metric=? AND business_date >= date('now', ?)"
+        " WHERE metric=? AND business_date >= ?"
         " GROUP BY band, band_order, result ORDER BY band_order, result",
-        (metric, f"-{days} days")).fetchall()
+        (metric, business_cutoff(days))).fetchall()
 
 
 def quality_metrics(conn):

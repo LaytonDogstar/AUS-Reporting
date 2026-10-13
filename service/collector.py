@@ -81,6 +81,11 @@ def window(day: date, span: int = 1):
 
     So a single day is startDate=D, endDate=D. `verify()` re-checks this
     against the live API rather than trusting the comment.
+
+    **The dates are Sydney dates.** Confirmed by the dev team on 13 Oct
+    2026: the API reports on Australia/Sydney time, not UTC. That leaves
+    these strings as they are; what it changes is which days count as
+    finished, and so collectable - see `store.business_today()`.
     """
     end = day + timedelta(days=span - 1)
     return (f"startDate={day.isoformat()}T00:00:00"
@@ -247,7 +252,11 @@ def reduce_affiliates(payload):
 
 # ---------------------------------------------------------------- collect
 
-KINDS = ("tiers", "quality", "affiliates")
+# `internal_affiliates` is the second affiliate report, collected beside
+# the first and never added to it: the dev team confirmed on 13 Oct 2026
+# that FF and non-FF affiliates can no longer be combined into a single
+# affiliate lead count.
+KINDS = ("tiers", "quality", "affiliates", "internal_affiliates")
 
 
 def _store_tiers(conn, iso, payload, ms, stamp):
@@ -265,16 +274,24 @@ def _store_quality(conn, iso, payload, ms, stamp):
     return f"{n} row(s) -> {len(counts)} count(s)"
 
 
-def _store_affiliates(conn, iso, payload, ms, stamp):
+def _store_affiliates(conn, iso, payload, ms, stamp, source="external"):
     rows, totals = reduce_affiliates(json.loads(payload.decode("utf-8", "replace")))
-    store.save_affiliates(conn, iso, rows, totals, stamp)
+    store.save_affiliates(conn, iso, source, rows, totals, stamp)
     return f"{len(rows)} affiliate(s)"
+
+
+def _store_internal_affiliates(conn, iso, payload, ms, stamp):
+    return _store_affiliates(conn, iso, payload, ms, stamp, source="internal")
 
 
 def _requests(day: date):
     """(kind, method, url, body, handler) for one day."""
     qs = window(day)
     prev = day - timedelta(days=1)
+    # ExcludeInternalSources is sent as the API expects it but nothing is
+    # read from it: the dev team say to ignore the flag, because FF
+    # affiliates carry a special computation behind it. The split comes
+    # from calling both reports instead, and keeping them apart.
     body = {"StartDate": f"{day.isoformat()}T00:00:00",
             "EndDate": f"{day.isoformat()}T00:00:00",
             "CompareStartDate": f"{prev.isoformat()}T00:00:00",
@@ -287,6 +304,9 @@ def _requests(day: date):
          None, _store_quality),
         ("affiliates", "POST", f"{API_BASE}/api/PublicReports/AffiliateLeadCountReport",
          body, _store_affiliates),
+        ("internal_affiliates", "POST",
+         f"{API_BASE}/api/PublicReports/InternalAffiliateLeadCountReport",
+         body, _store_internal_affiliates),
     ]
 
 
@@ -319,9 +339,15 @@ def collect_day(conn, day: date, kinds=KINDS):
 
 def missing_days(conn, days=BACKFILL_DAYS):
     """Days up to yesterday that are not fully collected. Today is never
-    collected: it is still happening."""
+    collected: it is still happening.
+
+    Yesterday is a Sydney date, because that is how the API dates its
+    reports. On UTC this lagged: Sydney finishes its day ten or eleven
+    hours before UTC does, so the newest finished day went uncollected
+    for up to another day.
+    """
     done = set.intersection(*(store.collected_days(conn, k) for k in KINDS))
-    yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
+    yesterday = store.business_today() - timedelta(days=1)
     wanted = [yesterday - timedelta(days=i) for i in range(days)]
     return [d for d in wanted if d.isoformat() not in done]
 
@@ -338,7 +364,7 @@ def verify(days: int = 5):
     compare. Guards the window semantics: if the API ever changes, or the
     reading above is wrong, the ratio says so instead of the numbers
     quietly being wrong."""
-    end = datetime.now(timezone.utc).date() - timedelta(days=1)
+    end = store.business_today() - timedelta(days=1)
     start = end - timedelta(days=days - 1)
 
     status, payload, ms, error = fetch(
@@ -375,15 +401,17 @@ def reset(conn):
     wrong, as opposed to merely out of date."""
     with conn:
         for table in ("lender_tier_day", "totals_day", "quality_day",
-                      "quality_day_meta", "collection"):
+                      "quality_day_meta", "affiliate_day", "affiliate_totals_day",
+                      "collection"):
             conn.execute(f"DELETE FROM {table}")
 
 
 def rebuild(db_path, days=None):
     """Collect every missing day back to back until there are none left.
 
-    Used on an empty database. Roughly 32 seconds a day, so 90 days takes
-    about 50 minutes - unattended, and nobody has to press anything.
+    Used on an empty database. Roughly 48 seconds a day across the four
+    reports, so 90 days takes a little over an hour - unattended, and
+    nobody has to press anything.
     """
     days = days or INITIAL_DAYS
     conn = store.connect(db_path)

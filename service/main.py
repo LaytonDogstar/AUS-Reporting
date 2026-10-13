@@ -191,28 +191,34 @@ def overview():
     return page("Overflow reporting", "".join(p))
 
 
-def affiliates_page(days=30):
-    conn = store.connect(DB_PATH)
-    funnel = store.affiliate_funnel(conn, days)
-    league = store.affiliate_league(conn, days)
-    conn.close()
+SOURCE_LABELS = (("external", "Affiliate report"),
+                 ("internal", "Internal affiliate report"))
 
-    p = ["<h1>Affiliates</h1>",
-         f'<p class="sub">Last {days} days. The affiliate report carries the funnel: '
-         'received through to sold or declined.</p>', nav("/affiliates")]
+
+def affiliate_section(conn, days, source, label):
+    """One report's funnel and league table.
+
+    The two reports are rendered one after the other and never added up.
+    FF and non-FF affiliates are different populations, and the dev team
+    confirmed on 13 Oct 2026 that they can no longer be combined into a
+    single affiliate lead count.
+    """
+    funnel = store.affiliate_funnel(conn, days, source)
+    league = store.affiliate_league(conn, days, source)
+    p = [f"<h2>{label}</h2>"]
     if not funnel or funnel[0] is None:
-        p.append('<p class="note">Nothing collected yet.</p>')
-        return page("Affiliates", "".join(p))
+        p.append('<div class="card"><p class="note">Nothing collected yet.</p></div>')
+        return "".join(p)
 
-    received, tc, bs, sub, sold, dec, redirect, dup, funded = funnel
+    received, tc, bs, sub_, sold, dec, redirect, dup, funded = funnel
     steps = [("Received", received), ("Accepted T&amp;Cs", tc), ("Statements extracted", bs),
-             ("Submitted to lenders", sub), ("Sold", sold)]
+             ("Submitted to lenders", sub_), ("Sold", sold)]
     widest = max(v or 0 for _, v in steps) or 1
-    p.append('<h2>Funnel</h2><div class="card"><table>'
+    p.append('<div class="card"><table>'
              '<tr><th>Step</th><th class="n">Leads</th><th class="n">Of received</th><th></th></tr>')
-    for label, v in steps:
+    for step_label, v in steps:
         v = v or 0
-        p.append(f'<tr><td>{label}</td><td class="n">{v:,}</td>'
+        p.append(f'<tr><td>{step_label}</td><td class="n">{v:,}</td>'
                  f'<td class="n">{100 * v / received:.1f}%</td>'
                  f'<td><span class="bar" style="width:{int(200 * v / widest)}px"></span></td></tr>')
     p.append(f'<tr><td class="note">Declined</td><td class="n">{(dec or 0):,}</td>'
@@ -221,15 +227,15 @@ def affiliates_page(days=30):
     p.append('<p class="note"><strong>Read this per affiliate, not in aggregate.</strong> '
              'Only some affiliates emit an Accepted T&amp;Cs step, so the overall figure '
              'mixes journeys and the step-to-step percentages are not a real sequence. '
-             f'Funded is {funded or 0} — lenders still report nothing back.</p></div>')
+             f'Funded is {funded or 0} — lenders rarely report funding back.</p></div>')
 
     if league:
         top = max((r[10] or 0) for r in league) or 1
-        p.append('<h2>By affiliate</h2><div class="card"><table>'
+        p.append('<div class="card"><table>'
                  '<tr><th>Affiliate</th><th class="n">Received</th><th class="n">Sold</th>'
                  '<th class="n">Rate</th><th class="n">Revenue</th><th class="n">BS cost</th>'
                  '<th class="n">Profit</th><th></th></tr>')
-        for name, r, tc_, bs_, sub_, sold_, dec_, rev, com, bsc, prof in league:
+        for name, r, tc_, bs_, _sub, sold_, dec_, rev, com, bsc, prof in league:
             rate = (100 * sold_ / r) if r else 0
             w = int(90 * (prof or 0) / top) if (prof or 0) > 0 else 0
             p.append(f'<tr><td>{html.escape(name or "—")}</td><td class="n">{r:,}</td>'
@@ -238,12 +244,30 @@ def affiliates_page(days=30):
                      f'<td class="n">{money(prof)}</td>'
                      f'<td><span class="bar" style="width:{w}px"></span></td></tr>')
         p.append("</table></div>")
+    return "".join(p)
+
+
+def affiliates_page(days=30):
+    conn = store.connect(DB_PATH)
+    sections = [affiliate_section(conn, days, source, label)
+                for source, label in SOURCE_LABELS]
+    conn.close()
+
+    p = ["<h1>Affiliates</h1>",
+         f'<p class="sub">Last {days} days, Sydney dates. The affiliate report carries the '
+         'funnel: received through to sold or declined.</p>', nav("/affiliates")]
+    p.append('<div class="card"><p class="note"><strong>Two reports, never added together.'
+             '</strong> FF and non-FF affiliates are separate populations and cannot be '
+             'combined into a single affiliate lead count, so each report is shown on its '
+             'own. Which report holds which population is not yet confirmed.</p></div>')
+    p.extend(sections)
 
     p.append('<h2>Before trusting the money columns</h2><div class="card"><p class="note">'
              'This report and the lender report disagree on revenue for the same window — '
              '71,237 against 122,813 — while agreeing on commission to within 1%. Profit '
-             'therefore differs more than fourfold. Which is right is a question for the '
-             'dev team, recorded in <code>PUBLIC-API.md</code>. Until it is answered, treat '
+             'therefore differs more than fourfold. Part of the answer is that the affiliate '
+             'side is two reports rather than one; whether the lender report spans both '
+             'populations is still open with the dev team. Until that is settled, treat '
              'revenue and profit here as unverified.</p></div>')
     return page("Affiliates", "".join(p))
 

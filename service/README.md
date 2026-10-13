@@ -15,20 +15,21 @@ inside the network.
 
 A background thread wakes every 30 minutes, finds days that have not been
 collected, and collects a few at a time. Today is never collected — it is
-still happening — so the newest day is yesterday. Nothing is called while
+still happening — so the newest day is yesterday, on Sydney time, which is
+how the API dates its reports. Nothing is called while
 a page loads: the reports take 15–17 seconds each, so the pages only ever
 read what was already stored.
 
 `/collect` fills in missing days on demand. `/collect?days=90` backfills.
-At roughly 32 seconds a day, 90 days takes about 50 minutes in the
-background.
+At roughly 48 seconds a day across the four reports, 90 days takes a
+little over an hour in the background.
 
 **An empty database rebuilds itself.** On start, if nothing has been
 collected, the service fills its whole history in one unattended pass.
 Nothing stored here is a system of record — the API can regenerate all of
 it — so losing the database should cost time, not data. That makes the
 Railway volume a convenience rather than a requirement: without one a
-redeploy clears the file and the service spends its first fifty minutes
+redeploy clears the file and the service spends its first hour or so
 rebuilding, with nobody pressing anything.
 
 Mount a volume at `/data` to skip that. The service checks for the
@@ -56,7 +57,7 @@ questions, and they survive intact.
 
 ### Collected data
 
-Two kinds, in `store.py`:
+Three kinds, in `store.py`:
 
 **Lender tier figures, stored whole.** A tier name with its counts,
 revenue, commission and profit describes a commercial relationship, not a
@@ -71,6 +72,15 @@ range, and what is kept is how many fell in each, split by the lender's
 keep their value, because a label shared by thousands is not personal
 data; a cardinality cap of 50 guards the case where a field turns out to
 hold free text after all.
+
+**Affiliate figures, stored per report.** There are two affiliate
+reports — the normal one and the internal one — and the dev team
+confirmed on 13 Oct 2026 that FF and non-FF affiliates can no longer be
+combined into a single affiliate lead count. Both are collected and
+stored with the report they came from, shown one after the other, and
+never added together. Which report holds which population is not yet
+confirmed, so the stored names are `external` and `internal` after the
+endpoints rather than after the populations.
 
 Verified by test against a stub returning `Jane Citizen`,
 `jane.citizen@example.com.au`, a GUID and a timestamp on every one of 800
