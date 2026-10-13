@@ -249,31 +249,78 @@ def affiliates_page(days=30):
 
 
 def quality_page(days=30):
+    """Distributions, each band split by the lender's result.
+
+    The marginal distribution says how many applicants look a certain
+    way. The split says which of them are worth having, which is the
+    question actually being asked.
+    """
     conn = store.connect(DB_PATH)
     metrics = store.quality_metrics(conn)
     p = ["<h1>Lead quality</h1>",
-         f'<p class="sub">Distributions over the last {days} days. Counts only — no applicant '
-         'row is ever stored.</p>', nav("/quality")]
+         f'<p class="sub">Last {days} days, each band split by the lender result. '
+         'Counts only — no applicant row is ever stored.</p>', nav("/quality")]
     if not metrics:
         p.append('<p class="note">Nothing collected yet.</p>')
+        conn.close()
+        return page("Lead quality", "".join(p))
+
+    # Which results exist, and which are common enough to be columns.
+    overall: dict[str, int] = {}
+    for metric in metrics:
+        for _band, _order, result, n in store.quality_distribution(conn, metric, days):
+            overall[result] = overall.get(result, 0) + n
+    ranked = sorted(overall, key=lambda r: -overall[r])
+    columns = ranked[:4]
+    grand = sum(overall.values()) or 1
+
+    p.append('<div class="card"><p class="note">Results seen: ' + ", ".join(
+        f"<strong>{html.escape(r)}</strong> {100 * overall[r] / grand:.1f}%"
+        for r in ranked[:6]) + ("" if len(ranked) <= 6 else f", and {len(ranked)-6} more")
+        + '</p></div>')
+
     for metric in metrics:
         rows = store.quality_distribution(conn, metric, days)
-        agg: dict[tuple[str, int], int] = {}
-        for band, order, _result, n in rows:
-            agg[(band, order)] = agg.get((band, order), 0) + n
-        if not agg:
+        bands: dict[tuple[str, int], dict[str, int]] = {}
+        for band, order, result, n in rows:
+            bands.setdefault((band, order), {})[result] = \
+                bands.setdefault((band, order), {}).get(result, 0) + n
+        if not bands:
             continue
-        total = sum(agg.values()) or 1
-        widest = max(agg.values()) or 1
-        p.append(f'<h2>{html.escape(metric)}</h2><div class="card"><table>'
-                 '<tr><th>Band</th><th class="n">Leads</th><th class="n">Share</th><th></th></tr>')
-        for (band, order), n in sorted(agg.items(), key=lambda kv: (kv[0][1], kv[0][0])):
+        totals = {k: sum(v.values()) for k, v in bands.items()}
+        grand_metric = sum(totals.values()) or 1
+        base = {c: sum(v.get(c, 0) for v in bands.values()) for c in columns}
+
+        p.append(f'<h2>{html.escape(metric)}</h2><div class="card"><table><tr>'
+                 '<th>Band</th><th class="n">Leads</th><th class="n">Share</th>'
+                 + "".join(f'<th class="n">{html.escape(c)}</th>' for c in columns)
+                 + "</tr>")
+        for key, n in sorted(totals.items(), key=lambda kv: (kv[0][1], kv[0][0])):
+            band = key[0]
             shown = f"{n:,}" if n >= 10 else "&lt;10"
-            w = int(170 * n / widest)
+            cells = ""
+            for c in columns:
+                if n < 10:
+                    cells += '<td class="n note">—</td>'
+                    continue
+                rate = 100 * bands[key].get(c, 0) / n
+                overall_rate = 100 * base[c] / grand_metric if grand_metric else 0
+                lift = rate - overall_rate
+                # Shown as a difference in points, not coloured. Whether
+                # being above the average is good depends on the column -
+                # a low decline rate is a good thing - so the page states
+                # the direction and leaves the judgement to the reader.
+                mark = (f'<span class="note"> {lift:+.0f}</span>'
+                        if abs(lift) >= 5 else "")
+                strong = ' style="font-weight:600"' if abs(lift) >= 10 else ""
+                cells += f'<td class="n"{strong}>{rate:.1f}%{mark}</td>'
             p.append(f'<tr><td>{html.escape(band)}</td><td class="n">{shown}</td>'
-                     f'<td class="n">{100 * n / total:.1f}%</td>'
-                     f'<td><span class="bar" style="width:{w}px"></span></td></tr>')
-        p.append("</table></div>")
+                     f'<td class="n note">{100 * n / grand_metric:.1f}%</td>{cells}</tr>')
+        p.append("</table>" + '<p class="note">Each percentage is of that band. '
+                 "The small number beside it is the difference, in points, from this "
+                 "metric's overall rate — so <em>+12</em> on Offer means that band is "
+                 "offered twelve points more often than average. Shown only where the "
+                 "gap reaches five points, bold at ten.</p></div>")
     conn.close()
     return page("Lead quality", "".join(p))
 

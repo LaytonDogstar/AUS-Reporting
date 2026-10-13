@@ -394,3 +394,81 @@ So the bank statement cost is deducted from commission but never reaches
 profit. Final profit understates by the whole `TotalBSCost` — 521.12 over
 eight days here, 3.2% of profit. Worth raising: it is a small number now
 but it is systematic, and it is the figure most likely to be quoted.
+
+---
+
+# What the quality data says
+
+Thirty days to 2026-10-13, 54,234 leads — about 1,808 a day, matching the
+14,610 over eight days measured earlier. Row counts agree exactly across
+every metric, so the collection itself is sound.
+
+## 16. `CenterlinkMonthly` is not Centrelink
+
+Three fields describe the same thing and cannot all be right:
+
+| | Leads | Share |
+|---|---|---|
+| `CentrelinkAsPercentOfIncome` = 0 | 37,714 | 69.5% |
+| `CenterlinkMonthly` < $1 | 2,425 | 4.5% |
+| `CenterlinkMonthly` ≥ $3,000 | 40,804 | 75.2% |
+| `EmploymentStatus` = Centrelink | 6,958 | 12.8% |
+
+Anyone drawing 0% of their income from Centrelink must have $0 of it, so
+the second row cannot be smaller than the first. It is short by 35,289.
+And more leads are recorded with over $3,000 a month of Centrelink than
+report receiving any at all.
+
+The first sampled row settles it: `CenterlinkMonthly` and `WagesMonthly`
+were both **5595.96**, identical to the cent. The field is almost
+certainly total monthly income under a Centrelink label — note it is also
+the one spelled "Centerlink", while the percentage field is spelled
+correctly, which suggests different origins.
+
+**Do not use it.** `CentrelinkAsPercentOfIncome` and `EmploymentStatus`
+agree with each other well enough to be usable; this does not.
+
+## 17. Two more fields that cannot carry weight
+
+**`IsAustralianResident` is unknown for 60.0%** — 32,554 of 54,234 null.
+True for 35.3%, false for 4.7%. Not usable as a filter.
+
+**`HasPrimaryIncomeSource` is false for 61.1%.** In a lending funnel that
+is implausible on its face, and the related journey stage
+(`NoPrimaryIncomeSource`) has never fired once in five years. Either the
+flag is inverted, or it means something other than its name. Worth asking
+before anyone filters on it.
+
+**Twelve applicants are recorded as under 18.** Small, and most likely
+the same date-of-birth corruption seen in the database, where values run
+from 1753 to the year 2881. But lending to a minor is a regulatory
+problem rather than a data one, so it is worth confirming they are not
+real.
+
+## 18. The risk signal looks sound
+
+| | Leads | Share |
+|---|---|---|
+| Gambling over 30% of income | 5,984 | 11.0% |
+| Gambling over 5% of income | 12,644 | 23.3% |
+| 11+ dishonours | 10,291 | 19.0% |
+| 3+ dishonours | 23,977 | 44.2% |
+| Wages under $1,000/month | 11,312 | 20.9% |
+| Full-time employment | 35,009 | 64.6% |
+| Aged 25–34 | 19,675 | 36.3% |
+
+These are plausible, internally consistent and discriminating — a
+population where 11% gamble more than a third of their income and 44%
+have three or more dishonours is exactly the population these indicators
+exist to describe.
+
+## 19. What is still missing from the page
+
+All of the above is **marginal** — how many applicants look a certain
+way. It does not say which ones are worth having.
+
+The collector already stores every count split by the lender's `Result`,
+so acceptance rate by band is in the database. The page was summing over
+that dimension and discarding it. Showing it turns "11% gamble heavily"
+into "leads gambling over 30% convert at X against Y for the rest", which
+is the question the whole engagement started with.
