@@ -139,7 +139,12 @@ RESULT_FIELD = "Result"
 # empties. Accepting both spellings means a rename costs nothing, and
 # the stored metric name stays put either way so history stays joined.
 FIELD_ALIASES = {
-    "WagesAndCentrelinkMonthly": ("WagesAndCentrelinkMonthly",
+    # Measured 14 Oct 2026, after the rename: the API returns
+    # WageAndCenterlinkMonthly - singular "Wage", and it kept the
+    # "Centerlink" misspelling of the original. Guessing the spelling
+    # was wrong; the rest are kept so older days still read.
+    "WagesAndCentrelinkMonthly": ("WageAndCenterlinkMonthly",
+                                  "WagesAndCentrelinkMonthly",
                                   "WageAndCentrelinkMonthly",
                                   "WageAndCentrlinkMonthly",
                                   "CentrelinkMonthly",
@@ -198,6 +203,57 @@ def reduce_quality(items):
             key = (metric, band, 0, result)
             counts[key] = counts.get(key, 0) + 1
     return counts
+
+
+# What a ping came back as. Supplied by the dev team 13 Oct 2026; there
+# is no lookup table for these in either database.
+STATUS_LABELS = {0: "FilterFailed", 1: "Sold", 2: "Decline", 3: "Error",
+                 4: "Ignored"}
+
+SOLD_STATUS = 1
+
+
+def reduce_lender_results(payload):
+    """The ping log in, counts out. No row survives this function.
+
+    Measured 14 Oct 2026: a bare top-level array, not the `Items`
+    envelope the other reports use, and about 99,000 rows a day. Each
+    row carries LeadId and LeadApplicationId; neither is kept, because
+    a lead identifier outside Azure is what this design avoids. What is
+    kept is counts per lender, tier and status, the distinct
+    applications behind them, and the cost.
+
+    Distinct counts are taken over the whole day as well, because one
+    lead is offered to several lenders: summing the per-status rows
+    would count it once per ping.
+    """
+    items = payload if isinstance(payload, list) else (payload.get("Items") or [])
+    counts: dict[tuple[int, int, int], list] = {}
+    apps_by_key: dict[tuple[int, int, int], set] = {}
+    leads, applications = set(), set()
+
+    for it in items:
+        key = (int(_num(it, "LenderId")), int(_num(it, "LenderTierId")),
+               int(_num(it, "StatusId")))
+        row = counts.get(key)
+        if row is None:
+            row = counts[key] = [0, 0.0]
+            apps_by_key[key] = set()
+        row[0] += 1
+        row[1] += float(_num(it, "Cost") or 0)
+        app = it.get("LeadApplicationId")
+        if app is not None:
+            apps_by_key[key].add(app)
+            applications.add(app)
+        lead = it.get("LeadId")
+        if lead is not None:
+            leads.add(lead)
+
+    out = {k: (pings, len(apps_by_key[k]), round(cost, 2))
+           for k, (pings, cost) in counts.items()}
+    meta = {"pings": sum(v[0] for v in out.values()),
+            "leads": len(leads), "applications": len(applications)}
+    return out, meta
 
 
 def _num(row, *names, default=0):
@@ -281,7 +337,8 @@ def reduce_affiliates(payload):
 # the first and never added to it: the dev team confirmed on 13 Oct 2026
 # that FF and non-FF affiliates can no longer be combined into a single
 # affiliate lead count.
-KINDS = ("tiers", "quality", "affiliates", "internal_affiliates")
+KINDS = ("tiers", "quality", "affiliates", "internal_affiliates",
+         "lender_results")
 
 
 def _store_tiers(conn, iso, payload, ms, stamp):
@@ -309,6 +366,15 @@ def _store_internal_affiliates(conn, iso, payload, ms, stamp):
     return _store_affiliates(conn, iso, payload, ms, stamp, source="internal")
 
 
+def _store_lender_results(conn, iso, payload, ms, stamp):
+    data = json.loads(payload.decode("utf-8", "replace"))
+    counts, meta = reduce_lender_results(data)
+    del data                                    # rows do not outlive this call
+    store.save_lender_results(conn, iso, counts, meta, stamp)
+    return (f"{meta['pings']:,} ping(s) -> {len(counts)} count(s), "
+            f"{meta['applications']:,} application(s)")
+
+
 def _requests(day: date):
     """(kind, method, url, body, handler) for one day."""
     qs = window(day)
@@ -332,6 +398,13 @@ def _requests(day: date):
         ("internal_affiliates", "POST",
          f"{API_BASE}/api/PublicReports/InternalAffiliateLeadCountReport",
          body, _store_internal_affiliates),
+        # The ping log. Roughly 23 MB and 99,000 rows a day, so it is
+        # the heaviest call here by an order of magnitude - which is
+        # the reason it is reduced to counts in one pass and the rows
+        # dropped rather than held.
+        ("lender_results", "GET",
+         f"{API_BASE}/api/PublicReports/LenderApplicationResults?{qs}",
+         None, _store_lender_results),
     ]
 
 
@@ -427,6 +500,7 @@ def reset(conn):
     with conn:
         for table in ("lender_tier_day", "totals_day", "quality_day",
                       "quality_day_meta", "affiliate_day", "affiliate_totals_day",
+                      "lender_result_day", "lender_result_day_meta",
                       "collection"):
             conn.execute(f"DELETE FROM {table}")
 
@@ -434,9 +508,9 @@ def reset(conn):
 def rebuild(db_path, days=None):
     """Collect every missing day back to back until there are none left.
 
-    Used on an empty database. Roughly 48 seconds a day across the four
-    reports, so 90 days takes a little over an hour - unattended, and
-    nobody has to press anything.
+    Used on an empty database. Upwards of a minute a day across the five
+    reports now that the ping log is among them, so 90 days runs for a
+    couple of hours - unattended, and nobody has to press anything.
     """
     days = days or INITIAL_DAYS
     conn = store.connect(db_path)

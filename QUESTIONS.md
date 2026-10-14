@@ -69,10 +69,12 @@ exists to compute daily caps and daily email counts and is purged when
 needed; `Offer` is a different scenario, closer to a decline.
 
 **12. API access to `LenderApplicationResults` and `Leads.Id`?**
-**Answered, and shipped 2026-10-14: the `LenderApplicationResults` API is
-live.** `Leads.Id` follows on the next deployment. The route and payload
-have not been inspected yet — the API explorer probes it and records its
-shape, which is what collection gets written against.
+**Answered, shipped and collected 2026-10-14.** It is a GET on the same
+date window as the other reports, returning a bare top-level array of
+about 99,000 rows a day: lead, application, affiliate, lender, tier,
+status, cost, created. `LeadId` arrives with it, so the applicant key
+question is answered by the same endpoint. The collector reduces it to
+counts per lender, tier and status; see `PUBLIC-API.md` section 19.
 
 **13. What do the `StatusId` values mean** in `LenderApplicationResults`?
 **Answered:**
@@ -90,10 +92,12 @@ application time**, which is the figure reporting wants. `DateOfBirth`,
 which holds values from 1753 to 2881, is not used.
 
 **15. What is `CenterlinkMonthly`?** **Answered: the name was wrong, and
-was corrected in the API on 2026-10-14.** It holds wages plus Centrelink
-and cannot be set against `CentrelinkAsPercentOfIncome`. The collector
-accepts the old and new spellings and stores both under one metric, so
-the series runs through the rename rather than stopping at it.
+was renamed in the API on 2026-10-14 to `WageAndCenterlinkMonthly`** —
+singular "Wage", and it kept the "Centerlink" misspelling. It holds
+wages plus Centrelink and cannot be set against
+`CentrelinkAsPercentOfIncome`. The collector accepts that name and the
+older ones, storing them under one metric, so the series runs through
+the rename rather than stopping at it.
 
 **16. `HasPrimaryIncomeSource` is false for 61% of leads.**
 **Answered: the feature was only implemented for leads whose bank

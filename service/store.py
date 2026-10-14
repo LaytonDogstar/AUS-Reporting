@@ -150,6 +150,36 @@ CREATE TABLE IF NOT EXISTS affiliate_totals_day (
     PRIMARY KEY (business_date, source)
 );
 
+-- The ping log, reduced. One row per day, lender, tier and status.
+-- LenderApplicationResults returns a row per lead and lender carrying
+-- LeadId and LeadApplicationId; neither lands here, because a lead
+-- identifier outside Azure is the thing this design exists to avoid.
+-- What is kept is how many pings fell in each status, how many distinct
+-- applications they covered, and what they cost.
+CREATE TABLE IF NOT EXISTS lender_result_day (
+    business_date TEXT NOT NULL,
+    lender_id INTEGER NOT NULL,
+    lender_tier_id INTEGER NOT NULL,
+    status_id INTEGER NOT NULL,
+    pings INTEGER NOT NULL,
+    applications INTEGER NOT NULL,
+    cost REAL,
+    collected_at TEXT NOT NULL,
+    PRIMARY KEY (business_date, lender_id, lender_tier_id, status_id)
+);
+CREATE INDEX IF NOT EXISTS lrd_date ON lender_result_day(business_date);
+
+-- Day-level counts the per-status rows cannot be summed into: a lead or
+-- an application appears under several lenders, so distinct counts have
+-- to be taken once over the whole day.
+CREATE TABLE IF NOT EXISTS lender_result_day_meta (
+    business_date TEXT PRIMARY KEY,
+    pings INTEGER NOT NULL,
+    leads INTEGER NOT NULL,
+    applications INTEGER NOT NULL,
+    collected_at TEXT NOT NULL
+);
+
 -- Why a day is missing, so a gap is explained rather than silent.
 CREATE TABLE IF NOT EXISTS collection (
     business_date TEXT NOT NULL,
@@ -278,6 +308,53 @@ def save_affiliates(conn, business_date, source, rows, totals, collected_at):
                 "INSERT OR REPLACE INTO affiliate_totals_day (business_date, source, received, accepted_tc, bs_refreshed, duplicate, bs_extracted, submitted, sold, decline, redirect, funded, revenue, commission, bs_cost, final_commission, profit, final_profit,"
                 " collected_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (business_date, source, totals["received"], totals["accepted_tc"], totals["bs_refreshed"], totals["duplicate"], totals["bs_extracted"], totals["submitted"], totals["sold"], totals["decline"], totals["redirect"], totals["funded"], totals["revenue"], totals["commission"], totals["bs_cost"], totals["final_commission"], totals["profit"], totals["final_profit"], collected_at))
+
+
+def save_lender_results(conn, business_date, counts, meta, collected_at):
+    """counts: {(lender_id, tier_id, status_id): (pings, applications, cost)}"""
+    with conn:
+        conn.execute("DELETE FROM lender_result_day WHERE business_date=?", (business_date,))
+        conn.executemany(
+            "INSERT INTO lender_result_day (business_date, lender_id, lender_tier_id,"
+            " status_id, pings, applications, cost, collected_at)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            [(business_date, lender, tier, status, pings, apps, cost, collected_at)
+             for (lender, tier, status), (pings, apps, cost) in sorted(counts.items())])
+        conn.execute(
+            "INSERT OR REPLACE INTO lender_result_day_meta (business_date, pings, leads,"
+            " applications, collected_at) VALUES (?,?,?,?,?)",
+            (business_date, meta["pings"], meta["leads"], meta["applications"], collected_at))
+
+
+def lender_result_status(conn, days=30):
+    """Pings and cost per status across the window."""
+    return conn.execute(
+        "SELECT status_id, SUM(pings), SUM(cost) FROM lender_result_day"
+        " WHERE business_date >= ? GROUP BY status_id ORDER BY SUM(pings) DESC",
+        (business_cutoff(days),)).fetchall()
+
+
+def lender_result_league(conn, days=30, limit=40):
+    """Per lender and tier: pings, how many were sold, and what they cost.
+
+    Sold is status 1. Acceptance is sold over pings for that tier, which
+    is the pingtree's own question: of the times we offered this lead to
+    this tier, how often did it buy.
+    """
+    return conn.execute(
+        "SELECT lender_id, lender_tier_id, SUM(pings) p,"
+        " SUM(CASE WHEN status_id=1 THEN pings ELSE 0 END) sold,"
+        " SUM(CASE WHEN status_id=2 THEN pings ELSE 0 END) declined,"
+        " SUM(cost) cost FROM lender_result_day WHERE business_date >= ?"
+        " GROUP BY lender_id, lender_tier_id HAVING p > 0"
+        " ORDER BY p DESC LIMIT ?", (business_cutoff(days), limit)).fetchall()
+
+
+def lender_result_totals(conn, days=30):
+    """Day-level distinct counts, which per-status rows cannot give."""
+    return conn.execute(
+        "SELECT SUM(pings), SUM(leads), SUM(applications) FROM lender_result_day_meta"
+        " WHERE business_date >= ?", (business_cutoff(days),)).fetchone()
 
 
 def affiliate_league(conn, days=30, source="external"):

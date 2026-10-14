@@ -6,6 +6,7 @@ Neither is visible in the numbers themselves, so each is held by a test.
 """
 
 import datetime as dt
+import json
 import sqlite3
 import sys
 import tempfile
@@ -162,6 +163,79 @@ class MetricRename(unittest.TestCase):
                              " AND metric=?", ("2026-10-01",
                                                "WagesAndCentrelinkMonthly")).fetchone()[0]
         self.assertEqual(total, 7)              # the new-name rows win
+
+
+class PingLog(unittest.TestCase):
+    """LenderApplicationResults, measured 14 Oct 2026: a bare top-level
+    array of about 99,000 rows a day, each carrying LeadId and
+    LeadApplicationId."""
+
+    def rows(self):
+        return [
+            {"LeadId": "lead-1", "LeadApplicationId": "app-1", "AffiliateId": 189,
+             "LenderId": 12, "LenderTierId": 10162, "StatusId": 0, "Cost": 82.0,
+             "DateCreated": "2026-10-13T01:00:00", "Id": 1},
+            {"LeadId": "lead-1", "LeadApplicationId": "app-1", "AffiliateId": 189,
+             "LenderId": 13, "LenderTierId": 10163, "StatusId": 1, "Cost": 40.0,
+             "DateCreated": "2026-10-13T01:00:05", "Id": 2},
+            {"LeadId": "lead-2", "LeadApplicationId": "app-2", "AffiliateId": 7,
+             "LenderId": 12, "LenderTierId": 10162, "StatusId": 0, "Cost": 1.5,
+             "DateCreated": "2026-10-13T02:00:00", "Id": 3},
+        ]
+
+    def test_no_identifier_survives_the_reduction(self):
+        counts, meta = collector.reduce_lender_results(self.rows())
+
+        flat = repr(counts) + repr(meta)
+        for identifier in ("lead-1", "lead-2", "app-1", "app-2"):
+            self.assertNotIn(identifier, flat, identifier)
+
+    def test_pings_group_by_lender_tier_and_status(self):
+        counts, _ = collector.reduce_lender_results(self.rows())
+
+        self.assertEqual(counts[(12, 10162, 0)], (2, 2, 83.5))
+        self.assertEqual(counts[(13, 10163, 1)], (1, 1, 40.0))
+
+    def test_distinct_counts_are_taken_over_the_whole_day(self):
+        """One lead is offered to several lenders, so summing the
+        per-status rows would count it once per ping."""
+        _, meta = collector.reduce_lender_results(self.rows())
+
+        self.assertEqual(meta, {"pings": 3, "leads": 2, "applications": 2})
+
+    def test_a_bare_array_and_an_items_envelope_both_read(self):
+        bare, _ = collector.reduce_lender_results(self.rows())
+        wrapped, _ = collector.reduce_lender_results({"Items": self.rows()})
+
+        self.assertEqual(bare, wrapped)
+
+    def test_an_unknown_status_is_still_counted(self):
+        counts, _ = collector.reduce_lender_results(
+            [{"LenderId": 12, "LenderTierId": 1, "StatusId": 9, "Cost": 0}])
+
+        self.assertEqual(counts[(12, 1, 9)], (1, 0, 0.0))
+        self.assertNotIn(9, collector.STATUS_LABELS)
+
+    def test_the_handler_stores_what_the_page_reads(self):
+        conn = store.connect(":memory:")
+        self.addCleanup(conn.close)
+        day = store.business_today().isoformat()
+        payload = json.dumps(self.rows()).encode()
+
+        detail = collector._store_lender_results(conn, day, payload, 1, STAMP)
+
+        self.assertIn("3 ping(s)", detail)
+        self.assertEqual(store.lender_result_totals(conn, 30), (3, 2, 2))
+        self.assertEqual(store.lender_result_status(conn, 30),
+                         [(0, 2, 83.5), (1, 1, 40.0)])
+        league = store.lender_result_league(conn, 30)
+        self.assertEqual(league[0][:5], (12, 10162, 2, 0, 0))   # 2 pings, none sold
+
+    def test_the_ping_log_is_one_of_the_collected_kinds(self):
+        kinds = [k for k, *_ in collector._requests(dt.date(2026, 10, 13))]
+        self.assertIn("lender_results", kinds)
+        urls = {k: u for k, _m, u, _b, _h in collector._requests(dt.date(2026, 10, 13))}
+        self.assertIn("/LenderApplicationResults?startDate=", urls["lender_results"])
 
 
 class Migration(unittest.TestCase):

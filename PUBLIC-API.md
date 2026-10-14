@@ -511,9 +511,47 @@ exactly `LenderApplicationResults`. A parameterless call 404s on the
 known-good endpoints too, so that status says nothing about whether a
 route exists — only the parameterised form does.
 
-What is still unknown is the payload: the field names, the grain and
-whether `StatusId` arrives as the integer the dev team described. That
-needs an authenticated call, which is what the API explorer records.
+An authenticated call on 2026-10-14 settled the payload.
+
+**It is a bare top-level array**, not the `Items` envelope every other
+report uses — 694,356 rows for a seven-day window, 161.8 MB, 28.9
+seconds. That is roughly 99,000 rows and 23 MB a day, an order of
+magnitude heavier than anything else collected here.
+
+| Field | Type |
+|---|---|
+| `LeadId` | guid |
+| `LeadApplicationId` | guid |
+| `AffiliateId` | number |
+| `LenderId` | number |
+| `LenderTierId` | number |
+| `StatusId` | number |
+| `Cost` | number |
+| `DateCreated` | date-like |
+| `Id` | number |
+
+`StatusId` is the integer the dev team described: 0 FilterFailed, 1
+Sold, 2 Decline, 3 Error, 4 Ignored.
+
+**The grain is the ping**: one row per lead application and lender, with
+the tier it was offered at and what came back. That is the lender funnel
+from the other end — the lender report says what each tier bought, this
+says what it was offered and declined, which is the first time a decline
+is an event here rather than a residue.
+
+**Two identifiers come with it.** `LeadId` is the applicant key that
+question 12 asked for, and `LeadApplicationId` joins to everything else.
+Neither is stored: the collector reduces each day to counts per lender,
+tier and status in one pass and drops the rows, keeping distinct
+application and lead counts per day so "lenders tried per application"
+and "applications per lead" are answerable without an identifier leaving
+Azure. Repeat-customer reporting beyond that would need either hashed
+keys or an aggregate computed inside the network, and that is a decision
+rather than an oversight.
+
+**What does not join.** The rows carry `LenderId` and `LenderTierId` but
+no names, and the lender report's `LenderTierName` does not come with an
+id. Until something maps them, the ping log page can only show numbers.
 
 ## 20. What is still missing from the page
 

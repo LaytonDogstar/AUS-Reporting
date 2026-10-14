@@ -21,16 +21,17 @@ a page loads: the reports take 15–17 seconds each, so the pages only ever
 read what was already stored.
 
 `/collect` fills in missing days on demand. `/collect?days=90` backfills.
-At roughly 48 seconds a day across the four reports, 90 days takes a
-little over an hour in the background.
+The five reports take upwards of a minute a day now that the ping log is
+among them, so a 90-day backfill runs for a couple of hours in the
+background and moves a couple of gigabytes.
 
 **An empty database rebuilds itself.** On start, if nothing has been
 collected, the service fills its whole history in one unattended pass.
 Nothing stored here is a system of record — the API can regenerate all of
 it — so losing the database should cost time, not data. That makes the
 Railway volume a convenience rather than a requirement: without one a
-redeploy clears the file and the service spends its first hour or so
-rebuilding, with nobody pressing anything.
+redeploy clears the file and the service spends its first couple of
+hours rebuilding, with nobody pressing anything.
 
 Mount a volume at `/data` to skip that. The service checks for the
 directory and falls back to a local file when it is absent, so there is
@@ -57,7 +58,7 @@ questions, and they survive intact.
 
 ### Collected data
 
-Three kinds, in `store.py`:
+Four kinds, in `store.py`:
 
 **Lender tier figures, stored whole.** A tier name with its counts,
 revenue, commission and profit describes a commercial relationship, not a
@@ -81,6 +82,15 @@ stored with the report they came from, shown one after the other, and
 never added together. Which report holds which population is not yet
 confirmed, so the stored names are `external` and `internal` after the
 endpoints rather than after the populations.
+
+**The ping log, stored only as counts.** `LenderApplicationResults`
+returns one row per lead application and lender — roughly 99,000 rows
+and 23 MB a day, the heaviest call here by an order of magnitude — and
+each row carries `LeadId` and `LeadApplicationId`. Neither is stored.
+Each day is reduced in one pass to counts per lender, tier and status,
+with the distinct applications and leads behind them counted once over
+the whole day, because a lead offered to several lenders would otherwise
+be counted once per ping.
 
 Verified by test against a stub returning `Jane Citizen`,
 `jane.citizen@example.com.au`, a GUID and a timestamp on every one of 800

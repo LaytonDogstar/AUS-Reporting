@@ -93,8 +93,8 @@ def page(title, body):
 
 def nav(active=""):
     items = [("/", "Overview"), ("/affiliates", "Affiliates"),
-             ("/quality", "Lead quality"), ("/verify", "Window check"),
-             ("/explore", "API explorer")]
+             ("/quality", "Lead quality"), ("/pings", "Ping log"),
+             ("/verify", "Window check"), ("/explore", "API explorer")]
     return ('<p class="note">' + " &middot; ".join(
         f"<strong>{t}</strong>" if h == active else f'<a href="{h}">{t}</a>'
         for h, t in items) + "</p>")
@@ -300,6 +300,70 @@ METRIC_NOTES = {
         "values from 1753 to 2881 and cannot be calculated from. The "
         "<code>&lt;18</code> band is test data, not real applicants.",
 }
+
+
+def pings_page(days=30):
+    """What the pingtree did, from LenderApplicationResults.
+
+    The lender report says what each tier bought. This says what each
+    tier was offered and what it did with it, which is the same funnel
+    from the other end - and the only place a decline is visible as an
+    event rather than as a residue.
+    """
+    conn = store.connect(DB_PATH)
+    totals = store.lender_result_totals(conn, days)
+    statuses = store.lender_result_status(conn, days)
+    league = store.lender_result_league(conn, days)
+    conn.close()
+
+    p = ["<h1>Ping log</h1>",
+         f'<p class="sub">Last {days} days, Sydney dates. One row per lead and lender, '
+         'reduced to counts — no lead identifier is stored.</p>', nav("/pings")]
+    if not totals or not totals[0]:
+        p.append('<p class="note">Nothing collected yet.</p>')
+        return page("Ping log", "".join(p))
+
+    pings, leads, applications = totals
+    per_app = pings / applications if applications else 0
+    apps_per_lead = applications / leads if leads else 0
+    p.append('<div class="card"><table>'
+             f'<tr><td>Pings</td><td class="n">{pings:,}</td></tr>'
+             f'<tr><td>Applications behind them</td><td class="n">{applications:,}</td></tr>'
+             f'<tr><td>Lenders tried per application</td><td class="n">{per_app:.2f}</td></tr>'
+             f'<tr><td>Distinct leads</td><td class="n">{leads:,}</td></tr>'
+             f'<tr><td>Applications per lead</td><td class="n">{apps_per_lead:.2f}</td></tr>'
+             '</table><p class="note">Counted per day and summed, so a lead applying on '
+             'two days counts twice here.</p></div>')
+
+    if statuses:
+        total = sum(n for _s, n, _c in statuses) or 1
+        p.append('<h2>What came back</h2><div class="card"><table>'
+                 '<tr><th>Status</th><th class="n">Pings</th><th class="n">Share</th>'
+                 '<th class="n">Cost</th></tr>')
+        for status_id, n, cost in statuses:
+            label = collector.STATUS_LABELS.get(status_id, f"status {status_id}")
+            p.append(f'<tr><td>{html.escape(label)}</td><td class="n">{n:,}</td>'
+                     f'<td class="n">{100 * n / total:.1f}%</td>'
+                     f'<td class="n">{money(cost)}</td></tr>')
+        p.append('</table><p class="note">Status codes from the dev team, 13 Oct 2026: '
+                 '0 FilterFailed, 1 Sold, 2 Decline, 3 Error, 4 Ignored.</p></div>')
+
+    if league:
+        p.append('<h2>By lender and tier</h2><div class="card"><table>'
+                 '<tr><th>Lender</th><th>Tier</th><th class="n">Pings</th>'
+                 '<th class="n">Sold</th><th class="n">Declined</th>'
+                 '<th class="n">Acceptance</th><th class="n">Cost</th></tr>')
+        for lender_id, tier_id, n, sold, declined, cost in league:
+            rate = (100 * sold / n) if n else 0
+            p.append(f'<tr><td>{lender_id}</td><td>{tier_id}</td><td class="n">{n:,}</td>'
+                     f'<td class="n">{sold:,}</td><td class="n">{declined:,}</td>'
+                     f'<td class="n">{rate:.1f}%</td><td class="n">{money(cost)}</td></tr>')
+        p.append('</table><p class="note">Acceptance is sold over pings for that tier: of '
+                 'the times a lead was offered to it, how often it bought. The API returns '
+                 'ids rather than names here, and the lender report\'s tier names do not '
+                 'join to them — that is worth settling before this goes to anyone else.'
+                 '</p></div>')
+    return page("Ping log", "".join(p))
 
 
 def quality_page(days=30):
@@ -594,6 +658,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, overview())
             if path == "/affiliates":
                 return self._send(200, affiliates_page(days))
+            if path == "/pings":
+                return self._send(200, pings_page(days))
             if path == "/quality":
                 return self._send(200, quality_page(days))
             if path == "/explore":
