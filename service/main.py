@@ -314,6 +314,7 @@ def pings_page(days=30):
     totals = store.lender_result_totals(conn, days)
     statuses = store.lender_result_status(conn, days)
     league = store.lender_result_league(conn, days)
+    names = store.tier_names(conn, days)
     conn.close()
 
     p = ["<h1>Ping log</h1>",
@@ -350,19 +351,37 @@ def pings_page(days=30):
 
     if league:
         p.append('<h2>By lender and tier</h2><div class="card"><table>'
-                 '<tr><th>Lender</th><th>Tier</th><th class="n">Pings</th>'
+                 '<tr><th>Tier</th><th class="n">Lender</th><th class="n">Pings</th>'
                  '<th class="n">Sold</th><th class="n">Declined</th>'
                  '<th class="n">Acceptance</th><th class="n">Cost</th></tr>')
+        resolved = 0
         for lender_id, tier_id, n, sold, declined, cost in league:
             rate = (100 * sold / n) if n else 0
-            p.append(f'<tr><td>{lender_id}</td><td>{tier_id}</td><td class="n">{n:,}</td>'
+            name = names.get(tier_id)
+            resolved += 1 if name else 0
+            shown = (html.escape(name) if name
+                     else f'<span class="note">tier {tier_id}</span>')
+            p.append(f'<tr><td>{shown}</td><td class="n">{lender_id}</td>'
+                     f'<td class="n">{n:,}</td>'
                      f'<td class="n">{sold:,}</td><td class="n">{declined:,}</td>'
                      f'<td class="n">{rate:.1f}%</td><td class="n">{money(cost)}</td></tr>')
-        p.append('</table><p class="note">Acceptance is sold over pings for that tier: of '
-                 'the times a lead was offered to it, how often it bought. The API returns '
-                 'ids rather than names here, and the lender report\'s tier names do not '
-                 'join to them — that is worth settling before this goes to anyone else.'
-                 '</p></div>')
+        note = ('Acceptance is sold over pings for that tier: of the times a lead was '
+                'offered to it, how often it bought. ')
+        if resolved == len(league):
+            note += ('Tier names come from the lender report, which carries the id and '
+                     'the name together.')
+        elif resolved:
+            note += (f'Named {resolved} of {len(league)} tiers from the lender report; '
+                     'the rest had no activity in that report over this window, so only '
+                     'the id is known.')
+        else:
+            note += ('<strong>No tier name resolved.</strong> The lender report carries '
+                     'ids and names together, so if none of these ids match it, the two '
+                     'are not the same identifier and that needs settling with the dev '
+                     'team.')
+        note += (' Lender is still an id: nothing collected here carries lender names. '
+                 'The <code>LenderTiers</code> endpoint is the likely source.')
+        p.append(f'</table><p class="note">{note}</p></div>')
     return page("Ping log", "".join(p))
 
 

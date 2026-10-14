@@ -350,6 +350,20 @@ def lender_result_league(conn, days=30, limit=40):
         " ORDER BY p DESC LIMIT ?", (business_cutoff(days), limit)).fetchall()
 
 
+def tier_names(conn, days=30):
+    """{lender_tier_id: name} from the lender report, which carries both.
+
+    The ping log returns ids alone, so this is what puts names on it.
+    Whether the two id spaces agree is not assumed - the caller reports
+    how many resolved, so a mismatch shows rather than hides.
+    """
+    return {r[0]: r[1] for r in conn.execute(
+        "SELECT lender_tier_id, lender_tier_name FROM lender_tier_day"
+        " WHERE business_date >= ? AND lender_tier_name IS NOT NULL"
+        " AND lender_tier_name <> '' GROUP BY lender_tier_id",
+        (business_cutoff(days),))}
+
+
 def lender_result_totals(conn, days=30):
     """Day-level distinct counts, which per-status rows cannot give."""
     return conn.execute(

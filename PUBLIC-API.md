@@ -549,9 +549,14 @@ Azure. Repeat-customer reporting beyond that would need either hashed
 keys or an aggregate computed inside the network, and that is a decision
 rather than an oversight.
 
-**What does not join.** The rows carry `LenderId` and `LenderTierId` but
-no names, and the lender report's `LenderTierName` does not come with an
-id. Until something maps them, the ping log page can only show numbers.
+**Names.** The rows carry `LenderId` and `LenderTierId` and no names.
+`LenderLeadCountReport` carries `LenderTierId` and `LenderTierName`
+together and both are already stored per day, so tier names join from
+what is collected — the page does that, and reports how many ids
+resolved rather than assuming the two id spaces agree. Lender names are
+the gap: nothing collected here carries them. `LenderTiers` is a GET
+with no parameters, 104 KB in two seconds, and is the obvious lookup to
+collect for that.
 
 ## 20. What is still missing from the page
 

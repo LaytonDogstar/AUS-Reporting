@@ -94,5 +94,50 @@ class AffiliateSections(ServicePage):
         self.assertEqual(html.count("Nothing collected yet."), 1)
 
 
+class PingLogNames(ServicePage):
+    """The ping log returns tier ids; the lender report carries the id
+    and the name together, so the page joins them."""
+
+    def tier_row(self, tier_id, name):
+        return {"id": tier_id, "name": name, "ignored": 0, "processed": 0, "sent": 10,
+                "accepted": 4, "blacklist": 0, "redirect": 0, "conversion_rate": 0.4,
+                "earning_per_lead": 1.0, "extra_income": 0.0, "revenue": 100.0,
+                "commission": 60.0, "profit": 40.0, "blacklist_price": 0.0}
+
+    def pings(self, conn, tier_id):
+        counts = {(12, tier_id, 1): (6, 6, 60.0), (12, tier_id, 2): (4, 4, 0.0)}
+        store.save_lender_results(conn, self.day, counts,
+                                  {"pings": 10, "leads": 8, "applications": 9}, STAMP)
+
+    def test_a_tier_is_named_from_the_lender_report(self):
+        conn = self.conn()
+        store.save_tiers(conn, self.day, [self.tier_row(10162, "Rapid Tier 1")],
+                         None, STAMP)
+        self.pings(conn, 10162)
+
+        html = text(main.pings_page(30))
+        self.assertIn("Rapid Tier 1", html)
+        self.assertIn("carries the id and the name together", html)
+
+    def test_an_unmatched_id_is_shown_as_an_id_and_called_out(self):
+        conn = self.conn()
+        store.save_tiers(conn, self.day, [self.tier_row(999, "Some Other Tier")],
+                         None, STAMP)
+        self.pings(conn, 10162)
+
+        html = text(main.pings_page(30))
+        self.assertIn("tier 10162", html)
+        self.assertIn("No tier name resolved", html)
+
+    def test_lender_is_still_an_id_and_the_page_says_so(self):
+        conn = self.conn()
+        store.save_tiers(conn, self.day, [self.tier_row(10162, "Rapid Tier 1")],
+                         None, STAMP)
+        self.pings(conn, 10162)
+
+        html = text(main.pings_page(30))
+        self.assertIn("nothing collected here carries lender names", html)
+
+
 if __name__ == "__main__":
     unittest.main()
