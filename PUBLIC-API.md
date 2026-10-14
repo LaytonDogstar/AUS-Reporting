@@ -612,7 +612,49 @@ matching the lender report's 20.4% conversion. Over all pings it reads
 pings are in `LenderTiers`, which carries `Id`, `Name`, `LenderId` and
 `LenderName`. 55 of the 56 also appear in the lender report.
 
-## 22. What is still missing from the page
+## 22. Thirty days, collected and reconciled
+
+Backfilled 2026-09-15 to 2026-10-14 against the live API on 2026-10-14.
+Six reports a day, about 25 seconds a day, 3.2 MB of database for the
+whole month — the reduction to counts is doing its job.
+
+| | Affiliate | Internal | Both | Lender |
+|---|---|---|---|---|
+| Revenue | 286,882 | 197,879 | **484,761** | **484,761** |
+| Commission | 222,468.35 | 0.00 | **222,468.35** | **222,468.35** |
+| Sold | 10,866 | 12,770 | **23,636** | **23,636** |
+| Profit | 64,413.65 | 48,431.55 | 112,845.20 | 262,292.65 |
+
+The reconciliation holds over a month, not just the one window:
+**1.0000** on revenue, exact on commission and sold. Profit still
+diverges for the reason in section 20. The affiliate side annualises to
+**1.37M**.
+
+**Internal traffic converts nearly twice as well.** 12,770 sales from
+25,979 leads is 49.2%, against 10,866 from 39,875, or 27.2%. It is
+fewer leads and more sales, which is worth a look of its own.
+
+**The ping log at scale.** 2,372,018 pings reduced to counts; 111,930
+reached a lender (4.7%) and 23,926 of those sold (21.4%). Sold at list
+price comes to 487,661 against the lender report's 484,761 — 0.6% high,
+consistent with rows arriving after a day's report was taken.
+
+**And the metric that was empty now reads.** `WagesAndCentrelinkMonthly`
+over 55,065 leads, split by whether the lead sold:
+
+| Monthly income | Leads | Sold |
+|---|---|---|
+| under $1 | 2,486 | 15.1% |
+| $1–1,000 | 1,906 | 21.2% |
+| $1,000–2,000 | 3,827 | 27.8% |
+| $2,000–3,000 | 5,433 | 37.5% |
+| $3,000+ | 41,413 | 47.7% |
+
+Monotonic across every band, and a 3.2x spread end to end. That is the
+lead-quality signal the engagement exists to find, and it was invisible
+while the field was collecting nothing.
+
+## 23. What is still missing from the page
 
 All of the above is **marginal** — how many applicants look a certain
 way. It does not say which ones are worth having.
