@@ -229,7 +229,22 @@ class PingLog(unittest.TestCase):
         self.assertEqual(store.lender_result_status(conn, 30),
                          [(0, 2, 83.5), (1, 1, 40.0)])
         league = store.lender_result_league(conn, 30)
-        self.assertEqual(league[0][:5], (12, 10162, 2, 0, 0))   # 2 pings, none sold
+        # lender 13 leads: its ping reached a lender, lender 12's did not
+        self.assertEqual(league[0], (13, 10163, 1, 1, 1, 0, 40.0))
+        self.assertEqual(store.lender_result_reach(conn, 30), (3, 1, 1, 40.0))
+
+    def test_the_lookup_carries_names_and_not_contact_details(self):
+        rows = collector.reduce_lender_lookup([{
+            "Id": 13, "Name": "Speedy Money", "DisplayName": "Speedy Money",
+            "LenderId": 16, "LenderName": "Speedy Money", "Code": "SPM-T1",
+            "Price": 45.0, "IsActive": True, "Email": "ops@example.com.au",
+            "LogoUrl": "/images/buyer/x.jpg", "InterstitialMessage": "..."}])
+
+        self.assertEqual(rows[0]["id"], 13)
+        self.assertEqual(rows[0]["lender_name"], "Speedy Money")
+        self.assertNotIn("ops@example.com.au", repr(rows))
+        self.assertEqual(set(rows[0]), {"id", "name", "lender_id", "lender_name",
+                                        "code", "price", "is_active"})
 
     def test_the_ping_log_is_one_of_the_collected_kinds(self):
         kinds = [k for k, *_ in collector._requests(dt.date(2026, 10, 13))]

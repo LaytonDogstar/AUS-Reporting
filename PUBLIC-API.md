@@ -558,7 +558,61 @@ the gap: nothing collected here carries them. `LenderTiers` is a GET
 with no parameters, 104 KB in two seconds, and is the obvious lookup to
 collect for that.
 
-## 20. What is still missing from the page
+## 20. The revenue gap was the missing report
+
+Measured with credentials on 2026-10-14, same window as section 14,
+6 to 13 October:
+
+| | Affiliate report | Internal report | Both | Lender report |
+|---|---|---|---|---|
+| Revenue | 71,839.00 | 52,921.00 | **124,760.00** | **124,760.00** |
+| Commission | 55,270.80 | 0.00 | **55,270.80** | **55,270.80** |
+| Profit | 16,568.20 | 12,476.97 | 29,045.17 | 69,489.20 |
+| Sold / accepted | 2,819 | 3,401 | **6,220** | **6,220** |
+
+**Revenue, commission and accepts reconcile to the cent.** The 1.72x gap
+was the internal report, nothing else: it carries 52,921 of revenue and
+pays no commission, which is what an owned-traffic source looks like.
+Section 14's "grain difference" reasoning was wrong — the grain does
+differ, but it was not the cause.
+
+**Profit does not reconcile, and the affiliate side is the one to
+trust.** The lender report's profit is simply revenue minus commission.
+The internal report reports 12,476.97 on 52,921 of revenue with no
+commission, so something else is deducted there — the special
+computation for FF affiliates the dev team described. The lender
+report cannot see it. Eight days annualises to roughly 1.33M, against
+the 3.1M and 750k quoted earlier; both of those were wrong.
+
+**Received does not reconcile, and should not.** 17,957 against the
+lender report's 30,861 sent is the grain: sent counts a lead once per
+tier it was offered to.
+
+## 21. What the ping log says that nothing else does
+
+Measured 2026-10-12, 75,084 rows.
+
+**`Cost` is the tier's list price, not a cost incurred.** It equalled
+`LenderTiers.Price` on all 75,084 rows and never varied within a tier.
+Summing it across every ping produces 2.1M of imaginary spend for one
+day. Only the sold rows are money — and those reconcile: 700 sold at
+list price is 14,514, against the lender report's 14,454 of revenue for
+694 accepted, a 0.4% gap of six late rows. Revenue per sale equals list
+price exactly, tier by tier.
+
+**Most pings never reach a lender.** FilterFailed is 72.9% and Ignored
+22.5%; only Sold, Decline and Error get there, 4.5% of the total. Those
+three sum to 3,412 against the lender report's 3,406 `sent` — 0.18%.
+**So `sent` means "reached a lender", and an acceptance rate belongs
+over that, not over every ping.** Over reached pings the rate is 20.5%,
+matching the lender report's 20.4% conversion. Over all pings it reads
+0.9%, which is not a rate of anything.
+
+**The ids resolve.** All 56 tier ids and all 20 lender ids in a day's
+pings are in `LenderTiers`, which carries `Id`, `Name`, `LenderId` and
+`LenderName`. 55 of the 56 also appear in the lender report.
+
+## 22. What is still missing from the page
 
 All of the above is **marginal** — how many applicants look a certain
 way. It does not say which ones are worth having.

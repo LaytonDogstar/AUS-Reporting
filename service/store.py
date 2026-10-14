@@ -180,6 +180,21 @@ CREATE TABLE IF NOT EXISTS lender_result_day_meta (
     collected_at TEXT NOT NULL
 );
 
+-- The tier lookup, from LenderTiers. A snapshot, replaced whole on each
+-- collection: it is what puts names on the ping log, whose rows carry
+-- ids alone. The endpoint also returns a lender contact email, a logo
+-- url and marketing copy; none of that is kept.
+CREATE TABLE IF NOT EXISTS lender_tier (
+    lender_tier_id INTEGER PRIMARY KEY,
+    lender_tier_name TEXT,
+    lender_id INTEGER,
+    lender_name TEXT,
+    code TEXT,
+    price REAL,
+    is_active INTEGER,
+    collected_at TEXT NOT NULL
+);
+
 -- Why a day is missing, so a gap is explained rather than silent.
 CREATE TABLE IF NOT EXISTS collection (
     business_date TEXT NOT NULL,
@@ -326,6 +341,24 @@ def save_lender_results(conn, business_date, counts, meta, collected_at):
             (business_date, meta["pings"], meta["leads"], meta["applications"], collected_at))
 
 
+def save_lender_lookup(conn, rows, collected_at):
+    """The tier lookup, replaced whole. Ids are stable; names are not."""
+    with conn:
+        conn.execute("DELETE FROM lender_tier")
+        conn.executemany(
+            "INSERT INTO lender_tier (lender_tier_id, lender_tier_name, lender_id,"
+            " lender_name, code, price, is_active, collected_at)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            [(r["id"], r["name"], r["lender_id"], r["lender_name"], r["code"],
+              r["price"], 1 if r["is_active"] else 0, collected_at) for r in rows])
+
+
+def lender_lookup(conn):
+    """{tier_id: (tier_name, lender_id, lender_name)} - what names the ping log."""
+    return {r[0]: (r[1], r[2], r[3]) for r in conn.execute(
+        "SELECT lender_tier_id, lender_tier_name, lender_id, lender_name FROM lender_tier")}
+
+
 def lender_result_status(conn, days=30):
     """Pings and cost per status across the window."""
     return conn.execute(
@@ -334,20 +367,45 @@ def lender_result_status(conn, days=30):
         (business_cutoff(days),)).fetchall()
 
 
-def lender_result_league(conn, days=30, limit=40):
-    """Per lender and tier: pings, how many were sold, and what they cost.
+# Statuses where the ping actually got to a lender. FilterFailed (0) and
+# Ignored (4) are stopped before that, and measured 14 Oct 2026 they are
+# 95% of all rows - so a rate taken over every ping is not an acceptance
+# rate. Sold + Decline + Error reproduces the lender report's `sent` to
+# within 0.2%, which is what fixes the denominator.
+REACHED_STATUSES = (1, 2, 3)
 
-    Sold is status 1. Acceptance is sold over pings for that tier, which
-    is the pingtree's own question: of the times we offered this lead to
-    this tier, how often did it buy.
+
+def lender_result_league(conn, days=30, limit=40):
+    """Per lender and tier: what reached it, what it bought, what it paid.
+
+    Acceptance is sold over pings that reached the lender, not over every
+    ping: the pingtree filters most of them out first, and a rate over
+    all of them answers a question nobody asked.
+
+    `cost` on a ping is the tier's list price, carried on every row
+    whatever the outcome, so only the sold rows are money. That column
+    is summed for sold alone.
     """
     return conn.execute(
         "SELECT lender_id, lender_tier_id, SUM(pings) p,"
+        " SUM(CASE WHEN status_id IN (1,2,3) THEN pings ELSE 0 END) reached,"
         " SUM(CASE WHEN status_id=1 THEN pings ELSE 0 END) sold,"
         " SUM(CASE WHEN status_id=2 THEN pings ELSE 0 END) declined,"
-        " SUM(cost) cost FROM lender_result_day WHERE business_date >= ?"
-        " GROUP BY lender_id, lender_tier_id HAVING p > 0"
-        " ORDER BY p DESC LIMIT ?", (business_cutoff(days), limit)).fetchall()
+        " SUM(CASE WHEN status_id=1 THEN cost ELSE 0 END) sold_value"
+        " FROM lender_result_day WHERE business_date >= ?"
+        " GROUP BY lender_id, lender_tier_id HAVING reached > 0"
+        " ORDER BY reached DESC LIMIT ?", (business_cutoff(days), limit)).fetchall()
+
+
+def lender_result_reach(conn, days=30):
+    """(all pings, reached a lender, sold, value of the sold)."""
+    return conn.execute(
+        "SELECT SUM(pings),"
+        " SUM(CASE WHEN status_id IN (1,2,3) THEN pings ELSE 0 END),"
+        " SUM(CASE WHEN status_id=1 THEN pings ELSE 0 END),"
+        " SUM(CASE WHEN status_id=1 THEN cost ELSE 0 END)"
+        " FROM lender_result_day WHERE business_date >= ?",
+        (business_cutoff(days),)).fetchone()
 
 
 def tier_names(conn, days=30):

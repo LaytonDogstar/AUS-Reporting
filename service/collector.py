@@ -212,6 +212,30 @@ STATUS_LABELS = {0: "FilterFailed", 1: "Sold", 2: "Decline", 3: "Error",
 
 SOLD_STATUS = 1
 
+# Statuses where the ping reached a lender at all. Measured 14 Oct 2026:
+# FilterFailed and Ignored are 95% of rows and never get there, and
+# Sold + Decline + Error reproduces the lender report's `sent` to within
+# 0.2% - 3,412 against 3,406 on 12 Oct. So this is the denominator an
+# acceptance rate belongs over.
+REACHED_STATUSES = (1, 2, 3)
+
+
+def reduce_lender_lookup(payload):
+    """LenderTiers in, the id-to-name mapping out.
+
+    The endpoint also returns a lender contact email, a logo url and
+    marketing copy. None of it is needed to name a tier, so none of it
+    is carried out of this function.
+    """
+    items = payload if isinstance(payload, list) else (payload.get("Items") or [])
+    return [{"id": int(_num(it, "Id")),
+             "name": it.get("Name") or it.get("DisplayName"),
+             "lender_id": int(_num(it, "LenderId")),
+             "lender_name": it.get("LenderName"),
+             "code": it.get("Code"),
+             "price": float(_num(it, "Price") or 0),
+             "is_active": bool(it.get("IsActive"))} for it in items]
+
 
 def reduce_lender_results(payload):
     """The ping log in, counts out. No row survives this function.
@@ -226,6 +250,12 @@ def reduce_lender_results(payload):
     Distinct counts are taken over the whole day as well, because one
     lead is offered to several lenders: summing the per-status rows
     would count it once per ping.
+
+    `Cost` is the tier's list price, carried on every row whatever came
+    back - measured 14 Oct 2026, it equalled `LenderTiers.Price` on all
+    75,084 rows of a day and never varied within a tier. It is summed
+    per group here because that is lossless, but only the sold rows are
+    money, and the reads are what take that distinction.
     """
     items = payload if isinstance(payload, list) else (payload.get("Items") or [])
     counts: dict[tuple[int, int, int], list] = {}
@@ -338,7 +368,7 @@ def reduce_affiliates(payload):
 # that FF and non-FF affiliates can no longer be combined into a single
 # affiliate lead count.
 KINDS = ("tiers", "quality", "affiliates", "internal_affiliates",
-         "lender_results")
+         "lender_results", "lender_lookup")
 
 
 def _store_tiers(conn, iso, payload, ms, stamp):
@@ -375,6 +405,12 @@ def _store_lender_results(conn, iso, payload, ms, stamp):
             f"{meta['applications']:,} application(s)")
 
 
+def _store_lender_lookup(conn, iso, payload, ms, stamp):
+    rows = reduce_lender_lookup(json.loads(payload.decode("utf-8", "replace")))
+    store.save_lender_lookup(conn, rows, stamp)
+    return f"{len(rows)} tier(s)"
+
+
 def _requests(day: date):
     """(kind, method, url, body, handler) for one day."""
     qs = window(day)
@@ -405,6 +441,12 @@ def _requests(day: date):
         ("lender_results", "GET",
          f"{API_BASE}/api/PublicReports/LenderApplicationResults?{qs}",
          None, _store_lender_results),
+        # Not a daily report but a lookup, and the only thing that puts
+        # names on the ping log: its rows carry LenderTierId and
+        # LenderId and no names at all. Two seconds, so it is simply
+        # re-read with each day rather than cached and aged.
+        ("lender_lookup", "GET", f"{API_BASE}/api/PublicReports/LenderTiers",
+         None, _store_lender_lookup),
     ]
 
 

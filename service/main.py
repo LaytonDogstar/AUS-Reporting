@@ -306,15 +306,15 @@ def pings_page(days=30):
     """What the pingtree did, from LenderApplicationResults.
 
     The lender report says what each tier bought. This says what each
-    tier was offered and what it did with it, which is the same funnel
-    from the other end - and the only place a decline is visible as an
-    event rather than as a residue.
+    tier was offered and what it did with it - and it is the only place
+    a decline is an event rather than a residue.
     """
     conn = store.connect(DB_PATH)
     totals = store.lender_result_totals(conn, days)
+    reach = store.lender_result_reach(conn, days)
     statuses = store.lender_result_status(conn, days)
     league = store.lender_result_league(conn, days)
-    names = store.tier_names(conn, days)
+    lookup = store.lender_lookup(conn)
     conn.close()
 
     p = ["<h1>Ping log</h1>",
@@ -325,62 +325,72 @@ def pings_page(days=30):
         return page("Ping log", "".join(p))
 
     pings, leads, applications = totals
-    per_app = pings / applications if applications else 0
-    apps_per_lead = applications / leads if leads else 0
+    all_pings, reached, sold, sold_value = reach
+    reached = reached or 0
+    # Over pings that reached a lender, not every ping: most are
+    # filtered before they get there, and 47 "lenders tried" against 45
+    # lenders in existence is the tell.
+    per_app = reached / applications if applications else 0
     p.append('<div class="card"><table>'
              f'<tr><td>Pings</td><td class="n">{pings:,}</td></tr>'
+             f'<tr><td>Reached a lender</td><td class="n">{reached:,}</td>'
+             f'<td class="n note">{100 * reached / pings:.1f}% of pings</td></tr>'
+             f'<tr><td>Sold</td><td class="n">{(sold or 0):,}</td>'
+             f'<td class="n note">{100 * (sold or 0) / reached:.1f}% of those that reached'
+             '</td></tr>'
+             f'<tr><td>Revenue from the sold</td><td class="n">{money(sold_value)}</td></tr>'
              f'<tr><td>Applications behind them</td><td class="n">{applications:,}</td></tr>'
-             f'<tr><td>Lenders tried per application</td><td class="n">{per_app:.2f}</td></tr>'
-             f'<tr><td>Distinct leads</td><td class="n">{leads:,}</td></tr>'
-             f'<tr><td>Applications per lead</td><td class="n">{apps_per_lead:.2f}</td></tr>'
-             '</table><p class="note">Counted per day and summed, so a lead applying on '
-             'two days counts twice here.</p></div>')
+             f'<tr><td>Lenders reached per application</td>'
+             f'<td class="n">{per_app:.2f}</td></tr>'
+             '</table><p class="note"><strong>Most pings never reach a lender.</strong> '
+             'FilterFailed and Ignored are stopped by the pingtree first, so a rate taken '
+             'over every ping is not an acceptance rate. Sold, Decline and Error are the '
+             "ones that got there, and they reproduce the lender report's sent to within "
+             '0.2%, which is why they are the denominator here.</p></div>')
 
     if statuses:
         total = sum(n for _s, n, _c in statuses) or 1
         p.append('<h2>What came back</h2><div class="card"><table>'
                  '<tr><th>Status</th><th class="n">Pings</th><th class="n">Share</th>'
-                 '<th class="n">Cost</th></tr>')
-        for status_id, n, cost in statuses:
+                 '<th class="n">Reached a lender</th></tr>')
+        for status_id, n, _cost in statuses:
             label = collector.STATUS_LABELS.get(status_id, f"status {status_id}")
+            got_there = "yes" if status_id in collector.REACHED_STATUSES else "no"
             p.append(f'<tr><td>{html.escape(label)}</td><td class="n">{n:,}</td>'
                      f'<td class="n">{100 * n / total:.1f}%</td>'
-                     f'<td class="n">{money(cost)}</td></tr>')
+                     f'<td class="n note">{got_there}</td></tr>')
         p.append('</table><p class="note">Status codes from the dev team, 13 Oct 2026: '
-                 '0 FilterFailed, 1 Sold, 2 Decline, 3 Error, 4 Ignored.</p></div>')
+                 '0 FilterFailed, 1 Sold, 2 Decline, 3 Error, 4 Ignored. There is no cost '
+                 "column here because a ping carries the tier's list price whatever the "
+                 'outcome — only the sold ones are money.</p></div>')
 
     if league:
-        p.append('<h2>By lender and tier</h2><div class="card"><table>'
-                 '<tr><th>Tier</th><th class="n">Lender</th><th class="n">Pings</th>'
+        p.append('<h2>By tier</h2><div class="card"><table>'
+                 '<tr><th>Tier</th><th>Lender</th><th class="n">Reached</th>'
                  '<th class="n">Sold</th><th class="n">Declined</th>'
-                 '<th class="n">Acceptance</th><th class="n">Cost</th></tr>')
-        resolved = 0
-        for lender_id, tier_id, n, sold, declined, cost in league:
-            rate = (100 * sold / n) if n else 0
-            name = names.get(tier_id)
-            resolved += 1 if name else 0
-            shown = (html.escape(name) if name
-                     else f'<span class="note">tier {tier_id}</span>')
-            p.append(f'<tr><td>{shown}</td><td class="n">{lender_id}</td>'
-                     f'<td class="n">{n:,}</td>'
-                     f'<td class="n">{sold:,}</td><td class="n">{declined:,}</td>'
-                     f'<td class="n">{rate:.1f}%</td><td class="n">{money(cost)}</td></tr>')
-        note = ('Acceptance is sold over pings for that tier: of the times a lead was '
-                'offered to it, how often it bought. ')
-        if resolved == len(league):
-            note += ('Tier names come from the lender report, which carries the id and '
-                     'the name together.')
-        elif resolved:
-            note += (f'Named {resolved} of {len(league)} tiers from the lender report; '
-                     'the rest had no activity in that report over this window, so only '
-                     'the id is known.')
-        else:
-            note += ('<strong>No tier name resolved.</strong> The lender report carries '
-                     'ids and names together, so if none of these ids match it, the two '
-                     'are not the same identifier and that needs settling with the dev '
-                     'team.')
-        note += (' Lender is still an id: nothing collected here carries lender names. '
-                 'The <code>LenderTiers</code> endpoint is the likely source.')
+                 '<th class="n">Acceptance</th><th class="n">Revenue</th></tr>')
+        unnamed = 0
+        for lender_id, tier_id, _p, reached_n, sold_n, declined_n, value in league:
+            rate = (100 * sold_n / reached_n) if reached_n else 0
+            tier_name, _lid, lender_name = lookup.get(tier_id, (None, None, None))
+            unnamed += 0 if tier_name else 1
+            tier_cell = (html.escape(tier_name) if tier_name
+                         else f'<span class="note">tier {tier_id}</span>')
+            lender_cell = (html.escape(lender_name) if lender_name
+                           else f'<span class="note">lender {lender_id}</span>')
+            p.append(f'<tr><td>{tier_cell}</td><td>{lender_cell}</td>'
+                     f'<td class="n">{reached_n:,}</td><td class="n">{sold_n:,}</td>'
+                     f'<td class="n">{declined_n:,}</td><td class="n">{rate:.1f}%</td>'
+                     f'<td class="n">{money(value)}</td></tr>')
+        note = ('Acceptance is sold over pings that reached that tier: of the times a lead '
+                'got to it, how often it bought. Revenue is the tier list price of the sold '
+                'ones, which is what the lender report charges: measured on 12 Oct 2026 the '
+                'two agreed to within 0.4%, 14,514 here against 14,454 there, the gap being '
+                'six sold rows that arrived after the report was taken.')
+        if unnamed:
+            note += (f' <strong>{unnamed} of {len(league)} tiers could not be named</strong> '
+                     'from the LenderTiers lookup — an id in the ping log that the lookup '
+                     'does not have is worth raising.')
         p.append(f'</table><p class="note">{note}</p></div>')
     return page("Ping log", "".join(p))
 

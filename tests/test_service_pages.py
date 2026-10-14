@@ -95,48 +95,74 @@ class AffiliateSections(ServicePage):
 
 
 class PingLogNames(ServicePage):
-    """The ping log returns tier ids; the lender report carries the id
-    and the name together, so the page joins them."""
+    """The ping log returns ids alone; LenderTiers is what names them."""
 
-    def tier_row(self, tier_id, name):
-        return {"id": tier_id, "name": name, "ignored": 0, "processed": 0, "sent": 10,
-                "accepted": 4, "blacklist": 0, "redirect": 0, "conversion_rate": 0.4,
-                "earning_per_lead": 1.0, "extra_income": 0.0, "revenue": 100.0,
-                "commission": 60.0, "profit": 40.0, "blacklist_price": 0.0}
+    def lookup(self, conn, tier_id=10162):
+        store.save_lender_lookup(conn, [{
+            "id": tier_id, "name": "Rapid Tier 1", "lender_id": 12,
+            "lender_name": "Rapid Finance", "code": "RF-T1", "price": 10.0,
+            "is_active": True}], STAMP)
 
-    def pings(self, conn, tier_id):
-        counts = {(12, tier_id, 1): (6, 6, 60.0), (12, tier_id, 2): (4, 4, 0.0)}
+    def pings(self, conn, tier_id=10162):
+        counts = {(12, tier_id, 0): (900, 900, 9000.0),    # filtered, never sent
+                  (12, tier_id, 1): (6, 6, 60.0),
+                  (12, tier_id, 2): (4, 4, 40.0)}
         store.save_lender_results(conn, self.day, counts,
-                                  {"pings": 10, "leads": 8, "applications": 9}, STAMP)
+                                  {"pings": 910, "leads": 8, "applications": 9}, STAMP)
 
-    def test_a_tier_is_named_from_the_lender_report(self):
+    def test_a_tier_and_its_lender_are_named(self):
         conn = self.conn()
-        store.save_tiers(conn, self.day, [self.tier_row(10162, "Rapid Tier 1")],
-                         None, STAMP)
-        self.pings(conn, 10162)
+        self.lookup(conn)
+        self.pings(conn)
 
         html = text(main.pings_page(30))
         self.assertIn("Rapid Tier 1", html)
-        self.assertIn("carries the id and the name together", html)
+        self.assertIn("Rapid Finance", html)
 
-    def test_an_unmatched_id_is_shown_as_an_id_and_called_out(self):
+    def test_an_id_the_lookup_does_not_have_is_called_out(self):
         conn = self.conn()
-        store.save_tiers(conn, self.day, [self.tier_row(999, "Some Other Tier")],
-                         None, STAMP)
-        self.pings(conn, 10162)
+        self.lookup(conn, tier_id=999)
+        self.pings(conn, tier_id=10162)
 
         html = text(main.pings_page(30))
         self.assertIn("tier 10162", html)
-        self.assertIn("No tier name resolved", html)
+        self.assertIn("could not be named", html)
 
-    def test_lender_is_still_an_id_and_the_page_says_so(self):
+    def test_acceptance_is_taken_over_pings_that_reached_a_lender(self):
+        """Measured live 14 Oct 2026: 95% of pings never reach one, so a
+        rate over every ping reads 0.9% where the truth is 20.5%."""
         conn = self.conn()
-        store.save_tiers(conn, self.day, [self.tier_row(10162, "Rapid Tier 1")],
-                         None, STAMP)
-        self.pings(conn, 10162)
+        self.lookup(conn)
+        self.pings(conn)
 
         html = text(main.pings_page(30))
-        self.assertIn("nothing collected here carries lender names", html)
+        self.assertIn("60.0% of those that reached", html)      # 6 of 10
+        self.assertIn('<td class="n">60.0%</td>', html)         # the tier's own rate
+        # 6 of 910 is the wrong rate; it appears only as a share of all
+        # pings in the status table, never as an acceptance rate.
+        self.assertNotIn("0.7% of those that reached", html)
+
+    def test_lenders_per_application_counts_only_those_reached(self):
+        conn = self.conn()
+        self.lookup(conn)
+        self.pings(conn)
+
+        html = text(main.pings_page(30))
+        self.assertIn("Lenders reached per application", html)
+        self.assertIn('<td class="n">1.11</td>', html)           # 10 reached / 9 apps
+        self.assertNotIn('<td class="n">101.11</td>', html)      # 910 pings / 9 apps
+
+    def test_the_price_on_a_filtered_ping_is_not_counted_as_revenue(self):
+        """Cost is the tier's list price, carried whatever the outcome.
+        Only the sold rows are revenue - confirmed live on 12 Oct 2026,
+        where sold list price matched the lender report to within 0.4%."""
+        conn = self.conn()
+        self.lookup(conn)
+        self.pings(conn)
+
+        html = text(main.pings_page(30))
+        self.assertIn("60.00", html)            # the sold ones
+        self.assertNotIn("9,100.00", html)      # every ping's list price
 
 
 if __name__ == "__main__":
