@@ -471,11 +471,12 @@ def explore_run():
          f"{collector.API_BASE}/api/PublicReports/InternalAffiliateLeadCountReport",
          {k: v for k, v in body.items() if k != "ExcludeInternalSources"}),
         # Added to the API 14 Oct 2026: the ping log, one row per lead
-        # and lender with a status. Probed as a GET with the same range
-        # the other report endpoints take, which is a guess at its
-        # shape - the point of a probe. A 404 or 400 here says the route
-        # or the parameters differ, and the recorded shape says what to
-        # collect once it answers.
+        # and lender with a status. Route and method confirmed the same
+        # day without credentials: unauthenticated, this path with the
+        # range parameters answers 401 exactly as the other GET reports
+        # do, while POST to it and the obvious name variants answer 404.
+        # So it is a GET taking the same window. The field names still
+        # need an authenticated call, which is what this probe records.
         ("LenderApplicationResults", "GET",
          f"{collector.API_BASE}/api/PublicReports/LenderApplicationResults?{rng}", None),
     ]

@@ -489,7 +489,33 @@ population where 11% gamble more than a third of their income and 44%
 have three or more dishonours is exactly the population these indicators
 exist to describe.
 
-## 19. What is still missing from the page
+## 19. `LenderApplicationResults`, probed without credentials
+
+Added to the API on 2026-10-14. No credentials were available to call
+it, but routing alone settles two of the three unknowns, because this
+API answers 401 only once a request has matched a route and its
+parameters:
+
+| Call | Status |
+|---|---|
+| `GET LenderApplicationResults?startDate=&endDate=` | **401** |
+| `GET LeadQualityReport?startDate=&endDate=` (known good) | 401 |
+| `GET LenderApplicationResults` (no parameters) | 404 |
+| `GET LeadQualityReport` (no parameters, known good) | 404 |
+| `POST LenderApplicationResults` | 404 |
+| `GET LenderApplicationResultsReport`, `…Result` | 404 |
+
+So it is a **GET taking the same date window as the other report
+endpoints**, not a POST like the affiliate reports, and the name is
+exactly `LenderApplicationResults`. A parameterless call 404s on the
+known-good endpoints too, so that status says nothing about whether a
+route exists — only the parameterised form does.
+
+What is still unknown is the payload: the field names, the grain and
+whether `StatusId` arrives as the integer the dev team described. That
+needs an authenticated call, which is what the API explorer records.
+
+## 20. What is still missing from the page
 
 All of the above is **marginal** — how many applicants look a certain
 way. It does not say which ones are worth having.
