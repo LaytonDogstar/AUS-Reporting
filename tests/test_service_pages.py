@@ -41,7 +41,7 @@ class QualityNotes(ServicePage):
     def setUp(self):
         super().setUp()
         counts = {}
-        for metric, band, order in (("CenterlinkMonthly", "3000+", 4),
+        for metric, band, order in (("WagesAndCentrelinkMonthly", "3000+", 4),
                                     ("HasPrimaryIncomeSource", "False", 0),
                                     ("IsAustralianResident", "None", 0),
                                     ("Age", "<18", 0)):
@@ -52,7 +52,8 @@ class QualityNotes(ServicePage):
     def test_the_centrelink_field_is_shown_under_what_it_holds(self):
         self.assertIn("Wages and Centrelink, monthly", self.html)
         self.assertIn("not Centrelink income", self.html)
-        # and still names the field the API returns, so it can be found
+        # and still names the field the API used to return, so a reader
+        # who knows the old name can find it
         self.assertIn("<code>CenterlinkMonthly</code>", self.html)
 
     def test_the_subset_fields_are_not_offered_as_population_rates(self):

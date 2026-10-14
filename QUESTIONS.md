@@ -69,8 +69,10 @@ exists to compute daily caps and daily email counts and is purged when
 needed; `Offer` is a different scenario, closer to a decline.
 
 **12. API access to `LenderApplicationResults` and `Leads.Id`?**
-**Answered: the `LenderApplicationResults` API is being added 2026-10-14;
-`Leads.Id` on the next deployment.**
+**Answered, and shipped 2026-10-14: the `LenderApplicationResults` API is
+live.** `Leads.Id` follows on the next deployment. The route and payload
+have not been inspected yet — the API explorer probes it and records its
+shape, which is what collection gets written against.
 
 **13. What do the `StatusId` values mean** in `LenderApplicationResults`?
 **Answered:**
@@ -87,9 +89,11 @@ needed; `Offer` is a different scenario, closer to a decline.
 application time**, which is the figure reporting wants. `DateOfBirth`,
 which holds values from 1753 to 2881, is not used.
 
-**15. What is `CenterlinkMonthly`?** **Answered: the name is wrong.** It
-holds wages plus Centrelink and should read `WageAndCentrlinkMonthly`.
-It cannot be set against `CentrelinkAsPercentOfIncome`.
+**15. What is `CenterlinkMonthly`?** **Answered: the name was wrong, and
+was corrected in the API on 2026-10-14.** It holds wages plus Centrelink
+and cannot be set against `CentrelinkAsPercentOfIncome`. The collector
+accepts the old and new spellings and stores both under one metric, so
+the series runs through the rename rather than stopping at it.
 
 **16. `HasPrimaryIncomeSource` is false for 61% of leads.**
 **Answered: the feature was only implemented for leads whose bank

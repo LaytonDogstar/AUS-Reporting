@@ -96,6 +96,74 @@ class AffiliateSources(unittest.TestCase):
         self.assertEqual(store.affiliate_league(self.conn, 30, "external"), [])
 
 
+class RenamedFields(unittest.TestCase):
+    """A renamed payload field is invisible in the data: the field stops
+    appearing and its metric quietly empties. Both spellings count."""
+
+    METRIC = "WagesAndCentrelinkMonthly"
+
+    def bands(self, *items):
+        counts = collector.reduce_quality(list(items))
+        return {band: n for (metric, band, _o, _r), n in counts.items()
+                if metric == self.METRIC}
+
+    def test_the_old_name_still_counts(self):
+        self.assertEqual(self.bands({"CenterlinkMonthly": 2500, "Result": "Sold"}),
+                         {"2000-3000": 1})
+
+    def test_the_new_name_counts(self):
+        self.assertEqual(self.bands({"WagesAndCentrelinkMonthly": 2500, "Result": "Sold"}),
+                         {"2000-3000": 1})
+
+    def test_both_spellings_land_in_one_series(self):
+        self.assertEqual(
+            self.bands({"CenterlinkMonthly": 2500, "Result": "Sold"},
+                       {"WagesAndCentrelinkMonthly": 2500, "Result": "Sold"}),
+            {"2000-3000": 2})
+
+    def test_a_missing_field_counts_as_nothing(self):
+        """Not as unknown: the metric was not reported for that lead."""
+        self.assertEqual(self.bands({"WagesMonthly": 2500, "Result": "Sold"}), {})
+
+    def test_a_categorical_field_is_resolved_the_same_way(self):
+        counts = collector.reduce_quality([{"EmploymentStatus": "FullTime",
+                                            "Result": "Sold"}])
+        self.assertIn(("EmploymentStatus", "FullTime", 0, "Sold"), counts)
+
+
+class MetricRename(unittest.TestCase):
+    """Days collected under the old field name are the same measure."""
+
+    def setUp(self):
+        self.path = str(Path(self.enterContext(tempfile.TemporaryDirectory())) / "q.db")
+        conn = store.connect(self.path)
+        conn.execute("INSERT INTO quality_day VALUES"
+                     " ('2026-10-01','CenterlinkMonthly','2000-3000',3,'Sold',7)")
+        conn.commit()
+        conn.close()
+
+    def test_old_rows_join_the_new_series(self):
+        conn = store.connect(self.path)
+        self.addCleanup(conn.close)
+
+        rows = conn.execute("SELECT metric, n FROM quality_day").fetchall()
+        self.assertEqual(rows, [("WagesAndCentrelinkMonthly", 7)])
+
+    def test_a_day_collected_under_both_names_is_not_doubled(self):
+        conn = store.connect(self.path)
+        conn.execute("INSERT INTO quality_day VALUES"
+                     " ('2026-10-01','CenterlinkMonthly','1000-2000',2,'Sold',5)")
+        conn.commit()
+        conn.close()
+
+        conn = store.connect(self.path)
+        self.addCleanup(conn.close)
+        total = conn.execute("SELECT SUM(n) FROM quality_day WHERE business_date=?"
+                             " AND metric=?", ("2026-10-01",
+                                               "WagesAndCentrelinkMonthly")).fetchone()[0]
+        self.assertEqual(total, 7)              # the new-name rows win
+
+
 class Migration(unittest.TestCase):
     """A database written before the split has no column saying which
     report its rows came from, so those rows are dropped and refetched."""

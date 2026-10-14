@@ -169,6 +169,7 @@ def connect(path: str) -> sqlite3.Connection:
     conn.execute("PRAGMA busy_timeout=30000")
     _migrate_affiliate_source(conn)
     conn.executescript(SCHEMA)
+    _migrate_metric_names(conn)
     return conn
 
 
@@ -193,6 +194,30 @@ def _migrate_affiliate_source(conn):
         if "collection" in have:
             conn.execute("DELETE FROM collection WHERE kind IN ('affiliates',"
                          " 'internal_affiliates')")
+
+
+# Metrics stored under a name the collector no longer uses. The API
+# renamed its misnamed Centrelink field on 14 Oct 2026; days collected
+# before that are the same measure and belong in the same series, so
+# they are renamed in place rather than left as a second metric.
+RENAMED_METRICS = {"CenterlinkMonthly": "WagesAndCentrelinkMonthly"}
+
+
+def _migrate_metric_names(conn):
+    for old, new in RENAMED_METRICS.items():
+        rows = conn.execute("SELECT COUNT(*) FROM quality_day WHERE metric=?",
+                            (old,)).fetchone()[0]
+        if not rows:
+            continue
+        with conn:
+            # A day could hold both names only if it were collected twice
+            # across the rename; the counts are per (day, band, result),
+            # so the old rows are dropped rather than doubled in.
+            conn.execute(
+                "DELETE FROM quality_day WHERE metric=? AND EXISTS ("
+                "  SELECT 1 FROM quality_day AS k WHERE k.metric=?"
+                "    AND k.business_date=quality_day.business_date)", (old, new))
+            conn.execute("UPDATE quality_day SET metric=? WHERE metric=?", (new, old))
 
 
 # ------------------------------------------------------------------ writes

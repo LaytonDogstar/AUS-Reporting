@@ -109,7 +109,7 @@ NUMERIC = {
     "Age": [(None, 18, "<18"), (18, 25, "18-24"), (25, 35, "25-34"), (35, 45, "35-44"),
             (45, 55, "45-54"), (55, 65, "55-64"), (65, None, "65+")],
     "WagesMonthly": _b(1000, 2000, 3000, 4000, 5000, 7500),
-    "CenterlinkMonthly": _b(1, 1000, 2000, 3000),
+    "WagesAndCentrelinkMonthly": _b(1, 1000, 2000, 3000),
     "LoanAmount": _b(1000, 2000, 3000, 5000),
     "GamblingPercentageOfIncome": [(None, 0.0001, "0"), (0.0001, 1, "0-1%"), (1, 5, "1-5%"),
                                    (5, 15, "5-15%"), (15, 30, "15-30%"), (30, None, "30%+")],
@@ -131,6 +131,28 @@ CATEGORICAL = ("EmploymentStatus", "TimeAtEmployer", "HasPrimaryIncomeSource",
                "IsAustralianResident")
 
 RESULT_FIELD = "Result"
+
+# Payload field names a metric may arrive under, newest first. The API
+# renamed the misnamed Centrelink field on 14 Oct 2026 - it holds wages
+# plus Centrelink, not Centrelink alone - and a rename is invisible in
+# the data: the field simply stops appearing and the metric quietly
+# empties. Accepting both spellings means a rename costs nothing, and
+# the stored metric name stays put either way so history stays joined.
+FIELD_ALIASES = {
+    "WagesAndCentrelinkMonthly": ("WagesAndCentrelinkMonthly",
+                                  "WageAndCentrelinkMonthly",
+                                  "WageAndCentrlinkMonthly",
+                                  "CentrelinkMonthly",
+                                  "CenterlinkMonthly"),
+}
+
+
+def field_for(item, metric):
+    """The name this item carries `metric` under, or None if absent."""
+    for name in FIELD_ALIASES.get(metric, (metric,)):
+        if name in item:
+            return name
+    return None
 
 
 def band_of(metric, value):
@@ -155,20 +177,23 @@ def reduce_quality(items):
     cat_values: dict[str, set] = {c: set() for c in CATEGORICAL}
     for it in items:
         for c in CATEGORICAL:
-            cat_values[c].add(str(it.get(c)))
+            field = field_for(it, c)
+            cat_values[c].add(str(it.get(field)) if field else "None")
     too_many = {c for c, vs in cat_values.items() if len(vs) > MAX_CARDINALITY}
 
     for it in items:
         result = "(many)" if cap else str(it.get(RESULT_FIELD) or "unknown")
         for metric in NUMERIC:
-            if metric in it:
-                band, order = band_of(metric, it.get(metric))
+            field = field_for(it, metric)
+            if field:
+                band, order = band_of(metric, it.get(field))
                 key = (metric, band, order, result)
                 counts[key] = counts.get(key, 0) + 1
         for metric in CATEGORICAL:
-            if metric not in it:
+            field = field_for(it, metric)
+            if field is None:
                 continue
-            raw = it.get(metric)
+            raw = it.get(field)
             band = "(high cardinality)" if metric in too_many else str(raw) if raw is not None else "unknown"
             key = (metric, band, 0, result)
             counts[key] = counts.get(key, 0) + 1

@@ -118,7 +118,7 @@ All in the web UI. Nothing to install.
    history resets on each deploy, which costs nothing but a re-run.
 
 Open the URL, enter any username and the `APP_PASSWORD` you set, and
-press **Call all six endpoints**.
+press **Call all seven endpoints**.
 
 ## What the page answers
 

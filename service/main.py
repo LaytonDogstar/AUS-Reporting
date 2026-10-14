@@ -277,15 +277,16 @@ def affiliates_page(days=30):
 # a share here is of the leads where the field was captured at all, which
 # for two of them is a subset of the funnel rather than all of it.
 METRIC_TITLES = {
-    "CenterlinkMonthly": "Wages and Centrelink, monthly",
+    "WagesAndCentrelinkMonthly": "Wages and Centrelink, monthly",
 }
 
 METRIC_NOTES = {
-    "CenterlinkMonthly":
-        "<strong>Despite the name, this is not Centrelink income.</strong> It holds "
-        "wages plus Centrelink — the dev team confirmed the field is misnamed and "
-        "should read <code>WageAndCentrlinkMonthly</code>. Read the bands as total "
-        "monthly income, and do not set them against "
+    "WagesAndCentrelinkMonthly":
+        "<strong>This is not Centrelink income.</strong> It holds wages plus "
+        "Centrelink. The API returned it as <code>CenterlinkMonthly</code> until "
+        "14 Oct 2026, when it was renamed; days collected under either name are the "
+        "same measure and are counted as one series. Read the bands as total monthly "
+        "income, and do not set them against "
         "<code>CentrelinkAsPercentOfIncome</code>.",
     "HasPrimaryIncomeSource":
         "<strong>Not a population rate.</strong> The field is only ever populated for "
@@ -436,7 +437,7 @@ def explore_page():
          '<p class="sub">Calls every endpoint once and records the shape of each response — '
          'field names, types and numbers, with strings reduced to a length. For inspecting the '
          'API, not for collection.</p>', nav("/explore"),
-         '<div class="card"><a class="btn" href="/explore/run">Call all six endpoints</a></div>']
+         '<div class="card"><a class="btn" href="/explore/run">Call all seven endpoints</a></div>']
     if rows:
         p.append(f'<p class="note">Last run {html.escape(latest)} UTC</p><div class="card"><table>'
                  '<tr><th>Endpoint</th><th>Status</th><th class="n">Size</th><th class="n">Time</th></tr>')
@@ -469,6 +470,14 @@ def explore_run():
         ("InternalAffiliateLeadCountReport", "POST",
          f"{collector.API_BASE}/api/PublicReports/InternalAffiliateLeadCountReport",
          {k: v for k, v in body.items() if k != "ExcludeInternalSources"}),
+        # Added to the API 14 Oct 2026: the ping log, one row per lead
+        # and lender with a status. Probed as a GET with the same range
+        # the other report endpoints take, which is a guess at its
+        # shape - the point of a probe. A 404 or 400 here says the route
+        # or the parameters differ, and the recorded shape says what to
+        # collect once it answers.
+        ("LenderApplicationResults", "GET",
+         f"{collector.API_BASE}/api/PublicReports/LenderApplicationResults?{rng}", None),
     ]
     conn = store.connect(DB_PATH)
     stamp = collector.now()

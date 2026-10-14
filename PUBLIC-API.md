@@ -442,10 +442,11 @@ correctly, which suggests different origins.
 `CentrelinkAsPercentOfIncome` and `EmploymentStatus` agree with each
 other well enough to be usable; this does not.
 
-**Answered 2026-10-13.** The name is wrong. The field holds wages plus Centrelink and should
-read `WageAndCentrlinkMonthly`, so it is usable as total monthly income
-and must never be set against `CentrelinkAsPercentOfIncome`. The quality
-page now carries that correction above the bands.
+**Answered 2026-10-13.** The name was wrong. The field holds wages plus Centrelink, so it is
+usable as total monthly income and must never be set against
+`CentrelinkAsPercentOfIncome`. It was renamed in the API on 2026-10-14;
+the collector accepts either spelling and stores both under one metric,
+and the quality page carries the correction above the bands.
 
 ## 17. Two more fields that cannot carry weight
 
