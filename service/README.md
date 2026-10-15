@@ -21,17 +21,17 @@ a page loads: the reports take 15–17 seconds each, so the pages only ever
 read what was already stored.
 
 `/collect` fills in missing days on demand. `/collect?days=90` backfills.
-The five reports take upwards of a minute a day now that the ping log is
-among them, so a 90-day backfill runs for a couple of hours in the
-background and moves a couple of gigabytes.
+Measured 14 Oct 2026: about 25 seconds a day across the seven calls, so
+30 days took 15 minutes and 90 would take about three quarters of an
+hour. The ping log is most of the traffic, at roughly 23 MB a day.
 
 **An empty database rebuilds itself.** On start, if nothing has been
 collected, the service fills its whole history in one unattended pass.
 Nothing stored here is a system of record — the API can regenerate all of
 it — so losing the database should cost time, not data. That makes the
 Railway volume a convenience rather than a requirement: without one a
-redeploy clears the file and the service spends its first couple of
-hours rebuilding, with nobody pressing anything.
+redeploy clears the file and the service spends its first three
+quarters of an hour rebuilding, with nobody pressing anything.
 
 Mount a volume at `/data` to skip that. The service checks for the
 directory and falls back to a local file when it is absent, so there is
@@ -58,7 +58,7 @@ questions, and they survive intact.
 
 ### Collected data
 
-Four kinds, in `store.py`:
+Five kinds and two lookups, in `store.py`:
 
 **Lender tier figures, stored whole.** A tier name with its counts,
 revenue, commission and profit describes a commercial relationship, not a
@@ -91,6 +91,19 @@ Each day is reduced in one pass to counts per lender, tier and status,
 with the distinct applications and leads behind them counted once over
 the whole day, because a lead offered to several lenders would otherwise
 be counted once per ping.
+
+**The two lookups.** `LenderTiers` maps a tier id to its name and
+lender; `Affiliates` maps an affiliate id to its name, group and whether
+the source is internal. Both are snapshots, replaced whole on each
+collection, and both are what put names on the ping log, whose rows
+carry ids alone. `Affiliates` also returns each affiliate's portal
+username and password and its Credfin secret key — none of which is
+read, let alone stored.
+
+**Per affiliate, from the ping log.** The same rows counted a second
+way, by affiliate and status, so what lenders did with a source's leads
+can be set against what that source sent. That is what the scorecard
+ranks on.
 
 Verified by test against a stub returning `Jane Citizen`,
 `jane.citizen@example.com.au`, a GUID and a timestamp on every one of 800

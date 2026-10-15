@@ -253,6 +253,68 @@ class PingLog(unittest.TestCase):
         self.assertIn("/LenderApplicationResults?startDate=", urls["lender_results"])
 
 
+class AffiliateIdentity(unittest.TestCase):
+    """The affiliate reports carry no AffiliateId, but their names end
+    in one - measured 15 Oct 2026, all 116 of them."""
+
+    def test_the_id_is_parsed_out_of_the_report_name(self):
+        self.assertEqual(collector.affiliate_id_from("Borrowly(59)"), 59)
+        self.assertEqual(collector.affiliate_id_from("Simple Finance (195)"), 195)
+        self.assertEqual(collector.affiliate_id_from("FF SEO(194)"), 194)
+
+    def test_a_name_without_one_gives_none_rather_than_guessing(self):
+        self.assertIsNone(collector.affiliate_id_from("Borrowly"))
+        self.assertIsNone(collector.affiliate_id_from(""))
+        self.assertIsNone(collector.affiliate_id_from(None))
+
+    def test_a_number_in_the_middle_is_not_an_id(self):
+        self.assertIsNone(collector.affiliate_id_from("Breezy (115) promo"))
+
+    def test_the_rows_carry_it(self):
+        rows, _ = collector.reduce_affiliates(
+            {"Items": [{"AffiliateName": "Borrowly(59)", "TotalReceived": 10}]})
+        self.assertEqual(rows[0]["affiliate_id"], 59)
+
+    def test_the_lookup_drops_the_credentials_the_endpoint_returns(self):
+        """Affiliates returns each affiliate's portal password and its
+        Credfin secret key. Nothing can store what is not read."""
+        rows = collector.reduce_affiliate_lookup([{
+            "Id": 59, "Name": "Borrowly", "GroupName": "Leadbrain",
+            "IsInternalSource": False, "IsActive": True, "IsDeleted": False,
+            "CommissionType": "Percentage", "CommissionValue": "80.00%",
+            "Username": "borrowly", "Password": "hunter2",
+            "CredfinSecretKey": "sk-live-xyz", "CredfinIdentifier": "cid-9"}])
+
+        self.assertEqual(set(rows[0]), {"id", "name", "group_name", "is_internal",
+                                        "is_active", "commission_type",
+                                        "commission_value"})
+        for secret in ("hunter2", "sk-live-xyz", "cid-9", "borrowly"):
+            self.assertNotIn(secret, repr(rows), secret)
+
+    def test_a_deleted_affiliate_is_not_active(self):
+        rows = collector.reduce_affiliate_lookup(
+            [{"Id": 1, "Name": "Gone", "IsActive": True, "IsDeleted": True}])
+        self.assertFalse(rows[0]["is_active"])
+
+    def test_pings_are_also_counted_per_affiliate(self):
+        counts = collector.reduce_affiliate_results([
+            {"AffiliateId": 59, "StatusId": 1, "Cost": 40.0, "LeadApplicationId": "a"},
+            {"AffiliateId": 59, "StatusId": 1, "Cost": 40.0, "LeadApplicationId": "a"},
+            {"AffiliateId": 59, "StatusId": 0, "Cost": 10.0, "LeadApplicationId": "b"},
+            {"AffiliateId": 12, "StatusId": 1, "Cost": 15.0, "LeadApplicationId": "c"}])
+
+        self.assertEqual(counts[(59, 1)], (2, 1, 80.0))   # 2 pings, 1 application
+        self.assertEqual(counts[(59, 0)], (1, 1, 10.0))
+        self.assertEqual(counts[(12, 1)], (1, 1, 15.0))
+
+    def test_no_identifier_survives_the_per_affiliate_reduction(self):
+        counts = collector.reduce_affiliate_results(
+            [{"AffiliateId": 59, "StatusId": 1, "Cost": 1.0,
+              "LeadApplicationId": "app-1", "LeadId": "lead-1"}])
+        self.assertNotIn("app-1", repr(counts))
+        self.assertNotIn("lead-1", repr(counts))
+
+
 class Migration(unittest.TestCase):
     """A database written before the split has no column saying which
     report its rows came from, so those rows are dropped and refetched."""

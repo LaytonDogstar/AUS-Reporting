@@ -654,7 +654,45 @@ Monotonic across every band, and a 3.2x spread end to end. That is the
 lead-quality signal the engagement exists to find, and it was invisible
 while the field was collecting nothing.
 
-## 23. What is still missing from the page
+## 23. The `Affiliates` endpoint returns credentials
+
+Measured 2026-10-15. Each of the 119 rows carries, alongside the name
+and settings you would expect:
+
+| Field | What it is |
+|---|---|
+| `Username` | the affiliate's portal login |
+| `Password` | its password |
+| `CredfinSecretKey` | the bank-statement provider's secret key |
+| `CredfinIdentifier` | its account identifier |
+
+These are on a reporting endpoint that any holder of the reporting
+credentials can call. The collector reads none of them —
+`reduce_affiliate_lookup` returns seven fields and the rest never leave
+the function, with a test asserting it — but that is this client being
+careful, not the API being safe. **Worth raising with the dev team:
+credentials do not belong in a reporting payload.**
+
+The same endpoint is where the useful part comes from: `Id`, `Name`,
+`GroupName`, `IsInternalSource` and the commission terms. The internal
+flag confirms what the two affiliate reports mean — the six affiliates
+the internal report returns are exactly the six flagged
+`IsInternalSource`, and they are the Friendly Finance brands, so FF is
+internal traffic.
+
+## 24. The affiliate reports do carry an id after all
+
+Section 13 said the affiliate report returns no `AffiliateId` and that
+the name is the only key. The name **is** the key, but it ends in the
+id: `Borrowly(59)`, `FF SEO(194)`. Measured 2026-10-15, all 116 names
+in the stored month parsed, and every id was present in the
+`Affiliates` lookup.
+
+That is what lets affiliate money join the ping log, where the affiliate
+is an id and nothing else — and so what makes a per-affiliate quality
+score possible at all.
+
+## 25. What is still missing from the page
 
 All of the above is **marginal** — how many applicants look a certain
 way. It does not say which ones are worth having.

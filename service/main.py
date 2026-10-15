@@ -92,9 +92,10 @@ def page(title, body):
 
 
 def nav(active=""):
-    items = [("/", "Overview"), ("/affiliates", "Affiliates"),
-             ("/quality", "Lead quality"), ("/pings", "Ping log"),
-             ("/verify", "Window check"), ("/explore", "API explorer")]
+    items = [("/", "Overview"), ("/scorecard", "Scorecard"),
+             ("/affiliates", "Affiliates"), ("/quality", "Lead quality"),
+             ("/pings", "Ping log"), ("/verify", "Window check"),
+             ("/explore", "API explorer")]
     return ('<p class="note">' + " &middot; ".join(
         f"<strong>{t}</strong>" if h == active else f'<a href="{h}">{t}</a>'
         for h, t in items) + "</p>")
@@ -300,6 +301,75 @@ METRIC_NOTES = {
         "values from 1753 to 2881 and cannot be calculated from. The "
         "<code>&lt;18</code> band is test data, not real applicants.",
 }
+
+
+def scorecard_page(days=30):
+    """What a lead from each source is worth, rather than how many.
+
+    Ranked on profit per lead. Volume says who is big; profit per lead
+    says who is worth having, and the two disagree often enough that
+    the ranking is the point.
+    """
+    conn = store.connect(DB_PATH)
+    rows = store.scorecard(conn, days)
+    conn.close()
+
+    p = [f"<h1>Affiliate scorecard</h1>",
+         f'<p class="sub">Last {days} days, Sydney dates. Ranked by profit per lead — '
+         'what a lead from that source is worth, not how many it sends.</p>',
+         nav("/scorecard")]
+    if not rows:
+        p.append('<p class="note">Nothing collected yet.</p>')
+        return page("Affiliate scorecard", "".join(p))
+
+    leads = sum(r["leads"] for r in rows)
+    profit = sum(r["profit"] for r in rows)
+    average = profit / leads if leads else 0
+    internal = [r for r in rows if r["source"] == "internal"]
+    p.append('<div class="card"><table>'
+             f'<tr><td>Affiliates</td><td class="n">{len(rows)}</td></tr>'
+             f'<tr><td>Leads</td><td class="n">{leads:,}</td></tr>'
+             f'<tr><td>Profit</td><td class="n">{money(profit)}</td></tr>'
+             f'<tr><td>Profit per lead, overall</td><td class="n">{average:,.2f}</td></tr>'
+             '</table><p class="note">Internal and external sources are both here and are '
+             'marked, but they are separate populations: their lead counts cannot be added '
+             'into one figure, and the overall profit per lead above is a weighted average '
+             'rather than a target.</p></div>')
+
+    best = max(r["profit_per_lead"] for r in rows) or 1
+    p.append('<h2>By affiliate</h2><div class="card"><table>'
+             '<tr><th>Affiliate</th><th class="n">Leads</th><th class="n">Sold</th>'
+             '<th class="n">Acceptance</th><th class="n">Rev / lead</th>'
+             '<th class="n">Profit / lead</th><th class="n">Profit</th><th></th></tr>')
+    for r in rows:
+        tag = ' <span class="note">internal</span>' if r["source"] == "internal" else ""
+        acceptance = (f'{100 * r["acceptance"]:.1f}%' if r["acceptance"] is not None
+                      else '<span class="note">—</span>')
+        ppl = r["profit_per_lead"]
+        width = int(90 * ppl / best) if ppl > 0 else 0
+        cls = ' class="bad"' if ppl < 0 else ""
+        p.append(f'<tr><td>{html.escape(r["name"] or "—")}{tag}</td>'
+                 f'<td class="n">{r["leads"]:,}</td>'
+                 f'<td class="n">{100 * r["sold_rate"]:.1f}%</td>'
+                 f'<td class="n">{acceptance}</td>'
+                 f'<td class="n">{r["revenue_per_lead"]:,.2f}</td>'
+                 f'<td class="n"{cls}>{ppl:,.2f}</td>'
+                 f'<td class="n">{money(r["profit"])}</td>'
+                 f'<td><span class="bar" style="width:{width}px"></span></td></tr>')
+    p.append('</table><p class="note"><strong>Sold</strong> is of the leads that affiliate '
+             'sent. <strong>Acceptance</strong> is from the ping log: of the times one of '
+             'its leads reached a lender, how often the lender bought — so a source can '
+             'send few leads and still be the one lenders want. A dash means the ping log '
+             'has no rows for that affiliate in this window.</p></div>')
+
+    p.append('<h2>How to read this</h2><div class="card"><p class="note">'
+             'Profit per lead is revenue minus commission, divided by leads received. '
+             'Commission is money paid away to the affiliate, so this is what the business '
+             'keeps per lead it is sent — the figure to rank on. Revenue per lead flatters '
+             'sources on high commission; volume flatters nobody. Bank statement cost is in '
+             'the affiliate report but not in its profit column, so profit here is before '
+             'that cost.</p></div>')
+    return page("Affiliate scorecard", "".join(p))
 
 
 def pings_page(days=30):
@@ -687,6 +757,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, overview())
             if path == "/affiliates":
                 return self._send(200, affiliates_page(days))
+            if path == "/scorecard":
+                return self._send(200, scorecard_page(days))
             if path == "/pings":
                 return self._send(200, pings_page(days))
             if path == "/quality":

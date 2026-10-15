@@ -133,6 +133,7 @@ CREATE TABLE IF NOT EXISTS affiliate_day (
     redirect INTEGER, funded INTEGER,
     revenue REAL, commission REAL, bs_cost REAL, final_commission REAL,
     profit REAL, final_profit REAL, volume_comparison_pct REAL,
+    affiliate_id INTEGER,
     collected_at TEXT NOT NULL,
     PRIMARY KEY (business_date, source, affiliate_name)
 );
@@ -180,6 +181,37 @@ CREATE TABLE IF NOT EXISTS lender_result_day_meta (
     collected_at TEXT NOT NULL
 );
 
+-- The affiliate lookup, from Affiliates. A snapshot, replaced whole.
+-- That endpoint also returns each affiliate's portal username and
+-- password and its Credfin secret key. None of those is read, let alone
+-- stored: see reduce_affiliate_lookup, and the note in PUBLIC-API.md.
+CREATE TABLE IF NOT EXISTS affiliate (
+    affiliate_id INTEGER PRIMARY KEY,
+    name TEXT,
+    group_name TEXT,
+    is_internal INTEGER,
+    is_active INTEGER,
+    commission_type TEXT,
+    commission_value TEXT,
+    collected_at TEXT NOT NULL
+);
+
+-- The ping log aggregated the other way: per affiliate and status, so
+-- "what happens to this source's leads once they reach a lender" is
+-- answerable. Separate from lender_result_day because crossing the two
+-- would multiply 110 affiliates by 56 tiers for no gain.
+CREATE TABLE IF NOT EXISTS affiliate_result_day (
+    business_date TEXT NOT NULL,
+    affiliate_id INTEGER NOT NULL,
+    status_id INTEGER NOT NULL,
+    pings INTEGER NOT NULL,
+    applications INTEGER NOT NULL,
+    cost REAL,
+    collected_at TEXT NOT NULL,
+    PRIMARY KEY (business_date, affiliate_id, status_id)
+);
+CREATE INDEX IF NOT EXISTS ard_date ON affiliate_result_day(business_date);
+
 -- The tier lookup, from LenderTiers. A snapshot, replaced whole on each
 -- collection: it is what puts names on the ping log, whose rows carry
 -- ids alone. The endpoint also returns a lender contact email, a logo
@@ -215,7 +247,18 @@ def connect(path: str) -> sqlite3.Connection:
     _migrate_affiliate_source(conn)
     conn.executescript(SCHEMA)
     _migrate_metric_names(conn)
+    _migrate_affiliate_id(conn)
     return conn
+
+
+def _migrate_affiliate_id(conn):
+    """Add affiliate_day.affiliate_id to a database written before the
+    id was parsed out of the report's name. Older rows keep a null and
+    the next collection of that day fills it."""
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(affiliate_day)")}
+    if "affiliate_id" not in columns:
+        with conn:
+            conn.execute("ALTER TABLE affiliate_day ADD COLUMN affiliate_id INTEGER")
 
 
 def _migrate_affiliate_source(conn):
@@ -314,10 +357,10 @@ def save_affiliates(conn, business_date, source, rows, totals, collected_at):
                      (business_date, source))
         conn.executemany(
             "INSERT INTO affiliate_day (business_date, source, affiliate_name, received, accepted_tc, bs_refreshed, duplicate, bs_extracted, submitted, sold, decline, redirect, funded, revenue, commission, bs_cost, final_commission, profit, final_profit,"
-            " volume_comparison_pct, collected_at)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " volume_comparison_pct, affiliate_id, collected_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             [(business_date, source, r["name"], r["received"], r["accepted_tc"], r["bs_refreshed"], r["duplicate"], r["bs_extracted"], r["submitted"], r["sold"], r["decline"], r["redirect"], r["funded"], r["revenue"], r["commission"], r["bs_cost"], r["final_commission"], r["profit"], r["final_profit"],
-              r["volume_comparison_pct"], collected_at) for r in rows])
+              r["volume_comparison_pct"], r.get("affiliate_id"), collected_at) for r in rows])
         if totals:
             conn.execute(
                 "INSERT OR REPLACE INTO affiliate_totals_day (business_date, source, received, accepted_tc, bs_refreshed, duplicate, bs_extracted, submitted, sold, decline, redirect, funded, revenue, commission, bs_cost, final_commission, profit, final_profit,"
@@ -339,6 +382,68 @@ def save_lender_results(conn, business_date, counts, meta, collected_at):
             "INSERT OR REPLACE INTO lender_result_day_meta (business_date, pings, leads,"
             " applications, collected_at) VALUES (?,?,?,?,?)",
             (business_date, meta["pings"], meta["leads"], meta["applications"], collected_at))
+
+
+def save_affiliate_lookup(conn, rows, collected_at):
+    """The affiliate lookup, replaced whole."""
+    with conn:
+        conn.execute("DELETE FROM affiliate")
+        conn.executemany(
+            "INSERT INTO affiliate (affiliate_id, name, group_name, is_internal,"
+            " is_active, commission_type, commission_value, collected_at)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            [(r["id"], r["name"], r["group_name"], 1 if r["is_internal"] else 0,
+              1 if r["is_active"] else 0, r["commission_type"], r["commission_value"],
+              collected_at) for r in rows])
+
+
+def save_affiliate_results(conn, business_date, counts, collected_at):
+    """counts: {(affiliate_id, status_id): (pings, applications, cost)}"""
+    with conn:
+        conn.execute("DELETE FROM affiliate_result_day WHERE business_date=?",
+                     (business_date,))
+        conn.executemany(
+            "INSERT INTO affiliate_result_day (business_date, affiliate_id, status_id,"
+            " pings, applications, cost, collected_at) VALUES (?,?,?,?,?,?,?)",
+            [(business_date, affiliate, status, pings, apps, cost, collected_at)
+             for (affiliate, status), (pings, apps, cost) in sorted(counts.items())])
+
+
+def scorecard(conn, days=30, limit=80):
+    """One row per affiliate: what it sends, what it earns, what it is worth.
+
+    The affiliate reports are keyed by name and the ping log by id, so
+    the id parsed out of the report name is what joins them. Volume and
+    money come from the reports; reach and acceptance from the ping log.
+    """
+    cutoff = business_cutoff(days)
+    rows = conn.execute(
+        "SELECT a.affiliate_id, a.affiliate_name, a.source,"
+        " SUM(a.received) leads, SUM(a.sold) sold, SUM(a.revenue) revenue,"
+        " SUM(a.commission) commission, SUM(a.bs_cost) bs_cost, SUM(a.profit) profit"
+        " FROM affiliate_day a WHERE a.business_date >= ?"
+        " GROUP BY a.affiliate_id, a.affiliate_name, a.source HAVING leads > 0",
+        (cutoff,)).fetchall()
+    pings = {r[0]: r[1:] for r in conn.execute(
+        "SELECT affiliate_id,"
+        " SUM(CASE WHEN status_id IN (1,2,3) THEN pings ELSE 0 END) reached,"
+        " SUM(CASE WHEN status_id=1 THEN pings ELSE 0 END) ping_sold"
+        " FROM affiliate_result_day WHERE business_date >= ? GROUP BY affiliate_id",
+        (cutoff,))}
+    out = []
+    for aid, name, source, leads, sold, revenue, commission, bs_cost, profit in rows:
+        reached, ping_sold = pings.get(aid, (0, 0))
+        out.append({
+            "id": aid, "name": name, "source": source, "leads": leads, "sold": sold,
+            "sold_rate": (sold / leads) if leads else 0,
+            "revenue": revenue or 0, "commission": commission or 0,
+            "bs_cost": bs_cost or 0, "profit": profit or 0,
+            "revenue_per_lead": (revenue or 0) / leads if leads else 0,
+            "profit_per_lead": (profit or 0) / leads if leads else 0,
+            "reached": reached, "acceptance": (ping_sold / reached) if reached else None,
+        })
+    out.sort(key=lambda r: -r["profit_per_lead"])
+    return out[:limit]
 
 
 def save_lender_lookup(conn, rows, collected_at):

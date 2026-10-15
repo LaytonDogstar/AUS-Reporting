@@ -154,6 +154,14 @@ plan.
 
 ---
 
+## Raised 2026-10-15, no answer yet
+
+- **`Affiliates` returns each affiliate's portal username and password,
+  and its Credfin secret key and identifier.** It is a reporting
+  endpoint; credentials do not belong in its payload. The collector
+  reads none of them, but that is our restraint rather than the API's.
+  *Not blocking anything — but it should not wait on us.*
+
 ## Still open
 
 - **Which products are in scope** (question 5). Bands are on loan

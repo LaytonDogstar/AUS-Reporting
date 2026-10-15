@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import os
 import ssl
 import threading
@@ -286,6 +287,30 @@ def reduce_lender_results(payload):
     return out, meta
 
 
+def reduce_affiliate_results(items):
+    """The same ping log, counted per affiliate and status instead.
+
+    One pass more over rows already in memory, so the source of a lead
+    can be set against what lenders did with it - which is the whole
+    point of a quality score.
+    """
+    counts: dict[tuple[int, int], list] = {}
+    apps: dict[tuple[int, int], set] = {}
+    for it in items:
+        key = (int(_num(it, "AffiliateId")), int(_num(it, "StatusId")))
+        row = counts.get(key)
+        if row is None:
+            row = counts[key] = [0, 0.0]
+            apps[key] = set()
+        row[0] += 1
+        row[1] += float(_num(it, "Cost") or 0)
+        app = it.get("LeadApplicationId")
+        if app is not None:
+            apps[key].add(app)
+    return {k: (pings, len(apps[k]), round(cost, 2))
+            for k, (pings, cost) in counts.items()}
+
+
 def _num(row, *names, default=0):
     for n in names:
         if n in row and row[n] is not None:
@@ -329,11 +354,43 @@ def reduce_tiers(payload):
     return rows, totals
 
 
+# The affiliate reports return no AffiliateId, but the name they return
+# carries one: "Borrowly(59)". Measured 15 Oct 2026, every one of 116
+# names parsed and every id was in the Affiliates lookup - which is what
+# lets affiliate money join the ping log, where the id is all there is.
+AFFILIATE_ID_IN_NAME = re.compile(r"\((\d+)\)\s*$")
+
+
+def affiliate_id_from(name):
+    m = AFFILIATE_ID_IN_NAME.search(name or "")
+    return int(m.group(1)) if m else None
+
+
+def reduce_affiliate_lookup(payload):
+    """Affiliates in, the id-to-name mapping out.
+
+    **This endpoint returns credentials.** Each row carries the
+    affiliate's portal `Username` and `Password` and its
+    `CredfinSecretKey` and `CredfinIdentifier`. None of them is read
+    here, and nothing downstream can store what this does not return.
+    That the reporting API serves them at all is worth raising.
+    """
+    items = payload if isinstance(payload, list) else (payload.get("Items") or [])
+    return [{"id": int(_num(it, "Id")),
+             "name": it.get("Name"),
+             "group_name": it.get("GroupName"),
+             "is_internal": bool(it.get("IsInternalSource")),
+             "is_active": bool(it.get("IsActive")) and not it.get("IsDeleted"),
+             "commission_type": it.get("CommissionType"),
+             "commission_value": it.get("CommissionValue")} for it in items]
+
+
 def reduce_affiliates(payload):
     """One row per affiliate, plus the report's own totals.
 
-    AffiliateName is a trading name and the only identifier returned -
-    the API gives no AffiliateId - so the name is the key.
+    AffiliateName is a trading name and the only identifier returned,
+    so the name is the key - but it ends in the affiliate's id, which
+    is parsed out so the ping log can be joined.
     """
     def row(src, name=None):
         return {
@@ -357,7 +414,12 @@ def reduce_affiliates(payload):
             "volume_comparison_pct": _num(src, "VolumeComparisonPercentage"),
         }
     items = payload.get("Items") or []
-    rows = [row(it, it.get("AffiliateName")) for it in items]
+    rows = []
+    for it in items:
+        name = it.get("AffiliateName")
+        r = row(it, name)
+        r["affiliate_id"] = affiliate_id_from(name)
+        rows.append(r)
     return rows, row(payload)
 
 
@@ -368,7 +430,7 @@ def reduce_affiliates(payload):
 # that FF and non-FF affiliates can no longer be combined into a single
 # affiliate lead count.
 KINDS = ("tiers", "quality", "affiliates", "internal_affiliates",
-         "lender_results", "lender_lookup")
+         "lender_results", "lender_lookup", "affiliate_lookup")
 
 
 def _store_tiers(conn, iso, payload, ms, stamp):
@@ -399,10 +461,19 @@ def _store_internal_affiliates(conn, iso, payload, ms, stamp):
 def _store_lender_results(conn, iso, payload, ms, stamp):
     data = json.loads(payload.decode("utf-8", "replace"))
     counts, meta = reduce_lender_results(data)
-    del data                                    # rows do not outlive this call
+    items = data if isinstance(data, list) else (data.get("Items") or [])
+    by_affiliate = reduce_affiliate_results(items)
+    del data, items                             # rows do not outlive this call
     store.save_lender_results(conn, iso, counts, meta, stamp)
+    store.save_affiliate_results(conn, iso, by_affiliate, stamp)
     return (f"{meta['pings']:,} ping(s) -> {len(counts)} count(s), "
             f"{meta['applications']:,} application(s)")
+
+
+def _store_affiliate_lookup(conn, iso, payload, ms, stamp):
+    rows = reduce_affiliate_lookup(json.loads(payload.decode("utf-8", "replace")))
+    store.save_affiliate_lookup(conn, rows, stamp)
+    return f"{len(rows)} affiliate(s)"
 
 
 def _store_lender_lookup(conn, iso, payload, ms, stamp):
@@ -447,6 +518,10 @@ def _requests(day: date):
         # re-read with each day rather than cached and aged.
         ("lender_lookup", "GET", f"{API_BASE}/api/PublicReports/LenderTiers",
          None, _store_lender_lookup),
+        # The other lookup: affiliate id to name, group, and whether the
+        # source is internal. Two seconds, same as the tier one.
+        ("affiliate_lookup", "GET", f"{API_BASE}/api/PublicReports/Affiliates",
+         None, _store_affiliate_lookup),
     ]
 
 
@@ -543,7 +618,7 @@ def reset(conn):
         for table in ("lender_tier_day", "totals_day", "quality_day",
                       "quality_day_meta", "affiliate_day", "affiliate_totals_day",
                       "lender_result_day", "lender_result_day_meta",
-                      "collection"):
+                      "affiliate_result_day", "collection"):
             conn.execute(f"DELETE FROM {table}")
 
 

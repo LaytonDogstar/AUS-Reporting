@@ -165,5 +165,60 @@ class PingLogNames(ServicePage):
         self.assertNotIn("9,100.00", html)      # every ping's list price
 
 
+class Scorecard(ServicePage):
+    """Ranked on profit per lead, which is what a lead is worth."""
+
+    def affiliate(self, name, aid, source, leads, sold, revenue, commission):
+        return {"name": name, "affiliate_id": aid, "received": leads, "accepted_tc": 0,
+                "bs_refreshed": 0, "duplicate": 0, "bs_extracted": 0, "submitted": leads,
+                "sold": sold, "decline": leads - sold, "redirect": 0, "funded": 0,
+                "revenue": revenue, "commission": commission, "bs_cost": 0.0,
+                "final_commission": commission, "profit": revenue - commission,
+                "final_profit": revenue - commission, "volume_comparison_pct": 0.0}
+
+    def setUp(self):
+        super().setUp()
+        conn = self.conn()
+        # Big sends little back; small sends more per lead.
+        big = self.affiliate("Big Volume(1)", 1, "external", 1000, 100, 2000.0, 1800.0)
+        small = self.affiliate("Small Quality(2)", 2, "external", 100, 40, 900.0, 400.0)
+        store.save_affiliates(conn, self.day, "external", [big, small], None, STAMP)
+        store.save_affiliate_results(conn, self.day, {
+            (1, 1): (100, 100, 2000.0), (1, 2): (900, 900, 0.0),   # 10% acceptance
+            (2, 1): (40, 40, 900.0), (2, 2): (40, 40, 0.0),        # 50% acceptance
+        }, STAMP)
+        self.html = text(main.scorecard_page(30))
+
+    def test_the_better_lead_outranks_the_bigger_sender(self):
+        self.assertLess(self.html.index("Small Quality"), self.html.index("Big Volume"))
+
+    def test_profit_per_lead_is_revenue_less_commission_over_leads(self):
+        self.assertIn("5.00", self.html)        # (900 - 400) / 100
+        self.assertIn("0.20", self.html)        # (2000 - 1800) / 1000
+
+    def test_acceptance_comes_from_the_ping_log(self):
+        self.assertIn("50.0%", self.html)       # 40 sold of 80 that reached
+        self.assertIn("10.0%", self.html)       # 100 of 1000
+
+    def test_an_affiliate_with_no_pings_shows_a_dash_not_a_zero(self):
+        conn = self.conn()
+        store.save_affiliates(conn, self.day, "external",
+                              [self.affiliate("Quiet(3)", 3, "external", 50, 5,
+                                              100.0, 40.0)], None, STAMP)
+        html = text(main.scorecard_page(30))
+        row = html[html.index("Quiet"):]
+        self.assertIn("—", row[:400])
+
+    def test_internal_sources_are_marked_rather_than_merged(self):
+        conn = self.conn()
+        store.save_affiliates(conn, self.day, "internal",
+                              [self.affiliate("FF SEO(194)", 194, "internal", 200, 100,
+                                              1000.0, 0.0)], None, STAMP)
+        html = text(main.scorecard_page(30))
+        self.assertIn("FF SEO", html)
+        self.assertIn("internal", html)
+        self.assertIn("separate populations", html)
+
+
 if __name__ == "__main__":
     unittest.main()
