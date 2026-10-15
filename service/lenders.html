@@ -134,6 +134,15 @@
   <footer id="foot"></footer>
 </div>
 
+<dialog id="chartPop" aria-labelledby="popTitle">
+  <div class="pop-head">
+    <h2 id="popTitle"></h2>
+    <button class="ghost" id="popClose" type="button">Close</button>
+  </div>
+  <p id="popSub"></p>
+  <svg id="popChart" role="img" aria-label="Expanded trend"></svg>
+</dialog>
+
 <div id="tip" role="status" aria-live="polite"></div>
 
 <script>
@@ -184,7 +193,13 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     ["redirect_rate", "det_red", "cap_red"],
   ];
 
-  function sparkline(points, flagged) {
+  // Every sparkline takes an `expand` description and opens into the
+  // pop-up with the full chart: axis, earlier level, values on hover. A
+  // sparkline alone shows direction, not size, and a reader who sees a
+  // red dot needs the numbers behind it. Required, so a new sparkline
+  // cannot be added without one.
+  function sparkline(points, flagged, expand) {
+    if (!expand || !expand.title) throw new Error("sparkline needs an expand description");
     const W = 72, H = 26, pad = 3;
     const vals = points.map((p) => p[1]).filter((v) => v != null);
     const svg = document.createElementNS(SVGNS, "svg");
@@ -201,6 +216,15 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     while (li >= 0 && points[li][1] == null) li--;
     if (li >= 0) el("circle", { cx: x(li), cy: y(points[li][1]), r: 3.5,
                                 fill: flagged ? "var(--critical)" : "var(--series-1)" }, svg);
+    svg.classList.add("spark");
+    svg.setAttribute("role", "button");
+    svg.setAttribute("tabindex", "0");
+    svg.setAttribute("aria-label", "Expand " + expand.title);
+    const open = (evt) => { evt.stopPropagation(); hideTip(); openChart(expand); };
+    svg.addEventListener("click", open);
+    svg.addEventListener("keydown", (evt) => {
+      if (evt.key === "Enter" || evt.key === " ") { evt.preventDefault(); open(evt); }
+    });
     return svg;
   }
 
@@ -261,7 +285,9 @@ const DATA = /*__DASHBOARD_DATA__*/null;
         }
         const line = document.createElement("td");
         line.className = "line";
-        line.appendChild(sparkline(m.points, m.flag));
+        line.appendChild(sparkline(m.points, m.flag, {
+          title: r.name + " · " + MEASURE_LABELS[key], points: m.points, baseline: m.baseline,
+          current: m.current, change: m.change, flagged: m.flag, show: rate }));
         const val = document.createElement("td");
         val.className = "num watch-val"; val.textContent = m.current == null ? "—" : rate(m.current);
         const chg = document.createElement("td");
@@ -295,9 +321,9 @@ const DATA = /*__DASHBOARD_DATA__*/null;
 
   // One chart per rate, each on its own axis. The earlier weeks' level
   // is a solid hairline, so a fall below it reads without a second series.
-  function drawDetailChart(svg, points, baseline, flagged) {
+  function drawDetailChart(svg, points, baseline, show, flagged, H = 190) {
     svg.innerHTML = "";
-    const W = svg.clientWidth || 300, H = 190;
+    const W = svg.clientWidth || 300;
     svg.setAttribute("height", H);
     const m = { t: 12, r: 12, b: 24, l: 52 };
     const iw = W - m.l - m.r, ih = H - m.t - m.b;
@@ -313,7 +339,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
       const v = (max / 4) * i, yy = y(v);
       el("line", { x1: m.l, x2: m.l + iw, y1: yy, y2: yy, class: "gridline" }, svg);
       const t = el("text", { x: m.l - 6, y: yy + 4, class: "tick", "text-anchor": "end" }, svg);
-      t.textContent = rate(v);
+      t.textContent = show(v);
     }
     [0, points.length - 1].forEach((i) => {
       const t = el("text", { x: x(i), y: H - 6, class: "tick",
@@ -324,7 +350,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
       el("line", { x1: m.l, x2: m.l + iw, y1: y(baseline), y2: y(baseline),
                    stroke: "var(--baseline)", "stroke-width": 1.5 }, svg);
       const bt = el("text", { x: m.l + 4, y: y(baseline) - 5, class: "tick" }, svg);
-      bt.textContent = "earlier " + rate(baseline);
+      bt.textContent = "earlier " + show(baseline);
     }
     let d = "";
     points.forEach(([, v], i) => { if (v != null) d += (d ? "L" : "M") + x(i) + "," + y(v); });
@@ -344,7 +370,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
       const i = Math.max(0, Math.min(last, Math.round(((e.clientX - box.left - m.l) / iw) * last)));
       cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("opacity", 1);
       const [day, v] = points[i];
-      showTip(e, `<b>Seven days to ${day}</b><div class="row"><span>Rate</span><span>${rate(v)}</span></div>`);
+      showTip(e, `<b>Seven days to ${day}</b><div class="row"><span>Rate</span><span>${show(v)}</span></div>`);
     });
     hit.addEventListener("mouseleave", () => { cross.setAttribute("opacity", 0); hideTip(); });
   }
@@ -367,7 +393,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
         continue;
       }
       $(capId).textContent = m.current == null ? "" : "· latest week " + rate(m.current);
-      drawDetailChart(svg, m.points, m.baseline, m.flag);
+      drawDetailChart(svg, m.points, m.baseline, rate, m.flag);
     }
     const share = (a, b) => (b ? rate(a / b) : "—");
     $("tierTable").querySelector("tbody").innerHTML = r.tiers.map((t) => `
@@ -461,6 +487,33 @@ const DATA = /*__DASHBOARD_DATA__*/null;
         <td class="num">${r.shareSold == null ? "—" : rate(r.shareSold)}</td></tr>`).join("");
   }
 
+  const MEASURE_LABELS = { filter_pass: "Passed filters", acceptance: "Accepted",
+                           redirect_rate: "Redirected" };
+
+  // ---- sparkline pop-up ---------------------------------------------
+  const pop = $("chartPop");
+  let popChart = null;
+  function drawPop() {
+    if (!popChart) return;
+    const e = popChart;
+    drawDetailChart($("popChart"), e.points, e.baseline, e.show, e.flagged, 360);
+  }
+  function openChart(e) {
+    popChart = e;
+    $("popTitle").textContent = e.title;
+    const cur = e.current == null ? "—" : e.show(e.current);
+    const base = e.baseline == null ? "—" : e.show(e.baseline);
+    const chg = e.change == null ? "" : ` (${e.change > 0 ? "+" : ""}${Math.round(100 * e.change)}%)`;
+    $("popSub").textContent = `Rolling seven days. Latest week ${cur}, earlier weeks ${base}${chg}.` +
+      (e.flagged ? " Flagged as a drop." : "");
+    pop.appendChild(tip);               // the pop-up sits above the page, so its tooltip must too
+    pop.showModal();
+    drawPop();
+  }
+  pop.addEventListener("close", () => { popChart = null; hideTip(); document.body.appendChild(tip); });
+  pop.addEventListener("click", (evt) => { if (evt.target === pop) pop.close(); });
+  $("popClose").addEventListener("click", () => pop.close());
+
   // ---- render ------------------------------------------------------
   function render() {
     const one = byId.get(lender);
@@ -526,7 +579,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
   });
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", syncThemeLabel);
   syncThemeLabel();
-  addEventListener("resize", () => render());
+  addEventListener("resize", () => { render(); drawPop(); });
 
   const gen = new Date(DATA.generatedUtc);
   $("asof").textContent = "Data as at " + gen.toISOString().slice(0, 16).replace("T", " ") +
