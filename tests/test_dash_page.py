@@ -115,3 +115,59 @@ class Render(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTraffic(unittest.TestCase):
+    """DummyJourney sold 111 of 128 leads at zero revenue over thirty
+    days. Counted, it flatters every rate it appears in."""
+
+    def setUp(self):
+        self.path = str(Path(self.enterContext(tempfile.TemporaryDirectory())) / "t.db")
+        self.conn = store.connect(self.path)
+        self.addCleanup(self.conn.close)
+        self.day = store.business_today().isoformat()
+        store.save_affiliates(self.conn, self.day, "external", [
+            affiliate_row("Borrowly(59)", 100, 40),
+            affiliate_row("DummyJourney(144)", 128, 111),
+        ], None, STAMP)
+
+    def test_it_is_left_off_the_dashboard(self):
+        data = dash.payload(self.conn, 30, "external")
+        self.assertEqual([a["Id"] for a in data["affiliates"]], [59])
+        self.assertEqual(sum(r["Applications"] for r in data["applications"]), 100)
+
+    def test_it_is_left_off_the_scorecard_and_the_league(self):
+        names = {r["name"] for r in store.scorecard(self.conn, 30)}
+        self.assertNotIn("DummyJourney(144)", names)
+        league = {r[0] for r in store.affiliate_league(self.conn, 30)}
+        self.assertNotIn("DummyJourney(144)", league)
+
+    def test_it_is_still_collected_so_the_day_reconciles(self):
+        """Excluded from the pages, not from the data: the stored day
+        still matches what the API reported."""
+        total = self.conn.execute(
+            "SELECT SUM(received) FROM affiliate_day WHERE business_date=?",
+            (self.day,)).fetchone()[0]
+        self.assertEqual(total, 228)
+
+
+class BackfilledIds(unittest.TestCase):
+    """A day already collected is never collected again, so rows stored
+    before the id was parsed would keep a null one for good - and the
+    dashboard, which joins on it, would show nothing at all."""
+
+    def test_the_id_is_filled_from_the_name_already_stored(self):
+        path = str(Path(self.enterContext(tempfile.TemporaryDirectory())) / "old.db")
+        conn = store.connect(path)
+        day = store.business_today().isoformat()
+        store.save_affiliates(conn, day, "external",
+                              [affiliate_row("Borrowly(59)", 100, 40)], None, STAMP)
+        conn.execute("UPDATE affiliate_day SET affiliate_id=NULL")   # as if older
+        conn.commit()
+        conn.close()
+
+        conn = store.connect(path)                                   # migration runs
+        self.addCleanup(conn.close)
+        self.assertEqual(conn.execute(
+            "SELECT affiliate_id FROM affiliate_day").fetchone()[0], 59)
+        self.assertEqual(len(dash.payload(conn, 30, "external")["applications"]), 1)

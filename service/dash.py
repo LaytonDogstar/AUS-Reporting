@@ -62,7 +62,7 @@ def payload(conn, days=30, source="external"):
         "SELECT business_date, affiliate_id, affiliate_name, received, accepted_tc,"
         " bs_extracted, submitted, sold, decline FROM affiliate_day"
         " WHERE business_date >= ? AND source = ? AND affiliate_id IS NOT NULL"
-        " AND received > 0", (cutoff, source)).fetchall()
+        " AND received > 0" + store._not_test(), (cutoff, source)).fetchall()
 
     applications, accepts, stage_counts = [], [], []
     for day, aid, _name, received, tc, bs, submitted, sold, decline in rows:

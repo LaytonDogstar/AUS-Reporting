@@ -358,12 +358,8 @@ def reduce_tiers(payload):
 # carries one: "Borrowly(59)". Measured 15 Oct 2026, every one of 116
 # names parsed and every id was in the Affiliates lookup - which is what
 # lets affiliate money join the ping log, where the id is all there is.
-AFFILIATE_ID_IN_NAME = re.compile(r"\((\d+)\)\s*$")
-
-
-def affiliate_id_from(name):
-    m = AFFILIATE_ID_IN_NAME.search(name or "")
-    return int(m.group(1)) if m else None
+# The parser lives in store because the migration there needs it too.
+affiliate_id_from = store.affiliate_id_from
 
 
 def reduce_affiliate_lookup(payload):

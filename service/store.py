@@ -28,6 +28,7 @@ Every rolling window is cut on that date rather than on SQLite's UTC
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
@@ -44,6 +45,25 @@ except Exception:                               # noqa: BLE001 - no tzdata
 # can no longer be combined into one count. Which endpoint holds which
 # population is not confirmed, so they are named after the report.
 SOURCES = ("external", "internal")
+
+# The affiliate reports return no AffiliateId, but the name ends in one:
+# "Borrowly(59)". Lives here rather than in the collector because the
+# migration below needs it too.
+AFFILIATE_ID_IN_NAME = re.compile(r"\((\d+)\)\s*$")
+
+
+def affiliate_id_from(name):
+    m = AFFILIATE_ID_IN_NAME.search(name or "")
+    return int(m.group(1)) if m else None
+
+
+# Test traffic that the reports return alongside real affiliates. It
+# sells at rates real traffic does not - DummyJourney sold 111 of 128
+# leads at zero revenue over 30 days - so it flatters every rate it is
+# counted in. Excluded from the pages, not from collection: the stored
+# days still reconcile against the API's own totals.
+TEST_AFFILIATE_IDS = (13, 144, 145, 162)        # OverflowTest, DummyJourney,
+                                                # DummyImmediate, ClearScore Test
 
 
 def business_today():
@@ -252,13 +272,28 @@ def connect(path: str) -> sqlite3.Connection:
 
 
 def _migrate_affiliate_id(conn):
-    """Add affiliate_day.affiliate_id to a database written before the
-    id was parsed out of the report's name. Older rows keep a null and
-    the next collection of that day fills it."""
+    """Add affiliate_day.affiliate_id, and fill it for rows already
+    stored.
+
+    Filling matters: a day already collected is never collected again,
+    so without this those rows keep a null id for good - and everything
+    that joins on the id, the dashboard included, silently shows
+    nothing. The id is in the name they already carry, so no refetch is
+    needed.
+    """
     columns = {r[1] for r in conn.execute("PRAGMA table_info(affiliate_day)")}
     if "affiliate_id" not in columns:
         with conn:
             conn.execute("ALTER TABLE affiliate_day ADD COLUMN affiliate_id INTEGER")
+    names = [r[0] for r in conn.execute(
+        "SELECT DISTINCT affiliate_name FROM affiliate_day WHERE affiliate_id IS NULL")]
+    filled = [(affiliate_id_from(n), n) for n in names]
+    filled = [(i, n) for i, n in filled if i is not None]
+    if filled:
+        with conn:
+            conn.executemany(
+                "UPDATE affiliate_day SET affiliate_id=? WHERE affiliate_name=?"
+                " AND affiliate_id IS NULL", filled)
 
 
 def _migrate_affiliate_source(conn):
@@ -426,7 +461,7 @@ def scorecard(conn, days=30, limit=80):
         "SELECT MAX(a.affiliate_id), a.affiliate_name, a.source,"
         " SUM(a.received) leads, SUM(a.sold) sold, SUM(a.revenue) revenue,"
         " SUM(a.commission) commission, SUM(a.bs_cost) bs_cost, SUM(a.profit) profit"
-        " FROM affiliate_day a WHERE a.business_date >= ?"
+        " FROM affiliate_day a WHERE a.business_date >= ?" + _not_test("a.affiliate_id") +
         " GROUP BY a.affiliate_name, a.source HAVING leads > 0",
         (cutoff,)).fetchall()
     known = {r[0]: r[1] for r in conn.execute("SELECT affiliate_id, name FROM affiliate")}
@@ -542,13 +577,20 @@ def lender_result_totals(conn, days=30):
         " WHERE business_date >= ?", (business_cutoff(days),)).fetchone()
 
 
+def _not_test(column="affiliate_id"):
+    """SQL excluding test affiliates. A null id is kept: it means the
+    row predates the id being parsed, not that it is test traffic."""
+    ids = ",".join(str(i) for i in TEST_AFFILIATE_IDS)
+    return f" AND ({column} IS NULL OR {column} NOT IN ({ids}))"
+
+
 def affiliate_league(conn, days=30, source="external"):
     return conn.execute(
         "SELECT affiliate_name, SUM(received) r, SUM(accepted_tc) tc, SUM(bs_extracted) bs,"
         " SUM(submitted) sub, SUM(sold) sold, SUM(decline) dec, SUM(revenue) rev,"
         " SUM(commission) com, SUM(bs_cost) bsc, SUM(profit) p FROM affiliate_day"
-        " WHERE business_date >= ? AND source=? GROUP BY affiliate_name"
-        " HAVING r > 0 ORDER BY p DESC LIMIT 60",
+        " WHERE business_date >= ? AND source=?" + _not_test() +
+        " GROUP BY affiliate_name HAVING r > 0 ORDER BY p DESC LIMIT 60",
         (business_cutoff(days), source)).fetchall()
 
 
