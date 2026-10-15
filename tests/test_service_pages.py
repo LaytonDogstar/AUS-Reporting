@@ -183,9 +183,11 @@ class Scorecard(ServicePage):
         big = self.affiliate("Big Volume(1)", 1, "external", 1000, 100, 2000.0, 1800.0)
         small = self.affiliate("Small Quality(2)", 2, "external", 100, 40, 900.0, 400.0)
         store.save_affiliates(conn, self.day, "external", [big, small], None, STAMP)
-        store.save_affiliate_results(conn, self.day, {
-            (1, 1): (100, 100, 2000.0), (1, 2): (900, 900, 0.0),   # 10% acceptance
-            (2, 1): (40, 40, 900.0), (2, 2): (40, 40, 0.0),        # 50% acceptance
+        # Per affiliate and lender, so excluded lenders can be left out.
+        store.save_affiliate_lender_results(conn, self.day, {
+            (1, 10, 1): (100, 2000.0), (1, 10, 2): (900, 0.0),     # 10% acceptance
+            (2, 10, 1): (40, 900.0), (2, 10, 2): (40, 0.0),        # 50% acceptance
+            (2, 22, 1): (500, 5000.0),     # DCS, offline: left out
         }, STAMP)
         self.html = text(main.scorecard_page(30))
 

@@ -70,6 +70,20 @@ TEST_AFFILIATE_IDS = (13, 144, 145, 162)        # OverflowTest, DummyJourney,
 # on the platform. Agreed with Layton 15 Oct 2026 to exclude it.
 TEST_LENDER_IDS = (24,)
 
+# Lenders left out of reporting for now. DCS (22) is an offline lender:
+# not in the lender report, but in the ping log, buying every lead it is
+# offered from internal sources at $10. Layton, 15 Oct 2026: leave out.
+OFFLINE_LENDER_IDS = (22,)
+
+# Everything the lender figures leave out. Collection keeps them all, so
+# the stored days still reconcile against the API.
+EXCLUDED_LENDER_IDS = TEST_LENDER_IDS + OFFLINE_LENDER_IDS
+
+
+def _not_excluded_lender(column="lender_id"):
+    ids = ",".join(str(i) for i in EXCLUDED_LENDER_IDS)
+    return f" AND ({column} IS NULL OR {column} NOT IN ({ids}))"
+
 
 def business_today():
     """Today as the API dates it. The reports run on Sydney time, so a
@@ -670,7 +684,9 @@ def scorecard(conn, days=30, limit=80, metric=QUALITY_METRIC):
         "SELECT affiliate_id,"
         " SUM(CASE WHEN status_id IN (1,2,3) THEN pings ELSE 0 END) reached,"
         " SUM(CASE WHEN status_id=1 THEN pings ELSE 0 END) ping_sold"
-        " FROM affiliate_result_day WHERE business_date >= ? GROUP BY affiliate_id",
+        # Per affiliate and lender, so excluded lenders can be left out.
+        " FROM affiliate_lender_day WHERE business_date >= ?" + _not_excluded_lender() +
+        " GROUP BY affiliate_id",
         (cutoff,))}
     out = []
     for aid, name, source, leads, sold, revenue, commission, bs_cost, profit in rows:
@@ -721,7 +737,7 @@ def lender_result_status(conn, days=30):
     """Pings and cost per status across the window."""
     return conn.execute(
         "SELECT status_id, SUM(pings), SUM(cost) FROM lender_result_day"
-        " WHERE business_date >= ? GROUP BY status_id ORDER BY SUM(pings) DESC",
+        " WHERE business_date >= ?" + _not_excluded_lender() + " GROUP BY status_id ORDER BY SUM(pings) DESC",
         (business_cutoff(days),)).fetchall()
 
 
@@ -750,7 +766,7 @@ def lender_result_league(conn, days=30, limit=40):
         " SUM(CASE WHEN status_id=1 THEN pings ELSE 0 END) sold,"
         " SUM(CASE WHEN status_id=2 THEN pings ELSE 0 END) declined,"
         " SUM(CASE WHEN status_id=1 THEN cost ELSE 0 END) sold_value"
-        " FROM lender_result_day WHERE business_date >= ?"
+        " FROM lender_result_day WHERE business_date >= ?" + _not_excluded_lender() +
         " GROUP BY lender_id, lender_tier_id HAVING reached > 0"
         " ORDER BY reached DESC LIMIT ?", (business_cutoff(days), limit)).fetchall()
 
@@ -762,7 +778,7 @@ def lender_result_reach(conn, days=30):
         " SUM(CASE WHEN status_id IN (1,2,3) THEN pings ELSE 0 END),"
         " SUM(CASE WHEN status_id=1 THEN pings ELSE 0 END),"
         " SUM(CASE WHEN status_id=1 THEN cost ELSE 0 END)"
-        " FROM lender_result_day WHERE business_date >= ?",
+        " FROM lender_result_day WHERE business_date >= ?" + _not_excluded_lender(),
         (business_cutoff(days),)).fetchone()
 
 
@@ -869,8 +885,7 @@ TIER_RESULTS_PASSED = ("Sold", "Decline", "Error")
 
 
 def _not_test_lender(column="t.lender_id"):
-    ids = ",".join(str(i) for i in TEST_LENDER_IDS)
-    return f" AND ({column} IS NULL OR {column} NOT IN ({ids}))"
+    return _not_excluded_lender(column)
 
 
 # A tier missing from the lookup still belongs somewhere: it stands as
@@ -944,17 +959,16 @@ def affiliate_lender_daily(conn, days=30):
 
     Offered is every ping; passed the filters is sold, declined or
     errored - the lender report's `sent`; value is the list price of
-    what sold, which is what the lender paid. Test affiliates and test
-    lenders are left out.
+    what sold, which is what the lender paid. Test affiliates and
+    excluded lenders are left out.
     """
-    ids = ",".join(str(i) for i in TEST_LENDER_IDS)
     return conn.execute(
         "SELECT business_date, affiliate_id, lender_id, SUM(pings),"
         " SUM(CASE WHEN status_id IN (1,2,3) THEN pings ELSE 0 END),"
         " SUM(CASE WHEN status_id=1 THEN pings ELSE 0 END),"
         " SUM(CASE WHEN status_id=1 THEN cost ELSE 0 END)"
         " FROM affiliate_lender_day WHERE business_date >= ?" + _not_test() +
-        f" AND lender_id NOT IN ({ids})"
+        _not_excluded_lender() +
         " GROUP BY business_date, affiliate_id, lender_id",
         (business_cutoff(days),)).fetchall()
 

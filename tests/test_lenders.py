@@ -305,3 +305,30 @@ class WhoBoughtFromWhom(unittest.TestCase):
         self.addCleanup(conn.close)
         self.assertNotIn("2026-10-01", store.collected_days(conn, "lender_results"))
         self.assertIn("2026-10-01", store.collected_days(conn, "tiers"))
+
+
+class OfflineLenders(unittest.TestCase):
+    """DCS is an offline lender. Layton, 15 Oct 2026: leave it out of
+    reporting for now."""
+
+    def setUp(self):
+        self.conn = store.connect(":memory:")
+        self.addCleanup(self.conn.close)
+        store.save_lender_lookup(self.conn, [lookup(1, "Big T1", 10, "Big"),
+                                             lookup(62, "DCS", 22, "DCS")], STAMP)
+
+    def test_it_is_excluded(self):
+        self.assertIn(22, store.EXCLUDED_LENDER_IDS)
+
+    def test_it_is_left_out_of_the_drill_down(self):
+        store.save_affiliate_lender_results(self.conn, day(1), {
+            (194, 22, 1): (135, 1350.0), (194, 10, 1): (5, 250.0)}, STAMP)
+        rows = dash.pair_drilldown(self.conn, 30, "affiliate")["194"]
+        self.assertEqual([r["name"] for r in rows], ["Big"])
+
+    def test_it_is_left_out_of_the_ping_log_figures(self):
+        store.save_lender_results(self.conn, day(1), {
+            (22, 62, 1): (135, 135, 1350.0), (10, 1, 1): (5, 5, 250.0)},
+            {"pings": 140, "leads": 140, "applications": 140}, STAMP)
+        self.assertEqual([r[0] for r in store.lender_result_league(self.conn)], [10])
+        self.assertEqual(store.lender_result_reach(self.conn)[2], 5)

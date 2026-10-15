@@ -32,7 +32,8 @@ pass its filters, how many of those it buys, how many sales reach its
 own page — as rolling seven-day lines, with its tiers beneath, and
 which customers it buys against those it is offered, band by band.
 Lenders are not split by source: the lender report covers every source
-together. The Dummy test lender is left out.
+together. The Dummy test lender and DCS, an offline lender, are left
+out.
 
 The other pages are reached from the links under the tiles:
 `/scorecard` ranks affiliates on profit per lead, `/quality` is the
