@@ -47,6 +47,14 @@
   .split { display: grid; grid-template-columns: 1fr; gap: 0; }
   .neg { color: var(--critical); }
   .pos { color: var(--good); }
+  /* the pop-up: one chart per measure, each against its typical path */
+  .pop-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px 22px; }
+  @media (max-width: 1100px) { .pop-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 680px) { .pop-grid { grid-template-columns: 1fr; } }
+  .pop-grid figure { margin: 0; }
+  .pop-grid figcaption { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap;
+                         font-size: 13.5px; font-weight: 620; margin-bottom: 2px; }
+  .pop-grid figcaption .cap-sub { font-weight: 400; color: var(--ink-2); font-size: 12.5px; }
   a.btnlink { font-size: 13px; color: var(--ink-2); border: 1px solid var(--border); border-radius: 7px;
               padding: 5px 11px; text-decoration: none; background: var(--surface); }
   a.btnlink:hover { color: var(--ink); }
@@ -187,6 +195,7 @@
   </div>
   <p id="popSub"></p>
   <svg id="popChart" role="img" aria-label="Expanded chart"></svg>
+  <div class="pop-grid" id="popGrid"></div>
 </dialog>
 
 <div id="tip" role="status" aria-live="polite"></div>
@@ -360,8 +369,31 @@ const DATA = /*__DASHBOARD_DATA__*/null;
   // ---- pop-up ------------------------------------------------------------
   const pop = $("chartPop");
   let popChart = null;
+  // A pop-up with panels draws one chart per measure; without, the one.
   function drawPop() {
-    if (popChart) drawHourChart($("popChart"), popChart.series, popChart.show, 360);
+    if (!popChart) return;
+    const grid = $("popGrid"), one = $("popChart");
+    if (!popChart.panels) {
+      grid.innerHTML = ""; one.classList.remove("hidden");
+      drawHourChart(one, popChart.series, popChart.show, 360);
+      return;
+    }
+    one.classList.add("hidden"); one.innerHTML = "";
+    grid.innerHTML = "";
+    for (const p of popChart.panels) {
+      const fig = document.createElement("figure");
+      const chg = p.change == null ? "" : ` (${p.change > 0 ? "+" : ""}${Math.round(p.change)}%)`;
+      fig.innerHTML = `<figcaption>${esc(p.name)} <span class="cap-sub">${DayWord.toLowerCase()} ${p.show(p.now)}` +
+        (hasNorm ? ` · typical ${isToday && hNow < 24 && p.cumulative ? "by now " : ""}${p.show(p.typ)}` +
+          `<span class="${p.change != null && p.change <= -10 ? "neg" : p.change != null && p.change >= 10 ? "pos" : ""}">${chg}</span>` : "") +
+        `</span></figcaption>`;
+      const svg = document.createElementNS(SVGNS, "svg");
+      svg.setAttribute("role", "img");
+      svg.setAttribute("aria-label", p.name + " through the day against the typical path");
+      fig.appendChild(svg);
+      grid.appendChild(fig);
+      drawHourChart(svg, p.series, p.show, 220);
+    }
   }
   function openChart(e) {
     popChart = e;
@@ -376,11 +408,49 @@ const DATA = /*__DASHBOARD_DATA__*/null;
   $("popClose").addEventListener("click", () => pop.close());
 
   // An entity's day against its typical path, for a sparkline's pop-up.
-  function pathExpand({ title, day, norm, show, sub }) {
+  // With `panels`, the pop-up shows every measure for it, not just one.
+  function pathExpand({ title, day, norm, show, sub, panels }) {
     const series = [{ name: DayWord, values: day, color: "var(--series-1)" }];
     if (hasNorm) series.push({ name: "Typical", values: norm, color: "var(--muted)", dashed: true });
-    return { title, series, show, sub };
+    return { title, series, show, sub, panels };
   }
+
+  // The measures a pop-up shows for one row, each the day against its
+  // typical path. Counts are cumulative and set against the typical day
+  // by the same time; ratios run through the day and are set against
+  // the typical day's whole-day figure.
+  const MEASURE_SETS = {
+    lender: [["Sales", "sold"], ["Revenue", "value"], ["Sent to it", "reached"],
+             ["Accept %", "sold", "reached"], ["Per sale", "value", "sold"]],
+    affiliate: [["Leads pinged", "leads"], ["Sales", "sold"], ["Revenue", "value"],
+                ["Buy-rate", "soldLeads", "leads"], ["Per sale", "value", "sold"]],
+    total: [["Leads pinged", "leads"], ["Sales", "sold"], ["Revenue", "value"],
+            ["Buy-rate", "soldLeads", "leads"], ["Earnings per sale", "value", "sold"],
+            ["Accept %", "sold", "reached"]],
+  };
+  const SHOW_FOR = { value: money, leads: fmt, sold: fmt, reached: fmt };
+  function panelsFor(b, kind, first) {
+    const out = MEASURE_SETS[kind].map(([name, num, den]) => {
+      if (den) {
+        const show = num === "value" ? money2 : rate;
+        const now = sum(b.day[den]) ? sum(b.day[num]) / sum(b.day[den]) : null;
+        const typ = sum(b.norm[den]) ? sum(b.norm[num]) / sum(b.norm[den]) : null;
+        return panel(name, ratioPath(b.day[num], b.day[den], true), ratioPath(b.norm[num], b.norm[den], false),
+                     show, now, typ, false);
+      }
+      return panel(name, dayPath(b.day[num]), cum(b.norm[num]), SHOW_FOR[num],
+                   sum(b.day[num]), cumAt(b.norm[num], hNow), true);
+    });
+    if (first) out.sort((a, b2) => (b2.name === first) - (a.name === first));
+    return out;
+  }
+  function panel(name, day, norm, show, now, typ, cumulative) {
+    const series = [{ name: DayWord, values: day, color: "var(--series-1)" }];
+    if (hasNorm) series.push({ name: "Typical", values: norm, color: "var(--muted)", dashed: true });
+    return { name, series, show, now, typ, cumulative,
+             change: hasNorm && typ ? (now / typ - 1) * 100 : null };
+  }
+  const panelNote = "Counts run cumulative through the day and are compared with the typical day by the same time; ratios run through the day and are compared with the typical whole-day figure. ";
   const normNote = hasNorm
     ? `Dashed is ${DATA.normLabel}: the average of ${DATA.normDays.length} finished day${DATA.normDays.length > 1 ? "s" : ""} (${DATA.normDays.slice(-1)[0]} to ${DATA.normDays[0]}). Hours are Sydney time.`
     : "No finished days are stored yet to set a typical path against. Hours are Sydney time.";
@@ -459,15 +529,17 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     const countTile = (k, label, show) => {
       const path = dayPath(T.day[k]), norm = cum(T.norm[k]);
       return tile(label, show(D[k]), sub(k, show),
-        sparkline(hourPoints(path), false, pathExpand({ title: `${label}, ${dayWord}`, day: path, norm: norm, show: show,
-          sub: `Cumulative through the day. ${normNote}` })));
+        sparkline(hourPoints(path), false, pathExpand({ title: `${DayWord}, every measure`, day: path, norm: norm, show: show,
+          panels: panelsFor(T, "total", label),
+          sub: panelNote + normNote })));
     };
     const ratioTile = (label, num, den, show, normVal, dayVal) => {
       const path = ratioPath(T.day[num], T.day[den], true), norm = ratioPath(T.norm[num], T.norm[den], false);
       const p = vsPct(dayVal, normVal);
       return tile(label, show(dayVal), hasNorm ? `≈ ${show(normVal)} typical · ${arrow(p)}` : "",
-        sparkline(hourPoints(path), p != null && p <= -10, pathExpand({ title: `${label}, ${dayWord}`, day: path, norm: norm, show: show,
-          sub: `The running figure through the day. A ratio does not depend on the time of day, so it reads fairly against the typical one even mid-day. ${normNote}` })));
+        sparkline(hourPoints(path), p != null && p <= -10, pathExpand({ title: `${DayWord}, every measure`, day: path, norm: norm, show: show,
+          panels: panelsFor(T, "total", label),
+          sub: panelNote + normNote })));
     };
     box.append(
       countTile("leads", "Leads pinged", fmt),
@@ -526,8 +598,9 @@ const DATA = /*__DASHBOARD_DATA__*/null;
         <div class="s">buy-rate <b>${rate(br)}</b> ${hasNorm ? arrow(p, 5) + " vs " + rate(brN) + " typical" : ""}</div>`;
       const path = dayPath(a.day.sold), norm = cum(a.norm.sold);
       div.querySelector(".top").appendChild(sparkline(hourPoints(path), p != null && p <= -15,
-        pathExpand({ title: `${a.name} · sales, ${dayWord}`, day: path, norm: norm, show: fmt,
-          sub: `Cumulative sales through the day. ${normNote}` })));
+        pathExpand({ title: `${a.name}, ${dayWord}`, day: path, norm: norm, show: fmt,
+          panels: panelsFor(a, "affiliate"),
+          sub: panelNote + normNote })));
       box.appendChild(div);
     }
   })();
@@ -554,8 +627,9 @@ const DATA = /*__DASHBOARD_DATA__*/null;
       if (l) {
         const path = dayPath(l.day.sold), norm = cum(l.norm.sold);
         div.querySelector(".sp").appendChild(sparkline(hourPoints(path), m.gap < 0,
-          pathExpand({ title: `${m.name} · sales, ${dayWord}`, day: path, norm: norm, show: fmt,
-          sub: `Cumulative sales through the day; ${fmt(m.expected)} expected from the leads in. The dashed typical path is not scaled to the day's supply. ${normNote}` })));
+          pathExpand({ title: `${m.name}, ${dayWord}`, day: path, norm: norm, show: fmt,
+          panels: panelsFor(l, "lender"),
+          sub: `${fmt(m.sold)} sales against ${fmt(m.expected)} expected from the leads pinged; the dashed paths are its typical day, not scaled to the day's supply. ` + panelNote + normNote })));
       }
       return div;
     };
@@ -651,8 +725,9 @@ const DATA = /*__DASHBOARD_DATA__*/null;
       const path = dayPath(r.l.day.sold), norm = cum(r.l.norm.sold);
       const flagged = r.change != null && r.change <= -25 && cumAt(r.l.norm.sold, hNow) >= 4;
       line.appendChild(sparkline(hourPoints(path), flagged,
-        pathExpand({ title: `${r.name} · sales, ${dayWord}`, day: path, norm: norm, show: fmt,
-          sub: `Cumulative sales through the day. ${normNote}` })));
+        pathExpand({ title: `${r.name}, ${dayWord}`, day: path, norm: norm, show: fmt,
+          panels: panelsFor(r.l, "lender"),
+          sub: panelNote + normNote })));
       const chg = r.change == null ? "" : (flagged ? "▼ " : "") + (r.change > 0 ? "+" : "") + Math.round(r.change) + "%";
       tr.append(name, line);
       const cells = [[fmt(r.sold), "num watch-val"], [chg, "num " + (flagged ? "watch-drop" : "watch-chg")],
