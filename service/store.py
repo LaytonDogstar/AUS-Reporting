@@ -560,6 +560,12 @@ def save_affiliate_results(conn, business_date, counts, collected_at):
 # dishonour fields are not.
 QUALITY_METRIC = "WagesAndCentrelinkMonthly"
 
+# Below this, an affiliate's own sold rate is noise and the index it
+# produces is worse than nothing: one lead that sold reads as 2.62x,
+# which is a number people act on. The expected rate is still shown -
+# that is a property of the mix, not of the sample size.
+MIN_SCORED_LEADS = 100
+
 
 def scorecard(conn, days=30, limit=80, metric=QUALITY_METRIC):
     """One row per affiliate: what it sends, what it earns, what it is worth.
@@ -601,7 +607,8 @@ def scorecard(conn, days=30, limit=80, metric=QUALITY_METRIC):
             # and how its actual sold rate compares. Above 1.00 means it
             # sells better than its leads alone would predict.
             "expected": expected,
-            "quality_index": (sold_rate / expected) if expected else None,
+            "quality_index": ((sold_rate / expected)
+                              if expected and leads >= MIN_SCORED_LEADS else None),
             # The lookup's name where the id resolved, else the report's
             # own, which ends in the id: "Borrowly(59)".
             "id": aid, "name": known.get(aid) or name, "source": source, "leads": leads, "sold": sold,

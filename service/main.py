@@ -411,8 +411,9 @@ def scorecard_page(days=30):
              'rate runs from 15.1% under a dollar to 47.7% above three thousand. '
              '<strong>Sells to</strong> is the actual sold rate over that expectation: above '
              '1.00 means the source sells better than its leads alone predict, below means '
-             'worse. A source can send good leads and sell them badly, and only these two '
-             'columns apart can tell you which.</p></div>')
+             'worse, and it is shown only where a source sent at least 100 leads — below '
+             'that its own sold rate is noise. A source can send good leads and sell them '
+             'badly, and only these two columns apart can tell you which.</p></div>')
     return page("Affiliate scorecard", "".join(p))
 
 

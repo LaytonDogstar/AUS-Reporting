@@ -235,3 +235,36 @@ class Scorecard(ServicePage):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ScoringFloor(ServicePage):
+    """One lead that sold reads as 2.62x, and that is a number people
+    act on."""
+
+    def row(self, name, leads, sold):
+        return {"name": name, "affiliate_id": store.affiliate_id_from(name),
+                "received": leads, "accepted_tc": 0, "bs_refreshed": 0, "duplicate": 0,
+                "bs_extracted": 0, "submitted": leads, "sold": sold,
+                "decline": leads - sold, "redirect": 0, "funded": 0, "revenue": 10.0 * sold,
+                "commission": 0.0, "bs_cost": 0.0, "final_commission": 0.0,
+                "profit": 10.0 * sold, "final_profit": 10.0 * sold,
+                "volume_comparison_pct": 0.0}
+
+    def test_a_tiny_sender_gets_no_index(self):
+        conn = self.conn()
+        store.save_affiliates(conn, self.day, "external",
+                              [self.row("Tiny(1)", 1, 1), self.row("Real(2)", 500, 200)],
+                              None, STAMP)
+        store.save_quality(conn, self.day, {
+            ("WagesAndCentrelinkMonthly", "3000+", 4, "Sold"): 40,
+            ("WagesAndCentrelinkMonthly", "3000+", 4, "Decline"): 60}, 100, STAMP)
+        store.save_quality_by_affiliate(conn, self.day, {
+            (1, "WagesAndCentrelinkMonthly", "3000+", 4, "Sold"): 1,
+            (2, "WagesAndCentrelinkMonthly", "3000+", 4, "Sold"): 200,
+            (2, "WagesAndCentrelinkMonthly", "3000+", 4, "Decline"): 300}, STAMP)
+
+        rows = {r["name"]: r for r in store.scorecard(conn, 30)}
+        self.assertIsNone(rows["Tiny(1)"]["quality_index"])
+        self.assertIsNotNone(rows["Real(2)"]["quality_index"])
+        # the mix is still reported: that does not depend on sample size
+        self.assertIsNotNone(rows["Tiny(1)"]["expected"])
