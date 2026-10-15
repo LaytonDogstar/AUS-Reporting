@@ -209,6 +209,19 @@ class Scorecard(ServicePage):
         row = html[html.index("Quiet"):]
         self.assertIn("—", row[:400])
 
+    def test_days_collected_before_the_id_existed_do_not_split_a_row(self):
+        """A database holding both is the ordinary case mid-backfill:
+        the column is added by migration and older days keep a null."""
+        conn = self.conn()
+        older = self.affiliate("Big Volume(1)", None, "external", 500, 50, 1000.0, 900.0)
+        store.save_affiliates(conn, "2026-10-01", "external", [older], None, STAMP)
+
+        rows = store.scorecard(conn, 30)
+        big = [r for r in rows if "Big Volume" in (r["name"] or "")]
+        self.assertEqual(len(big), 1)           # one affiliate, not two
+        self.assertEqual(big[0]["leads"], 1500)  # and both days counted
+        self.assertEqual(big[0]["id"], 1)        # the id that was found wins
+
     def test_internal_sources_are_marked_rather_than_merged(self):
         conn = self.conn()
         store.save_affiliates(conn, self.day, "internal",

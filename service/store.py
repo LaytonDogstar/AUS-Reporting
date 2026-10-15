@@ -415,15 +415,21 @@ def scorecard(conn, days=30, limit=80):
     The affiliate reports are keyed by name and the ping log by id, so
     the id parsed out of the report name is what joins them. Volume and
     money come from the reports; reach and acceptance from the ping log.
+
+    Grouped by name rather than by id, deliberately. The name is on
+    every row; the id is not, on days collected before it was parsed
+    out. Grouping by id split those affiliates into two rows - one with
+    an id and one without - which is a reporting error, not a gap.
     """
     cutoff = business_cutoff(days)
     rows = conn.execute(
-        "SELECT a.affiliate_id, a.affiliate_name, a.source,"
+        "SELECT MAX(a.affiliate_id), a.affiliate_name, a.source,"
         " SUM(a.received) leads, SUM(a.sold) sold, SUM(a.revenue) revenue,"
         " SUM(a.commission) commission, SUM(a.bs_cost) bs_cost, SUM(a.profit) profit"
         " FROM affiliate_day a WHERE a.business_date >= ?"
-        " GROUP BY a.affiliate_id, a.affiliate_name, a.source HAVING leads > 0",
+        " GROUP BY a.affiliate_name, a.source HAVING leads > 0",
         (cutoff,)).fetchall()
+    known = {r[0]: r[1] for r in conn.execute("SELECT affiliate_id, name FROM affiliate")}
     pings = {r[0]: r[1:] for r in conn.execute(
         "SELECT affiliate_id,"
         " SUM(CASE WHEN status_id IN (1,2,3) THEN pings ELSE 0 END) reached,"
@@ -434,7 +440,9 @@ def scorecard(conn, days=30, limit=80):
     for aid, name, source, leads, sold, revenue, commission, bs_cost, profit in rows:
         reached, ping_sold = pings.get(aid, (0, 0))
         out.append({
-            "id": aid, "name": name, "source": source, "leads": leads, "sold": sold,
+            # The lookup's name where the id resolved, else the report's
+            # own, which ends in the id: "Borrowly(59)".
+            "id": aid, "name": known.get(aid) or name, "source": source, "leads": leads, "sold": sold,
             "sold_rate": (sold / leads) if leads else 0,
             "revenue": revenue or 0, "commission": commission or 0,
             "bs_cost": bs_cost or 0, "profit": profit or 0,
