@@ -35,7 +35,7 @@ def ping(lead, at, affiliate=EXT, lender=LENDER, tier=50, status=1, cost=30.0):
 
 class ReduceHours(unittest.TestCase):
     def setUp(self):
-        self.leads, self.sales, self.as_of = collector.reduce_hours([
+        self.leads, self.sales, self.as_of, self.filtered = collector.reduce_hours([
             ping("L1", "2026-10-15T09:10:00.1", status=0),     # filtered at 9
             ping("L1", "2026-10-15T10:05:00.0", status=1),     # sold at 10
             ping("L1", "2026-10-15T10:06:00.0", tier=51, status=1, cost=0.0),  # and again
@@ -57,6 +57,13 @@ class ReduceHours(unittest.TestCase):
         sold = sum(s for _, s, _ in self.sales.values())
         self.assertEqual((reached, sold), (3, 2))
         self.assertEqual(sum(v for _, _, v in self.sales.values()), 30.0)
+
+    def test_filter_failures_are_counted_per_lender_and_hour(self):
+        self.assertEqual(self.filtered, {(9, EXT, LENDER): 1})
+
+    def test_ignored_pings_are_neither_filtered_nor_reached(self):
+        reached = sum(r for r, _, _ in self.sales.values())
+        self.assertEqual(reached + sum(self.filtered.values()), 4)    # of 5 pings, 1 ignored
 
     def test_as_of_is_the_newest_ping_to_the_minute(self):
         self.assertEqual(self.as_of, "2026-10-15T22:26")
@@ -97,6 +104,20 @@ def seed(conn, day, hour=10, ext=(10, 4, 4, 120.0), ff=(6, 3, 3, 60.0), complete
              (hour, EXT, DUMMY, 99): (9, 9, 0.0),
              (hour, TEST, LENDER, 50): (5, 5, 999.0)}
     store.save_hours(conn, day, leads, sales, day + "T23:59", complete, STAMP)
+
+
+class FilteredMigration(unittest.TestCase):
+    def test_hours_stored_before_filtered_counts_are_dropped_and_refetched(self):
+        tmp = Path(self.enterContext(tempfile.TemporaryDirectory())) / "old.db"
+        conn = store.connect(str(tmp))
+        seed(conn, "2026-10-14")
+        store.mark(conn, "2026-10-14", "lender_results", "ok", "", 1, STAMP)
+        conn.execute("DROP TABLE hour_filtered")
+        conn.commit(); conn.close()
+        conn = store.connect(str(tmp))
+        self.addCleanup(conn.close)
+        self.assertIsNone(store.hour_meta(conn, "2026-10-14"))
+        self.assertEqual(store.collected_days(conn, "lender_results"), set())
 
 
 class Payload(unittest.TestCase):
@@ -153,6 +174,18 @@ class Payload(unittest.TestCase):
         p = dash.today_payload(self.conn, "yesterday", "external")
         self.assertEqual(p["date"], (self.today - dt.timedelta(days=1)).isoformat())
         self.assertTrue(p["meta"]["complete"])
+
+    def test_filter_pass_is_reached_over_reached_plus_filtered(self):
+        day = (self.today - dt.timedelta(days=1)).isoformat()
+        seed(self.conn, day)
+        self.conn.execute("INSERT INTO hour_filtered VALUES (?,?,?,?,?)", (day, 10, EXT, LENDER, 36))
+        self.conn.execute("INSERT INTO hour_filtered VALUES (?,?,?,?,?)", (day, 10, EXT, DUMMY, 99))
+        self.conn.commit()
+        p = dash.today_payload(self.conn, "yesterday", "external")
+        lender = next(r for r in p["lenders"] if r["id"] == LENDER)
+        # 4 reached it, 36 failed its filters: 4 of 40 evaluated passed.
+        self.assertEqual((sum(lender["day"]["reached"]), sum(lender["day"]["offered"])), (4, 40))
+        self.assertEqual(sum(p["total"]["day"]["offered"]), 40)      # the Dummy lender left out
 
     def test_a_lender_buying_twice_its_usual_share_is_a_mover(self):
         p = dash.today_payload(self.conn, "today", "external")

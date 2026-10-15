@@ -707,18 +707,22 @@ def today_payload(conn, which="today", source="external"):
     iso = day.isoformat()
     meta = store.hour_meta(conn, iso)
     norm_days, norm_label = _norm_days(conn, day)
-    leads_rows, sales_rows = store.hour_rows(conn, [iso] + norm_days, source)
+    leads_rows, sales_rows, filtered_rows = store.hour_rows(conn, [iso] + norm_days, source)
 
     tiers = {r[0]: {"tier": r[1], "lender_id": r[2], "lender": r[3]} for r in conn.execute(
         "SELECT lender_tier_id, lender_tier_name, lender_id, lender_name FROM lender_tier")}
     affiliates = {r[0]: r[1] for r in conn.execute("SELECT affiliate_id, name FROM affiliate")}
     internal = store.is_internal_map(conn)
+    lender_names = {t["lender_id"]: (t["lender"] or "").strip() or t["tier"]
+                    for t in tiers.values() if t["lender_id"] is not None}
 
     n_norm = len(norm_days) or 1
 
     def blank():
+        # `offered` is what a lender evaluated: passed its filters
+        # (reached) or failed them. Filter pass is reached / offered.
         return {"leads": _hours(), "soldLeads": _hours(), "sold": _hours(), "value": _hours(),
-                "reached": _hours()}
+                "reached": _hours(), "offered": _hours()}
 
     total = {"day": blank(), "norm": blank()}
     lenders, tier_rows, affs = {}, {}, {}
@@ -744,9 +748,18 @@ def today_payload(conn, which="today", source="external"):
                   bucket(tier_rows, tid, lambda: (info.get("tier") or f"Tier {tid}")),
                   bucket(affs, aid, lambda: affiliates.get(aid) or f"Affiliate {aid}")):
             b[side]["reached"][h] += reached * w
+            b[side]["offered"][h] += reached * w
             b[side]["sold"][h] += sold * w
             b[side]["value"][h] += value * w
         tier_rows[tid]["lender"] = lname
+    for d, h, aid, lid, n in filtered_rows:
+        side = "day" if d == iso else "norm"
+        w = 1 if side == "day" else 1 / n_norm
+        # Lender and affiliate only: the counts are not kept per tier.
+        lname = lender_names.get(lid) or f"Lender {lid}"
+        for b in (total, bucket(lenders, lid, lambda: lname),
+                  bucket(affs, aid, lambda: affiliates.get(aid) or f"Affiliate {aid}")):
+            b[side]["offered"][h] += n * w
 
     def rounded(b):
         return {side: {k: [round(v, 3) for v in arr] for k, arr in b[side].items()}

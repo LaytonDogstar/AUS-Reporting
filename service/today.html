@@ -154,6 +154,7 @@
             <th rowspan="2" data-sort="name">Lender</th>
             <th class="grp" colspan="3">Sales</th>
             <th class="grp" colspan="2">Buy-rate</th>
+            <th rowspan="2" data-sort="filterPass" title="Passed its filters, of the leads it evaluated">Filter pass</th>
             <th rowspan="2" data-sort="accept" title="Bought, of the leads that reached it">Accept %</th>
             <th rowspan="2" data-sort="epl">Per sale</th>
             <th rowspan="2" data-sort="revenue">Revenue</th>
@@ -445,12 +446,14 @@ const DATA = /*__DASHBOARD_DATA__*/null;
   // the typical day's whole-day figure.
   const MEASURE_SETS = {
     lender: [["Sales", "sold"], ["Revenue", "value"], ["Sent to it", "reached"],
-             ["Accept %", "sold", "reached"], ["Per sale", "value", "sold"]],
+             ["Filter pass", "reached", "offered"], ["Accept %", "sold", "reached"],
+             ["Per sale", "value", "sold"]],
     affiliate: [["Leads pinged", "leads"], ["Sales", "sold"], ["Revenue", "value"],
-                ["Buy-rate", "soldLeads", "leads"], ["Per sale", "value", "sold"]],
+                ["Buy-rate", "soldLeads", "leads"], ["Filter pass", "reached", "offered"],
+                ["Per sale", "value", "sold"]],
     total: [["Leads pinged", "leads"], ["Sales", "sold"], ["Revenue", "value"],
             ["Buy-rate", "soldLeads", "leads"], ["Earnings per sale", "value", "sold"],
-            ["Accept %", "sold", "reached"]],
+            ["Filter pass", "reached", "offered"], ["Accept %", "sold", "reached"]],
   };
   const SHOW_FOR = { value: money, leads: fmt, sold: fmt, reached: fmt };
   function panelsFor(b, kind, first) {
@@ -587,6 +590,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     $("tileNote").textContent = "Typical is " + (DATA.normLabel || "not set yet") +
       ". Leads pinged are leads that reached the ping tree, so fewer than the affiliate report's received. " +
       "Sales and revenue are what lenders bought, at the tier's price; a lead can sell to more than one lender, so buy-rate is the share of leads pinged that sold at least once. " +
+      "Filter pass is the share a lender let through its filters of the leads it evaluated; the Lenders page divides by the report's processed count, which also takes in some leads a lender skipped, so it reads a little lower. " +
       "Counts are compared with the typical day by the same time; the two ratios do not depend on the time of day, so they read fairly mid-day.";
   })();
 
@@ -732,6 +736,8 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     return { l, name: l.name, sold: s.sold, revenue: s.value,
              change: expectNow ? vsPct(s.sold, expectNow) : null,
              rate: D.leads ? s.sold / D.leads : null, rateNorm: N.leads ? n.sold / N.leads : null,
+             filterPass: s.offered ? s.reached / s.offered : null,
+             filterPassNorm: n.offered ? n.reached / n.offered : null,
              accept: s.reached ? s.sold / s.reached : null, epl: s.sold ? s.value / s.sold : null };
   });
   function drawBuyers() {
@@ -771,6 +777,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
       tr.append(name, line);
       const cells = [[fmt(r.sold), "num watch-val"], [chg, "num " + (flagged ? "watch-drop" : "watch-chg")],
                      [rate(r.rate), "num"], [rate(r.rateNorm), "num watch-chg"],
+                     [rate(r.filterPass), "num"],
                      [rate(r.accept), "num"], [money2(r.epl), "num"], [money(r.revenue), "num"]];
       for (const [v, cls] of cells) {
         const td = document.createElement("td");

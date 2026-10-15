@@ -194,7 +194,14 @@ for the Today and Yesterday pages: leads by the hour of their first
 ping and affiliate, with how many sold at least once (a lead can sell
 to more than one lender, so sales can outnumber leads), and per hour,
 affiliate and tier what reached a lender, what it bought and what it
-paid. The lead identifier finds the hour of the first ping and is
+paid, and per hour, affiliate and lender how many pings its filters
+turned down - so filter pass, passed over passed plus failed, is
+there by the hour. That is per lender rather than per tier: per tier
+it would be the largest table in the database. It reads a little
+higher than the Lenders page's daily filter pass, which divides by the
+lender report's processed count; for about a third of tiers that also
+counts leads the lender skipped without evaluating, and the ping log
+cannot rebuild it. The lead identifier finds the hour of the first ping and is
 dropped with the rows. `DateCreated` is Sydney local time - the day's
 first ping on 15 Oct 2026 was at 00:00:56. Today is read live and
 replaced on each read; a finished day replaces it and is never

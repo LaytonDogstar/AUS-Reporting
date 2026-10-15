@@ -336,11 +336,12 @@ def reduce_affiliate_lender_results(items):
 def reduce_hours(items):
     """The ping log by the hour, for the Today and Yesterday pages.
 
-    Returns (leads, sales, as_of):
+    Returns (leads, sales, as_of, filtered):
       leads {(hour, affiliate_id): (leads first pinged in that hour,
                                     how many of them sold at least once)}
       sales {(hour, affiliate_id, lender_id, tier_id): (reached, sold, value)}
       as_of  the newest DateCreated seen, to the minute
+      filtered {(hour, affiliate_id, lender_id): pings its filters failed}
 
     DateCreated is Sydney local time - measured 15 Oct 2026, the day's
     first ping is at 00:00:56 - so its hour is the hour on the page. A
@@ -351,6 +352,7 @@ def reduce_hours(items):
     """
     first: dict = {}
     sold_leads: set = set()
+    filtered: dict[tuple[int, int, int], int] = {}
     sales: dict[tuple[int, int, int, int], list] = {}
     as_of = ""
     for it in items:
@@ -367,6 +369,10 @@ def reduce_hours(items):
             if seen is None or created < seen[0]:
                 first[lead] = (created, affiliate)
         status = int(_num(it, "StatusId"))
+        if status == 0:
+            fk = (hour, affiliate, int(_num(it, "LenderId")))
+            filtered[fk] = filtered.get(fk, 0) + 1
+            continue
         if status not in (1, 2, 3):
             continue
         key = (hour, affiliate, int(_num(it, "LenderId")), int(_num(it, "LenderTierId")))
@@ -387,7 +393,7 @@ def reduce_hours(items):
         row[1] += lead in sold_leads
     del first, sold_leads
     leads = {k: tuple(v) for k, v in leads.items()}
-    return leads, {k: tuple(v) for k, v in sales.items()}, as_of[:16]
+    return leads, {k: tuple(v) for k, v in sales.items()}, as_of[:16], filtered
 
 
 # Categorical fields counted per affiliate and per tier as well. The
@@ -596,10 +602,10 @@ def _store_lender_results(conn, iso, payload, ms, stamp):
     items = data if isinstance(data, list) else (data.get("Items") or [])
     by_affiliate = reduce_affiliate_results(items)
     pairs = reduce_affiliate_lender_results(items)
-    leads, sales, as_of = reduce_hours(items)
+    leads, sales, as_of, filtered = reduce_hours(items)
     del data, items                             # rows do not outlive this call
     store.save_lender_results(conn, iso, counts, meta, stamp)
-    store.save_hours(conn, iso, leads, sales, as_of, True, stamp)
+    store.save_hours(conn, iso, leads, sales, as_of, True, stamp, filtered)
     store.save_affiliate_results(conn, iso, by_affiliate, stamp)
     store.save_affiliate_lender_results(conn, iso, pairs, stamp)
     return (f"{meta['pings']:,} ping(s) -> {len(counts)} count(s), "
@@ -887,7 +893,7 @@ def reset(conn):
                       "lender_result_day", "lender_result_day_meta",
                       "affiliate_result_day", "quality_affiliate_day",
                       "quality_tier_day", "affiliate_lender_day", "hour_leads",
-                      "hour_sales", "hour_meta", "live_internal", "collection"):
+                      "hour_sales", "hour_filtered", "hour_meta", "live_internal", "collection"):
             conn.execute(f"DELETE FROM {table}")
 
 
@@ -986,9 +992,9 @@ def collect_live(conn, day: date | None = None):
     if payload is not None:
         data = json.loads(payload.decode("utf-8", "replace"))
         items = data if isinstance(data, list) else (data.get("Items") or [])
-        leads, sales, as_of = reduce_hours(items)
+        leads, sales, as_of, filtered = reduce_hours(items)
         del data, items, payload
-        store.save_hours(conn, iso, leads, sales, as_of, False, stamp)
+        store.save_hours(conn, iso, leads, sales, as_of, False, stamp, filtered)
         out["hours"] = f"as of {as_of[11:16]}"
 
     prev = day - timedelta(days=1)

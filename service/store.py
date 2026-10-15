@@ -351,6 +351,22 @@ CREATE TABLE IF NOT EXISTS hour_sales (
 );
 CREATE INDEX IF NOT EXISTS hs_date ON hour_sales(business_date);
 
+-- Pings a lender's filters turned down, per hour, affiliate and lender:
+-- with what reached it, how many it evaluated, so filter pass is
+-- passed / (passed + failed). Per lender, not per tier - per tier this
+-- would be the biggest table in the database for a question asked
+-- about lenders. Ignored pings, which the lender never evaluated, are
+-- left out.
+CREATE TABLE IF NOT EXISTS hour_filtered (
+    business_date TEXT NOT NULL,
+    hour INTEGER NOT NULL,
+    affiliate_id INTEGER NOT NULL,
+    lender_id INTEGER NOT NULL,
+    filtered INTEGER NOT NULL,
+    PRIMARY KEY (business_date, hour, affiliate_id, lender_id)
+);
+CREATE INDEX IF NOT EXISTS hf_date ON hour_filtered(business_date);
+
 -- When a day's hours were read and how far they reach. `complete` is 1
 -- once the finished day has been collected; until then the rows are the
 -- latest live read, and `as_of` is the newest ping in it.
@@ -391,7 +407,7 @@ def connect(path: str) -> sqlite3.Connection:
     _migrate_affiliate_source(conn)
     _migrate_quality_affiliate_result(conn)
     pairs_new = not _has_table(conn, "affiliate_lender_day")
-    hours_new = _has_table(conn, "lender_result_day") and not _has_table(conn, "hour_sales")
+    hours_new = _has_table(conn, "lender_result_day") and not _has_table(conn, "hour_filtered")
     conn.executescript(SCHEMA)
     if pairs_new:
         _recollect_ping_log(conn)
@@ -400,7 +416,7 @@ def connect(path: str) -> sqlite3.Connection:
     _migrate_affiliate_id(conn)
     _migrate_adword_spent(conn)
     if hours_new:
-        _recollect_ping_log(conn)
+        _recollect_hours(conn)
     return conn
 
 
@@ -416,6 +432,17 @@ def _recollect_ping_log(conn):
     and nothing else, because collection skips what is already done."""
     with conn:
         conn.execute("DELETE FROM collection WHERE kind='lender_results'")
+
+
+def _recollect_hours(conn):
+    """Hours stored before the filtered counts existed have none, and
+    would read as every lead passing every filter - into the typical
+    day, too. So they are dropped, not kept, and the ping log refetched:
+    a day comes back into the norm only with its filtered counts."""
+    with conn:
+        for table in ("hour_leads", "hour_sales", "hour_meta"):
+            conn.execute(f"DELETE FROM {table}")
+    _recollect_ping_log(conn)
 
 
 def _recollect_tier_quality(conn):
@@ -736,11 +763,13 @@ def save_affiliate_results(conn, business_date, counts, collected_at):
              for (affiliate, status), (pings, apps, cost) in sorted(counts.items())])
 
 
-def save_hours(conn, business_date, leads, sales, as_of, complete, collected_at):
+def save_hours(conn, business_date, leads, sales, as_of, complete, collected_at,
+               filtered=None):
     """One day of the ping log by the hour, replaced whole.
 
     leads: {(hour, affiliate_id): (leads, sold_leads)}
     sales: {(hour, affiliate_id, lender_id, tier_id): (reached, sold, value)}
+    filtered: {(hour, affiliate_id, lender_id): pings that failed its filters}
 
     A live read of today is replaced by the next one; a finished day,
     `complete`, by nothing - a live read never overwrites it.
@@ -752,6 +781,11 @@ def save_hours(conn, business_date, leads, sales, as_of, complete, collected_at)
             return False
         conn.execute("DELETE FROM hour_leads WHERE business_date=?", (business_date,))
         conn.execute("DELETE FROM hour_sales WHERE business_date=?", (business_date,))
+        conn.execute("DELETE FROM hour_filtered WHERE business_date=?", (business_date,))
+        conn.executemany(
+            "INSERT INTO hour_filtered (business_date, hour, affiliate_id, lender_id, filtered)"
+            " VALUES (?,?,?,?,?)",
+            [(business_date, h, a, l, n) for (h, a, l), n in sorted((filtered or {}).items())])
         conn.executemany(
             "INSERT INTO hour_leads (business_date, hour, affiliate_id, leads, sold_leads)"
             " VALUES (?,?,?,?,?)",
@@ -823,14 +857,15 @@ def hour_meta(conn, business_date):
 
 
 def hour_rows(conn, dates, source):
-    """(leads rows, sales rows) for the given days and one population,
+    """(leads, sales, filtered rows) for the given days and one population,
     or both (`all`).
 
     leads: (date, hour, affiliate_id, leads, sold_leads)
+    filtered: (date, hour, affiliate_id, lender_id, filtered)
     sales: (date, hour, affiliate_id, lender_id, tier_id, reached, sold, value)
     """
     if not dates:
-        return [], []
+        return [], [], []
     marks = ",".join("?" * len(dates))
     where = _in_source(conn, source)
     leads = conn.execute(
@@ -840,7 +875,10 @@ def hour_rows(conn, dates, source):
         f"SELECT business_date, hour, affiliate_id, lender_id, lender_tier_id, reached,"
         f" sold, value FROM hour_sales WHERE business_date IN ({marks})" + where +
         _not_excluded_lender(), dates).fetchall()
-    return leads, sales
+    filtered = conn.execute(
+        f"SELECT business_date, hour, affiliate_id, lender_id, filtered FROM hour_filtered"
+        f" WHERE business_date IN ({marks})" + where + _not_excluded_lender(), dates).fetchall()
+    return leads, sales, filtered
 
 
 def ff_money(conn, business_date):
