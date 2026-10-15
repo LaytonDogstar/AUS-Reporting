@@ -374,7 +374,7 @@ class CustomerMix(unittest.TestCase):
         data = dash.customer_payload(self.conn, 30)
         high = self.level(data, METRIC, "3000+")
         self.assertAlmostEqual(high["poolShare"], 0.25)
-        cell = high["cells"]["10"]
+        cell = high["cells"]["L10"]
         share = (60 * 7 + 30 * 21) / (100 * 28)
         self.assertAlmostEqual(cell["share"], share)
         self.assertAlmostEqual(cell["index"], 100 * share / 0.25)
@@ -388,7 +388,7 @@ class CustomerMix(unittest.TestCase):
 
     def test_the_trend_is_its_share_over_time_with_shifts_either_way(self):
         data = dash.customer_payload(self.conn, 30)
-        t = data["trends"]["10"][METRIC]
+        t = data["trends"]["L10"][METRIC]
         self.assertAlmostEqual(t["3000+"]["share"][-1], 0.6)
         self.assertEqual(len(t["3000+"]["share"]), len(data["axis"]))
         self.assertEqual(t["3000+"]["shift"], 1)
@@ -398,7 +398,7 @@ class CustomerMix(unittest.TestCase):
     def test_excluded_lenders_and_test_ages_are_left_out(self):
         data = dash.customer_payload(self.conn, 30)
         self.assertEqual([l["name"] for l in data["lenders"]], ["Big"])
-        self.assertNotIn("22", data["trends"])
+        self.assertNotIn("L22", data["trends"])
         age = next(a for a in data["attrs"] if a["key"] == "Age")
         self.assertEqual([l["band"] for l in age["levels"]], ["25-34"])
 
@@ -407,6 +407,15 @@ class CustomerMix(unittest.TestCase):
         self.assertNotIn(dash.PLACEHOLDER, html)
         self.assertNotIn(dash.STYLE_PLACEHOLDER, html)
         self.assertIn('"view":"customers"', html)
+
+    def test_each_tier_with_enough_purchases_has_its_own_profile(self):
+        data = dash.customer_payload(self.conn, 30)
+        big = data["lenders"][0]
+        self.assertEqual(big["key"], "L10")
+        self.assertEqual([(t["key"], t["profiled"]) for t in big["tiers"]], [("T1", True)])
+        self.assertIn("T1", data["trends"])
+        high = self.level(data, METRIC, "3000+")
+        self.assertAlmostEqual(high["cells"]["T1"]["share"], high["cells"]["L10"]["share"], places=4)
 
     def test_employment_status_is_counted_per_tier(self):
         counts = collector.reduce_quality_bands([

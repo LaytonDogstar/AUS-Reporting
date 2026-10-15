@@ -37,6 +37,11 @@
   .chip { border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; font-size: 12px;
           background: var(--page); }
   .chip b { font-weight: 620; }
+  button.chip { font: inherit; font-size: 12px; color: var(--ink); cursor: pointer; text-align: left; }
+  button.chip:hover { border-color: var(--series-1); }
+  button.chip:focus-visible { outline: 2px solid var(--series-1); outline-offset: 1px; }
+  button.chip[aria-pressed="true"] { background: var(--series-1); border-color: var(--series-1); color: #fff; }
+  span.chip { color: var(--muted); }
   .profile { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 26px; align-items: start; }
   @media (max-width: 900px) { .profile { grid-template-columns: 1fr; } }
   .profile table { font-size: 12.5px; margin-bottom: 14px; }
@@ -137,7 +142,13 @@ const DATA = /*__DASHBOARD_DATA__*/null;
   const lenders = DATA.lenders || [];
   const attrs = DATA.attrs || [];
   const axis = DATA.axis || [];
-  const byId = new Map(lenders.map((l) => [String(l.id), l]));
+  // Profiles are keyed "L<lender id>" or "T<tier id>"; a tier knows its lender.
+  const byKey = new Map();
+  for (const l of lenders) {
+    byKey.set(l.key, l);
+    for (const t of l.tiers) byKey.set(t.key, { ...t, lender: l });
+  }
+  const lenderOf = (key) => { const e = byKey.get(key); return e ? (e.lender || e) : null; };
   let show = "share", picked = "";
   const pts = (values) => axis.map((d, i) => [d, values[i] == null ? null : values[i]]);
 
@@ -320,19 +331,19 @@ const DATA = /*__DASHBOARD_DATA__*/null;
       : "Lead quality per lender is still being collected.";
     const head = $("grid").querySelector("thead"), body = $("grid").querySelector("tbody");
     head.innerHTML = `<tr><th>Group</th><th title="Share of every lead received">Pool</th>${lenders.map((l) =>
-      `<th class="lender${String(l.id) === picked ? " sel" : ""}" data-id="${l.id}" tabindex="0"
+      `<th class="lender${picked && lenderOf(picked) === l ? " sel" : ""}" data-id="${l.key}" tabindex="0"
         title="${esc(l.name)}: ${fmt(l.bought)} purchases, ${money(l.revenue)}. Select for its profile.">${esc(l.name)}<span class="n">${fmt(l.bought)}</span></th>`).join("")}</tr>`;
     let h = "";
     for (const a of attrs) {
       h += `<tr class="grp"><td>${esc(a.label)}</td><td colspan="${lenders.length + 1}"></td></tr>`;
       for (const l of a.levels) {
         // near-empty groups add rows, not information
-        if (l.poolShare < 0.005 && !lenders.some((b) => ((l.cells[b.id] || {}).share || 0) >= 0.01)) continue;
+        if (l.poolShare < 0.005 && !lenders.some((b) => ((l.cells[b.key] || {}).share || 0) >= 0.01)) continue;
         const label = bandLabel(l.band, a.money);
         h += `<tr><td class="band">${esc(label)}</td><td class="pool">${pct(l.poolShare)}</td>`;
         for (const b of lenders) {
-          const c = l.cells[b.id];
-          h += `<td class="cell" data-a="${esc(a.key)}" data-b="${esc(l.band)}" data-l="${b.id}"
+          const c = l.cells[b.key];
+          h += `<td class="cell" data-a="${esc(a.key)}" data-b="${esc(l.band)}" data-l="${b.key}"
             style="background:${idxBg(c && c.index)}">${cellText(c, l)}</td>`;
         }
         h += "</tr>";
@@ -348,7 +359,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
       td.addEventListener("mousemove", (evt) => {
         const a = attrs.find((x) => x.key === td.dataset.a);
         const l = a.levels.find((x) => x.band === td.dataset.b);
-        const b = byId.get(td.dataset.l), c = l.cells[td.dataset.l] || { n: 0 };
+        const b = byKey.get(td.dataset.l), c = l.cells[td.dataset.l] || { n: 0 };
         const x = c.index == null ? null : c.index / 100;
         showTip(evt, `<b>${esc(b.name)} · ${esc(a.label)}: ${esc(bandLabel(l.band, a.money))}</b>
           <div class="row"><span>Its purchases in this group</span><span>${fmt(c.n)} · ${pct(c.share)}</span></div>
@@ -362,22 +373,48 @@ const DATA = /*__DASHBOARD_DATA__*/null;
   }
 
   // ---- the profile -------------------------------------------------
-  function openProfile(id) {
+  function openProfile(id, scroll = true) {
     picked = id;
-    $("lenderSel").value = id;
+    const owner = lenderOf(id);
+    $("lenderSel").value = owner ? owner.key : "";
     drawGrid();
     drawProfile();
-    if (id) $("profileCard").scrollIntoView({ behavior: "smooth", block: "start" });
+    if (id && scroll) $("profileCard").scrollIntoView({ behavior: "smooth", block: "start" });
   }
   function drawProfile() {
-    const card = $("profileCard"), b = byId.get(picked);
+    const card = $("profileCard"), b = byKey.get(picked), owner = lenderOf(picked);
     if (!b) { card.classList.add("hidden"); return; }
     card.classList.remove("hidden");
-    $("profileTitle").textContent = `${b.name} · buyer profile`;
+    const isTier = b !== owner;
+    $("profileTitle").textContent = isTier ? `${owner.name} · ${b.name} · buyer profile`
+                                           : `${b.name} · buyer profile`;
     $("profileSub").textContent = `${fmt(b.bought)} purchases · ${money(b.revenue)} revenue · ` +
-      `${b.avgPrice ? "$" + b.avgPrice.toFixed(2) + " average" : "no revenue"} over ${DATA.windowDays} days.`;
-    $("tierChips").innerHTML = b.tiers.slice(0, 10).map((t) =>
-      `<span class="chip"><b>${esc(t.name)}</b> · ${fmt(t.bought)} bought · ${money(t.revenue)}</span>`).join("");
+      `${b.avgPrice ? "$" + b.avgPrice.toFixed(2) + " average" : "no revenue"} over ${DATA.windowDays} days.` +
+      (isTier ? " One tier of " + owner.name + "; select All tiers for the lender as a whole." : "");
+    // Each tier opens its own profile; tiers with too few purchases to
+    // profile are listed but not clickable.
+    const chips = $("tierChips");
+    chips.innerHTML = "";
+    const allChip = document.createElement("button");
+    allChip.type = "button"; allChip.className = "chip";
+    allChip.setAttribute("aria-pressed", String(!isTier));
+    allChip.innerHTML = `<b>All tiers</b> · ${fmt(owner.bought)} bought`;
+    allChip.addEventListener("click", () => openProfile(owner.key, false));
+    chips.appendChild(allChip);
+    for (const t of owner.tiers) {
+      const chip = document.createElement(t.profiled ? "button" : "span");
+      chip.className = "chip";
+      chip.innerHTML = `<b>${esc(t.name)}</b> · ${fmt(t.bought)} bought · ${money(t.revenue)}`;
+      if (t.profiled) {
+        chip.type = "button";
+        chip.setAttribute("aria-pressed", String(t.key === picked));
+        chip.title = "Open this tier's profile";
+        chip.addEventListener("click", () => openProfile(t.key === picked ? owner.key : t.key, false));
+      } else {
+        chip.title = "Fewer than 20 purchases: too few to profile";
+      }
+      chips.appendChild(chip);
+    }
     const grid = $("profile");
     grid.innerHTML = "";
     const mine = (DATA.trends || {})[picked] || {};
@@ -424,7 +461,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
   const sel = $("lenderSel");
   for (const l of lenders) {
     const o = document.createElement("option");
-    o.value = String(l.id); o.textContent = l.name; sel.appendChild(o);
+    o.value = l.key; o.textContent = l.name; sel.appendChild(o);
   }
   sel.addEventListener("change", () => openProfile(sel.value));
   $("showSel").addEventListener("change", (e) => { show = e.target.value; drawGrid(); });

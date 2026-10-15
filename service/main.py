@@ -7,6 +7,7 @@ store.py. This file serves pages and triggers collection.
 from __future__ import annotations
 
 import base64
+import gzip
 import hmac
 import html
 import json
@@ -804,8 +805,17 @@ class Handler(BaseHTTPRequestHandler):
         return hmac.compare_digest(supplied, APP_PASSWORD)
 
     def _send(self, code, body, ctype="text/html; charset=utf-8", headers=None):
+        # The dashboard pages carry their data inline - up to a megabyte
+        # on the Customers page - and it compresses about tenfold.
+        accepts = self.headers.get("Accept-Encoding", "") if self.headers else ""
+        compress = len(body) > 2048 and "gzip" in accepts
+        if compress:
+            body = gzip.compress(body, compresslevel=6)
         self.send_response(code)
         self.send_header("Content-Type", ctype)
+        if compress:
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Vary", "Accept-Encoding")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")

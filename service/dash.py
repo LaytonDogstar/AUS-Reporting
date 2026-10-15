@@ -396,12 +396,15 @@ def customer_payload(conn, days=30):
         m["revenue"] += revenue or 0
         m["accepted"] += accepted or 0
     tiers: dict[int, list] = {}
-    for lid, _tid, tname, _price, _p, _s, accepted, _r, revenue, *_ in store.lender_tier_totals(conn, days):
+    for lid, tid, tname, _price, _p, _s, accepted, _r, revenue, *_ in store.lender_tier_totals(conn, days):
         if accepted:
-            tiers.setdefault(lid, []).append({"name": tname, "bought": accepted, "revenue": revenue or 0})
+            tiers.setdefault(lid, []).append({"key": f"T{tid}", "name": tname, "revenue": revenue or 0,
+                                              "accepted": accepted})
 
+    # Profiles are kept per lender ("L12") and per tier ("T90"): the grid
+    # shows lenders, and a lender's profile can be opened for one tier.
     attrs, trend = [], {}
-    bought_by_lender: dict[int, int] = {}
+    bought_by: dict[str, int] = {}
     for metric, label, is_money in PROFILE:
         pool_daily: dict[str, dict] = {}
         for day_, band, n in conn.execute(
@@ -409,16 +412,17 @@ def customer_payload(conn, days=30):
                 " AND business_date >= ? GROUP BY 1, 2", (metric, cutoff)):
             if (metric, band) not in NOT_CUSTOMERS:
                 pool_daily.setdefault(day_, {})[band] = n or 0
-        rows = [r for r in store.lender_demographics_daily(conn, metric, days)
-                if (metric, r[2]) not in NOT_CUSTOMERS]
+        rows = [r for r in store.tier_demographics_daily(conn, metric, days)
+                if (metric, r[3]) not in NOT_CUSTOMERS]
         if not rows or not pool_daily:
             continue
-        sold: dict[int, dict] = {}
+        sold: dict[str, dict] = {}
         order: dict[str, int] = {}
-        for day_, lid, band, band_order, _offered, n in rows:
+        for day_, lid, tid, band, band_order, _offered, n in rows:
             order[band] = band_order
-            cell = sold.setdefault(lid, {}).setdefault(day_, {})
-            cell[band] = cell.get(band, 0) + (n or 0)
+            for key in (f"L{lid}", f"T{tid}"):
+                cell = sold.setdefault(key, {}).setdefault(day_, {})
+                cell[band] = cell.get(band, 0) + (n or 0)
         pool = {}
         for day_counts in pool_daily.values():
             for band, n in day_counts.items():
@@ -438,42 +442,57 @@ def customer_payload(conn, days=30):
             pool_line = [None if v is None else round(v, 4)
                          for _, v in trends.rolling(pool_series, "p", "P")]
             cells = {}
-            for lid, by_day in sold.items():
+            for key, by_day in sold.items():
                 n = sum(c.get(band, 0) for c in by_day.values())
                 total = sum(sum(c.values()) for c in by_day.values())
                 ps = pool.get(band, 0) / pool_total if pool_total else 0
                 share = n / total if total else 0
-                cells[str(lid)] = {"n": n, "share": share,
-                                   "index": (100 * share / ps) if ps else None,
-                                   "take": n / pool[band] if pool.get(band) else None}
+                cells[key] = {"n": n, "share": round(share, 5),
+                              "index": round(100 * share / ps, 2) if ps else None,
+                              "take": round(n / pool[band], 5) if pool.get(band) else None}
             levels.append({"band": band, "poolShare": pool.get(band, 0) / pool_total if pool_total else 0,
                            "poolN": pool.get(band, 0), "pool": pool_line, "cells": cells})
         attrs.append({"key": metric, "label": label, "money": is_money, "levels": levels})
 
-        for lid, by_day in sold.items():
+        for key, by_day in sold.items():
             total = sum(sum(c.values()) for c in by_day.values())
-            bought_by_lender[lid] = max(bought_by_lender.get(lid, 0), total)
+            bought_by[key] = max(bought_by.get(key, 0), total)
             series_total = [sum(by_day.get(d_, {}).values()) for d_ in axis]
             for band in bands:
                 series = [{"day": d_, "s": by_day.get(d_, {}).get(band, 0), "S": series_total[i]}
                           for i, d_ in enumerate(axis)]
+                if not any(p["s"] for p in series):
+                    continue                # never bought: a flat line at zero says nothing
                 shift = trends.assess_shift(series, "s", "S")
-                trend.setdefault(str(lid), {}).setdefault(metric, {})[band] = {
-                    "share": [None if v is None else round(v, 4)
-                              for _, v in trends.rolling(series, "s", "S")],
-                    "current": shift["current"], "baseline": shift["baseline"],
-                    "change": shift["change"], "shift": shift["shift"]}
+                r4 = lambda v: None if v is None else round(v, 4)
+                trend.setdefault(key, {}).setdefault(metric, {})[band] = {
+                    "share": [r4(v) for _, v in trends.rolling(series, "s", "S")],
+                    "current": r4(shift["current"]), "baseline": r4(shift["baseline"]),
+                    "change": r4(shift["change"]), "shift": shift["shift"]}
 
     lenders = []
-    for lid, bought in bought_by_lender.items():
-        if bought < MIN_PROFILE_PURCHASES:
+    for key, bought in bought_by.items():
+        if not key.startswith("L") or bought < MIN_PROFILE_PURCHASES:
             continue
+        lid = int(key[1:])
         m = money.get(lid, {"name": names.get(lid, f"Lender {lid}"), "revenue": 0.0, "accepted": 0})
-        lenders.append({"id": lid, "name": m["name"], "revenue": m["revenue"], "bought": bought,
+        own_tiers = []
+        for t in sorted(tiers.get(lid, []), key=lambda t: -t["revenue"]):
+            t_bought = bought_by.get(t["key"], 0)
+            own_tiers.append({**t, "bought": t_bought,
+                              "avgPrice": t["revenue"] / t["accepted"] if t["accepted"] else 0,
+                              # too few purchases make a profile of noise
+                              "profiled": t_bought >= MIN_PROFILE_PURCHASES})
+        lenders.append({"id": lid, "key": key, "name": m["name"], "revenue": m["revenue"],
+                        "bought": bought,
                         "avgPrice": (m["revenue"] / m["accepted"]) if m["accepted"] else 0,
-                        "tiers": sorted(tiers.get(lid, []), key=lambda t: -t["revenue"])})
+                        "tiers": own_tiers})
     lenders.sort(key=lambda r: (-r["revenue"], -r["bought"]))
-    shown = {str(l["id"]) for l in lenders}
+    shown = {l["key"] for l in lenders} | {t["key"] for l in lenders for t in l["tiers"]
+                                           if t["profiled"]}
+    for a in attrs:
+        for level in a["levels"]:
+            level["cells"] = {k: v for k, v in level["cells"].items() if k in shown}
     return {
         "view": "customers",
         "generatedUtc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),

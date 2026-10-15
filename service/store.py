@@ -1007,3 +1007,17 @@ def lender_demographics_daily(conn, metric, days=30):
         " WHERE q.metric=? AND q.business_date >= ?" + _not_test_lender() +
         " GROUP BY 1, 2, q.band, q.band_order",
         (metric, business_cutoff(days))).fetchall()
+
+
+def tier_demographics_daily(conn, metric, days=30):
+    """[(day, lender_id, lender_tier_id, band, band_order, offered, sold)]
+    - the same as lender_demographics_daily, kept tier by tier so a
+    lender's profile can be opened for one of its tiers."""
+    return conn.execute(
+        "SELECT q.business_date, COALESCE(t.lender_id, -q.lender_tier_id), q.lender_tier_id,"
+        " q.band, q.band_order, SUM(q.n), SUM(CASE WHEN q.result='Sold' THEN q.n ELSE 0 END)"
+        " FROM quality_tier_day q"
+        " LEFT JOIN lender_tier t ON t.lender_tier_id = q.lender_tier_id"
+        " WHERE q.metric=? AND q.business_date >= ?" + _not_test_lender() +
+        " GROUP BY 1, 2, 3, q.band, q.band_order",
+        (metric, business_cutoff(days))).fetchall()
