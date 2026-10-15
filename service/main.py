@@ -150,15 +150,14 @@ def lenders_page(days=30):
 
 
 def customers_page(days=30):
-    """Per lender, the type of customer it buys and how that is moving:
-    each band's share of its purchases over time, against the band's
-    share of the leads it was offered."""
+    """Buyer profiles: what each lender buys against every lead
+    received, every measure at once, and how its mix is moving."""
     conn = store.connect(DB_PATH)
     try:
         data = dash.customer_payload(conn, days)
     finally:
         conn.close()
-    if not data["metrics"]:
+    if not data["attrs"] or not data["lenders"]:
         return page("Customers", '<h1>Customers</h1>' + nav("/customers") +
                     '<div class="card"><p class="note">Lead quality per lender is still being '
                     'collected. <a href="/collection">See what the collector is doing</a>.'

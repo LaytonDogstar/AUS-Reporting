@@ -270,3 +270,30 @@ class ScoringFloor(ServicePage):
         self.assertIsNotNone(rows["Real(2)"]["quality_index"])
         # the mix is still reported: that does not depend on sample size
         self.assertIsNotNone(rows["Tiny(1)"]["expected"])
+
+
+class CustomersRoute(ServicePage):
+    """The route itself, not just the payload: a field renamed in the
+    payload broke the live page on 15 Oct 2026 while every payload test
+    passed."""
+
+    def test_an_empty_database_says_it_is_still_collecting(self):
+        html = text(main.customers_page(30))
+        self.assertIn("still being", html)
+
+    def test_with_data_it_renders_the_buyer_profiles(self):
+        conn = self.conn()
+        store.save_lender_lookup(conn, [{"id": 1, "name": "Big T1", "lender_id": 10,
+                                         "lender_name": "Big", "code": None, "price": 10.0,
+                                         "is_active": True}], STAMP)
+        store.save_quality(conn, self.day, {
+            ("WagesAndCentrelinkMonthly", "3000+", 4, "Sold"): 50,
+            ("WagesAndCentrelinkMonthly", "<1", 0, "Decline"): 50}, 100, STAMP)
+        store.save_quality_by_tier(conn, self.day, {
+            (1, "WagesAndCentrelinkMonthly", "3000+", 4, "Sold"): 30}, STAMP)
+        html = text(main.customers_page(30))
+        self.assertIn('"view":"customers"', html)
+        self.assertIn("Buyer profiles", html)
+
+    def test_the_lender_page_route_renders_too(self):
+        self.assertIn("Lenders", text(main.lenders_page(30)))
