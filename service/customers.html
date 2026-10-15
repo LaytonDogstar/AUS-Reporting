@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AUS Lead Reporting · Customers</title>
+<style>
+/*__SHARED_STYLE__*/
+  /* customers page additions; the rest is the dashboard's own */
+  .card-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+  .card-head h2 { margin-right: auto; }
+  .smalls { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px 20px; }
+  .smalls figure { margin: 0; min-width: 0; }
+  .smalls figcaption { display: flex; gap: 8px; align-items: baseline; font-size: 13px; margin-bottom: 2px; }
+  .smalls figcaption b { font-weight: 620; }
+  .smalls figcaption .v { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--ink-2); }
+  .shift { font-size: 12px; font-weight: 640; color: var(--ink); white-space: nowrap; }
+  .legend i.line { height: 2px; width: 14px; border-radius: 1px; vertical-align: 3px; }
+  #mixTable td.band { white-space: nowrap; }
+  #mixTable td.band .cell { display: flex; align-items: center; gap: 6px; justify-content: flex-end; }
+  #mixTable td.band svg { width: 64px; height: 24px; display: block; flex: none; }
+  #mixTable td.band .val { font-variant-numeric: tabular-nums; min-width: 44px; text-align: right; }
+  #mixTable td:first-child { min-width: 150px; }
+  #mixTable th, #mixTable td { padding-left: 7px; padding-right: 7px; }
+  #mixTable tbody tr { cursor: pointer; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>AUS Lead Reporting</h1>
+    <span class="asof" id="asof"></span>
+    <span class="spacer"></span>
+    <button class="ghost" id="themeBtn" type="button">Dark mode</button>
+  </header>
+
+  <div class="filters">
+    <nav class="seg" aria-label="Page">
+      <a class="seglink" href="/">Affiliates</a>
+      <a class="seglink" href="/lenders">Lenders</a>
+      <a class="seglink" href="/customers" aria-current="page">Customers</a>
+    </nav>
+    <label class="lbl" for="lenderSel">Lender</label>
+    <select id="lenderSel"><option value="all">All lenders</option></select>
+    <label class="lbl" for="metricSel">Customers by</label>
+    <select id="metricSel"></select>
+    <span class="spacer"></span>
+  </div>
+
+  <section class="card" id="mixCard">
+    <h2 id="mixTitle">Who lenders buy, over time</h2>
+    <p class="sub" id="mixSub"></p>
+    <div class="legend">
+      <span><i class="line" style="background:var(--series-1)"></i>Share of leads bought</span>
+      <span><i class="line" style="background:var(--baseline)"></i>Share of leads offered</span>
+    </div>
+    <div class="smalls" id="smalls"></div>
+    <p class="note">
+      One chart per band, each a rolling seven days. The blue line is the share of this lender&rsquo;s
+      purchases in that band; the grey line is the band&rsquo;s share of the leads it was offered. Blue
+      above grey is a customer the lender favours; blue below grey is one it avoids. <b>&#9650;</b> or
+      <b>&#9660;</b> marks a shift in what it buys: the latest week at least 10% higher or lower than the
+      weeks before, beyond what chance would produce, judged only where the latest week had 50 or more
+      purchases.
+    </p>
+  </section>
+
+  <section class="card" id="tableCard">
+    <h2>Shifts across lenders</h2>
+    <p class="sub" id="tableSub"></p>
+    <div class="scroll">
+    <table id="mixTable" class="trend-table">
+      <thead><tr></tr></thead>
+      <tbody></tbody>
+    </table>
+    </div>
+    <p class="note">
+      Each cell is that band&rsquo;s share of the lender&rsquo;s purchases: the line is the rolling seven
+      days, the figure the latest week. Select a column heading to sort, a sparkline to open it, or a row
+      to chart that lender above.
+    </p>
+  </section>
+
+  <footer id="foot"></footer>
+</div>
+
+<dialog id="chartPop" aria-labelledby="popTitle">
+  <div class="pop-head">
+    <h2 id="popTitle"></h2>
+    <button class="ghost" id="popClose" type="button">Close</button>
+  </div>
+  <p id="popSub"></p>
+  <svg id="popChart" role="img" aria-label="Expanded trend"></svg>
+</dialog>
+
+<div id="tip" role="status" aria-live="polite"></div>
+
+<script>
+const DATA = /*__DASHBOARD_DATA__*/null;
+
+(function () {
+  "use strict";
+  if (!DATA) { document.body.innerHTML = "<p style='padding:2rem'>No data was built into this page.</p>"; return; }
+
+  const $ = (id) => document.getElementById(id);
+  const fmt = (n) => (n == null ? "—" : Math.round(n).toLocaleString("en-AU"));
+  const pct = (v) => (v == null ? "—" : (100 * v).toFixed(1) + "%");
+  const money = (n) => (n == null ? "—" : "$" + Math.round(n).toLocaleString("en-AU"));
+  const esc = (v) => String(v).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  const lenders = DATA.lenders || [];
+  const lenderName = new Map(lenders.map((l) => [String(l.id), l.name]));
+  const metrics = DATA.metrics || [];
+  const axis = DATA.axis || [];
+  let lender = "all";
+  let metric = metrics.length ? metrics[0].key : null;
+  const info = () => metrics.find((m) => m.key === metric);
+  const who = () => (lender === "all" ? "all lenders" : lenderName.get(lender) || "this lender");
+  const pts = (values) => axis.map((d, i) => [d, values[i] == null ? null : values[i]]);
+
+  function bandLabel(band, isMoney) {
+    if (band === "unknown") return "Not known";
+    if (!isMoney) return band;
+    if (band.startsWith("<")) return "under $" + Number(band.slice(1)).toLocaleString("en-AU");
+    if (band.endsWith("+")) return "$" + Number(band.slice(0, -1)).toLocaleString("en-AU") + "+";
+    return band.split("-").map((v) => "$" + Number(v).toLocaleString("en-AU")).join("–");
+  }
+  const arrow = (shift) => (shift > 0 ? "▲" : shift < 0 ? "▼" : "");
+
+  // ---- tooltip -----------------------------------------------------
+  const tip = $("tip");
+  function showTip(evt, html) {
+    tip.innerHTML = html;
+    tip.style.opacity = "1";
+    const pad = 14, r = tip.getBoundingClientRect();
+    let x = evt.clientX + pad, y = evt.clientY + pad;
+    if (x + r.width > innerWidth - 8) x = evt.clientX - r.width - pad;
+    if (y + r.height > innerHeight - 8) y = evt.clientY - r.height - pad;
+    tip.style.left = x + "px"; tip.style.top = y + "px";
+  }
+  const hideTip = () => { tip.style.opacity = "0"; };
+
+  const SVGNS = "http://www.w3.org/2000/svg";
+  function el(name, attrs, parent) {
+    const n = document.createElementNS(SVGNS, name);
+    for (const k in attrs) n.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(n);
+    return n;
+  }
+  function niceTop(v) {
+    const raw = Math.max(v, 0.01) / 4, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    return [1, 2, 2.5, 5, 10].map((f) => f * mag).find((x) => x >= raw) * 4;
+  }
+
+  // ---- sparkline ---------------------------------------------------
+  // Every sparkline takes an `expand` description and opens into the
+  // pop-up with the full chart. Required, so a new sparkline cannot be
+  // added without one. A shift is marked in the accent, not the alert
+  // colour: a change in who a lender buys is neither good nor bad.
+  function sparkline(points, flagged, expand) {
+    if (!expand || !expand.title) throw new Error("sparkline needs an expand description");
+    const W = 64, H = 24, pad = 3;
+    const vals = points.map((p) => p[1]).filter((v) => v != null);
+    const svg = document.createElementNS(SVGNS, "svg");
+    svg.setAttribute("width", W); svg.setAttribute("height", H);
+    if (vals.length >= 2) {
+      const lo = Math.min(...vals), hi = Math.max(...vals), span = hi - lo || hi || 1;
+      const x = (i) => pad + (i / (points.length - 1)) * (W - 2 * pad);
+      const y = (v) => H - pad - ((v - lo) / span) * (H - 2 * pad);
+      let d = "";
+      points.forEach(([, v], i) => { if (v != null) d += (d ? "L" : "M") + x(i) + "," + y(v); });
+      el("path", { d, fill: "none", stroke: "var(--muted)", "stroke-width": 2,
+                   "stroke-linejoin": "round", "stroke-linecap": "round" }, svg);
+      let li = points.length - 1;
+      while (li >= 0 && points[li][1] == null) li--;
+      if (li >= 0) el("circle", { cx: x(li), cy: y(points[li][1]), r: 3.5,
+                                  fill: flagged ? "var(--series-2)" : "var(--series-1)" }, svg);
+    }
+    svg.classList.add("spark");
+    svg.setAttribute("role", "button");
+    svg.setAttribute("tabindex", "0");
+    svg.setAttribute("aria-label", "Expand " + expand.title);
+    const open = (evt) => { evt.stopPropagation(); hideTip(); openChart(expand); };
+    svg.addEventListener("click", open);
+    svg.addEventListener("keydown", (evt) => {
+      if (evt.key === "Enter" || evt.key === " ") { evt.preventDefault(); open(evt); }
+    });
+    return svg;
+  }
+
+  // ---- one band: bought against offered -----------------------------
+  // Two lines on one axis - the same measure, a share, for two
+  // populations - with the bought line in the accent and the offered
+  // line recessive. H is the drawing height.
+  function drawBand(svg, b, H, label) {
+    svg.innerHTML = "";
+    const W = svg.clientWidth || 280;
+    svg.setAttribute("height", H);
+    const m = { t: 8, r: 10, b: 20, l: 42 };
+    const iw = W - m.l - m.r, ih = H - m.t - m.b;
+    const bought = pts(b.bought), offered = pts(b.offered);
+    const vals = [...b.bought, ...b.offered].filter((v) => v != null);
+    if (!vals.length || axis.length < 2) return;
+    const top = niceTop(Math.max(...vals) * 1.08);
+    const x = (i) => m.l + (i / (axis.length - 1)) * iw;
+    const y = (v) => m.t + ih - (v / top) * ih;
+    const ticks = H > 200 ? 4 : 2;
+    for (let i = 0; i <= ticks; i++) {
+      const v = (top / ticks) * i, yy = y(v);
+      el("line", { x1: m.l, x2: m.l + iw, y1: yy, y2: yy, class: "gridline" }, svg);
+      const t = el("text", { x: m.l - 6, y: yy + 4, class: "tick num", "text-anchor": "end" }, svg);
+      t.textContent = (100 * v).toFixed(top < 0.1 ? 1 : 0) + "%";
+    }
+    [0, axis.length - 1].forEach((i) => {
+      const t = el("text", { x: x(i), y: H - 5, class: "tick", "text-anchor": i ? "end" : "start" }, svg);
+      t.textContent = axis[i].slice(8, 10) + "/" + axis[i].slice(5, 7);
+    });
+    const path = (series) => {
+      let d = "";
+      series.forEach(([, v], i) => { if (v != null) d += (d ? "L" : "M") + x(i) + "," + y(v); });
+      return d;
+    };
+    el("path", { d: path(offered), fill: "none", stroke: "var(--baseline)", "stroke-width": 2,
+                 "stroke-linejoin": "round", "stroke-linecap": "round" }, svg);
+    el("path", { d: path(bought), fill: "none", stroke: "var(--series-1)", "stroke-width": 2,
+                 "stroke-linejoin": "round", "stroke-linecap": "round" }, svg);
+    const last = axis.length - 1;
+    if (b.bought[last] != null)
+      el("circle", { cx: x(last), cy: y(b.bought[last]), r: 4,
+                     fill: b.shift ? "var(--series-2)" : "var(--series-1)",
+                     stroke: "var(--surface)", "stroke-width": 2 }, svg);
+    const cross = el("line", { y1: m.t, y2: m.t + ih, stroke: "var(--baseline)", "stroke-width": 1, opacity: 0 }, svg);
+    const dot = el("circle", { r: 4, fill: "var(--series-1)", stroke: "var(--surface)", "stroke-width": 2, opacity: 0 }, svg);
+    const hit = el("rect", { x: m.l, y: m.t, width: iw, height: ih, fill: "transparent" }, svg);
+    hit.addEventListener("mousemove", (evt) => {
+      const box = svg.getBoundingClientRect();
+      const i = Math.max(0, Math.min(last, Math.round(((evt.clientX - box.left - m.l) / iw) * last)));
+      cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("opacity", 1);
+      if (b.bought[i] != null) {
+        dot.setAttribute("cx", x(i)); dot.setAttribute("cy", y(b.bought[i])); dot.setAttribute("opacity", 1);
+      }
+      showTip(evt, `<b>${esc(label)} · seven days to ${axis[i]}</b>
+        <div class="row"><span>Share bought</span><span>${pct(b.bought[i])}</span></div>
+        <div class="row"><span>Share offered</span><span>${pct(b.offered[i])}</span></div>`);
+    });
+    hit.addEventListener("mouseleave", () => { cross.setAttribute("opacity", 0); dot.setAttribute("opacity", 0); hideTip(); });
+  }
+
+  // ---- pop-up ------------------------------------------------------
+  const pop = $("chartPop");
+  let popBand = null;
+  function drawPop() { if (popBand) drawBand($("popChart"), popBand.b, 360, popBand.label); }
+  function openChart(e) {
+    popBand = e;
+    $("popTitle").textContent = e.title;
+    const b = e.b;
+    const chg = b.change == null ? "" : ` (${b.change > 0 ? "+" : ""}${Math.round(100 * b.change)}%)`;
+    $("popSub").textContent = `Share of purchases, rolling seven days. Latest week ${pct(b.current)}, ` +
+      `earlier weeks ${pct(b.baseline)}${chg}.` + (b.shift ? " Flagged as a shift." : "") +
+      " Grey is the band's share of the leads offered.";
+    pop.appendChild(tip);               // the pop-up sits above the page, so its tooltip must too
+    pop.showModal();
+    drawPop();
+  }
+  pop.addEventListener("close", () => { popBand = null; hideTip(); document.body.appendChild(tip); });
+  pop.addEventListener("click", (evt) => { if (evt.target === pop) pop.close(); });
+  $("popClose").addEventListener("click", () => pop.close());
+
+  // ---- small multiples for the selected lender ----------------------
+  function drawSmalls() {
+    const m = info(), grid = $("smalls");
+    grid.innerHTML = "";
+    const mix = m && (DATA.mix[metric] || {})[lender];
+    $("mixTitle").textContent = `Who ${who()} buys, over time`;
+    if (!m || !mix) {
+      $("mixSub").textContent = metrics.length
+        ? `Nothing collected for ${who()} by this measure yet.`
+        : "Still being collected — this fills in as each day's lead quality comes in.";
+      return;
+    }
+    $("mixSub").textContent = `${m.label}: ${fmt(mix.bought)} purchases over ${DATA.windowDays} days.` +
+      (mix.enoughToTrend ? "" : " Too few to read a trend from; treat the lines as indicative.");
+    for (const band of m.bands) {
+      const b = mix.bands[band];
+      if (!b) continue;
+      const label = bandLabel(band, m.money);
+      const fig = document.createElement("figure");
+      const cap = document.createElement("figcaption");
+      cap.innerHTML = `<b>${esc(label)}</b>` +
+        (b.shift ? `<span class="shift">${arrow(b.shift)} ${b.change > 0 ? "+" : ""}${Math.round(100 * b.change)}%</span>` : "") +
+        `<span class="v">${pct(b.current)} bought</span>`;
+      const svg = document.createElementNS(SVGNS, "svg");
+      svg.setAttribute("role", "img");
+      svg.setAttribute("aria-label", `${label}: share bought against share offered`);
+      fig.append(cap, svg);
+      grid.appendChild(fig);
+      drawBand(svg, b, 150, label);
+    }
+  }
+
+  // ---- the table across lenders --------------------------------------
+  let sortKey = "revenue", sortDir = -1;
+  function rowValue(l, key, mixes) {
+    if (key === "name") return l.name.toLowerCase();
+    if (key === "revenue") return l.revenue;
+    const mix = mixes[String(l.id)];
+    if (!mix || !mix.enoughToTrend) return null;
+    const b = mix.bands[key.slice(5)];
+    return b ? b.current : null;
+  }
+  function drawTable() {
+    const m = info(), table = $("mixTable");
+    const head = table.querySelector("thead tr"), body = table.querySelector("tbody");
+    head.innerHTML = ""; body.innerHTML = "";
+    if (!m) { $("tableSub").textContent = "Still being collected."; return; }
+    const mixes = DATA.mix[metric] || {};
+    $("tableSub").textContent = `${m.label}: each band's share of what each lender bought.`;
+    const cols = [["name", "Lender"], ["revenue", "Revenue"],
+                  ...m.bands.map((b) => ["band:" + b, bandLabel(b, m.money)])];
+    for (const [key, text] of cols) {
+      const th = document.createElement("th");
+      th.dataset.sort = key; th.textContent = text; th.tabIndex = 0;
+      if (key === sortKey) th.setAttribute("aria-sort", sortDir < 0 ? "descending" : "ascending");
+      const pick = () => {
+        if (key === sortKey) sortDir = -sortDir;
+        else { sortKey = key; sortDir = key === "name" ? 1 : -1; }
+        drawTable();
+      };
+      th.addEventListener("click", pick);
+      th.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
+      head.appendChild(th);
+    }
+    if (!cols.some(([k]) => k === sortKey)) { sortKey = "revenue"; sortDir = -1; }
+    const rows = lenders.filter((l) => mixes[String(l.id)]);
+    rows.sort((a, b) => {
+      const va = rowValue(a, sortKey, mixes), vb = rowValue(b, sortKey, mixes);
+      if (va == null && vb == null) return b.revenue - a.revenue;
+      if (va == null) return 1;
+      if (vb == null) return -1;
+      if (va < vb) return -sortDir;
+      if (va > vb) return sortDir;
+      return b.revenue - a.revenue;
+    });
+    for (const l of rows) {
+      const mix = mixes[String(l.id)];
+      const tr = document.createElement("tr");
+      if (String(l.id) === lender) tr.style.background = "var(--page)";
+      tr.innerHTML = `<td><span class="watch-name">${esc(l.name)}</span>` +
+        `<span class="watch-journey">${fmt(mix.bought)} purchases</span></td>` +
+        `<td class="num">${money(l.revenue)}</td>`;
+      if (!mix.enoughToTrend) {
+        const td = document.createElement("td");
+        td.colSpan = m.bands.length; td.className = "na";
+        td.innerHTML = '<span class="watch-na">Too few purchases to trend</span>';
+        tr.appendChild(td);
+      } else {
+        for (const band of m.bands) {
+          const b = mix.bands[band];
+          const td = document.createElement("td");
+          td.className = "band num";
+          if (!b) { td.textContent = "—"; tr.appendChild(td); continue; }
+          const label = bandLabel(band, m.money);
+          const cell = document.createElement("div");
+          cell.className = "cell";
+          cell.appendChild(sparkline(pts(b.bought), !!b.shift, {
+            title: `${l.name} · ${m.label} · ${label}`, b, label }));
+          const val = document.createElement("span");
+          val.className = "val";
+          val.innerHTML = (b.shift ? `<span class="shift">${arrow(b.shift)}</span> ` : "") + pct(b.current);
+          cell.appendChild(val);
+          td.appendChild(cell);
+          td.addEventListener("mousemove", (e) => showTip(e, `<b>${esc(l.name)} · ${esc(label)}</b>
+            <div class="row"><span>Latest week</span><span>${pct(b.current)}</span></div>
+            <div class="row"><span>Before</span><span>${pct(b.baseline)}</span></div>` +
+            (b.shift ? `<div class="row"><span>Shift</span><span>${arrow(b.shift)} ${Math.round(100 * b.change)}%</span></div>` : "")));
+          td.addEventListener("mouseleave", hideTip);
+          tr.appendChild(td);
+        }
+      }
+      tr.addEventListener("click", () => {
+        lender = String(l.id); $("lenderSel").value = lender; render();
+        $("mixCard").scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+      body.appendChild(tr);
+    }
+  }
+
+  function render() { drawSmalls(); drawTable(); }
+
+  // ---- controls ----------------------------------------------------
+  const sel = $("lenderSel");
+  [...lenders].sort((a, b) => a.name.localeCompare(b.name)).forEach((l) => {
+    const o = document.createElement("option");
+    o.value = String(l.id); o.textContent = l.name; sel.appendChild(o);
+  });
+  sel.addEventListener("change", () => { lender = sel.value; render(); });
+  const msel = $("metricSel");
+  for (const m of metrics) {
+    const o = document.createElement("option");
+    o.value = m.key; o.textContent = m.label; msel.appendChild(o);
+  }
+  msel.addEventListener("change", () => { metric = msel.value; render(); });
+
+  const themeBtn = $("themeBtn");
+  const isDark = () =>
+    document.documentElement.getAttribute("data-theme") === "dark"
+    || (!document.documentElement.hasAttribute("data-theme")
+        && matchMedia("(prefers-color-scheme: dark)").matches);
+  const syncThemeLabel = () => { themeBtn.textContent = isDark() ? "Light mode" : "Dark mode"; };
+  themeBtn.addEventListener("click", () => {
+    document.documentElement.setAttribute("data-theme", isDark() ? "light" : "dark");
+    syncThemeLabel(); render(); drawPop();
+  });
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", syncThemeLabel);
+  syncThemeLabel();
+  addEventListener("resize", () => { render(); drawPop(); });
+
+  const gen = new Date(DATA.generatedUtc);
+  $("asof").textContent = "Data as at " + gen.toISOString().slice(0, 16).replace("T", " ") +
+    " UTC · " + DATA.windowDays + " days loaded · All sources";
+  $("foot").innerHTML =
+    "From the lead quality report, per lender tier: every lead a lender's tiers were offered and what they bought. " +
+    "Counts only — no applicant is stored. Reporting days are Sydney local time; the newest day is yesterday.<br>" +
+    "The Dummy test lender and DCS, an offline lender, are left out. Under-18 applicants are test data and are left out of age.";
+
+  render();
+})();
+</script>
+</body>
+</html>

@@ -35,6 +35,14 @@ Lenders are not split by source: the lender report covers every source
 together. The Dummy test lender and DCS, an offline lender, are left
 out.
 
+`/customers` turns the lead quality per lender into trends in the type
+of customer each lender buys. Pick a lender and a measure — income,
+wages, loan amount, age, Centrelink share, gambling, dishonours, SACC
+loans — and each band gets its own small chart: the band's share of the
+lender's purchases over time, against its share of the leads the lender
+was offered. A table beneath sets every lender side by side, one
+sparkline per band, and marks a shift either way that is beyond chance.
+
 The other pages are reached from the links under the tiles:
 `/scorecard` ranks affiliates on profit per lead, `/quality` is the
 affordability distributions split by lender result, `/pings` is the

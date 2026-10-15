@@ -12,6 +12,9 @@ by Railway from the `claude/code-review-tsyca6` branch; see
   including any added later, on any page. `sparkline()` in each template
   throws without an `expand` description, and `tests/test_sparklines.py`
   fails on any call site that does not pass one. (Layton, 15 Oct 2026.)
+- Pages: Affiliates (`/`, `template.html`), Lenders (`/lenders`), Customers
+  (`/customers`) share one stylesheet and the Affiliates | Lenders | Customers
+  switch.
 - Trend tables label each measure's columns (Trend, Latest, Change), sort on
   every column, and open sorted by revenue, highest first.
 - Lenders: Tippla stays in all reporting, with revenue shown as $0 (its tier

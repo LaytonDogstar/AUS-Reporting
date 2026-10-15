@@ -32,6 +32,7 @@ import trends
 
 TEMPLATE = Path(__file__).with_name("template.html")
 LENDER_TEMPLATE = Path(__file__).with_name("lenders.html")
+CUSTOMER_TEMPLATE = Path(__file__).with_name("customers.html")
 PLACEHOLDER = "/*__DASHBOARD_DATA__*/null"
 # The lender page borrows the dashboard's stylesheet rather than keeping
 # a copy of it, so the two pages cannot drift apart in look.
@@ -349,6 +350,99 @@ def lender_payload(conn, days=30):
     }
 
 
+# Bands that are not customers. Age under 18 is test data - see the
+# quality page - and would otherwise sit in every lender's mix.
+NOT_CUSTOMERS = {("Age", "<18")}
+
+
+def customer_payload(conn, days=30):
+    """The customers page: per lender and per measure, the share of its
+    purchases in each band, as a rolling seven-day line, beside the
+    share of the leads it was offered - and whether the mix it buys has
+    shifted, either way.
+
+    Lines are sent as values on one shared day axis rather than as
+    (day, value) pairs: twelve measures by twenty lenders by six bands
+    is a lot of repeated dates.
+    """
+    names = store.lender_names(conn)
+    money = {}
+    for lid, name, _day, _p, _s, accepted, _r, revenue, *_ in store.lender_daily(conn, days):
+        m = money.setdefault(lid, {"name": (name or "").strip() or names.get(lid, f"Lender {lid}"),
+                                   "revenue": 0.0, "bought": 0})
+        m["revenue"] += revenue or 0
+        m["bought"] += accepted or 0
+
+    # One day axis for every measure, so their lines line up.
+    axis = [r[0] for r in conn.execute(
+        "SELECT DISTINCT business_date FROM quality_tier_day WHERE business_date >= ?"
+        " ORDER BY 1", (store.business_cutoff(days),))]
+    metrics, by_metric = [], {}
+    for metric, label, is_money in DEMOGRAPHICS:
+        rows = [r for r in store.lender_demographics_daily(conn, metric, days)
+                if (metric, r[2]) not in NOT_CUSTOMERS]
+        if not rows:
+            continue
+        all_days = axis
+        order = {}
+        cells: dict[tuple, list] = {}
+        for day_, lid, band, band_order, offered, sold in rows:
+            order[band] = band_order
+            for key in ((lid, band, day_), ("all", band, day_)):
+                slot = cells.setdefault(key, [0, 0])
+                slot[0] += offered or 0
+                slot[1] += sold or 0
+        bands = [b for b, _ in sorted(order.items(), key=lambda bo: (bo[1], bo[0]))]
+        lenders = sorted({k[0] for k in cells}, key=str)
+
+        per_lender = {}
+        for lid in lenders:
+            day_totals = {d_: [0, 0] for d_ in all_days}
+            for band in bands:
+                for d_ in all_days:
+                    o, s_ = cells.get((lid, band, d_), (0, 0))
+                    day_totals[d_][0] += o
+                    day_totals[d_][1] += s_
+            bought_total = sum(v[1] for v in day_totals.values())
+            out_bands = {}
+            for band in bands:
+                series = [{"day": d_,
+                           "o": cells.get((lid, band, d_), (0, 0))[0],
+                           "s": cells.get((lid, band, d_), (0, 0))[1],
+                           "O": day_totals[d_][0], "S": day_totals[d_][1]} for d_ in all_days]
+                bought = trends.rolling(series, "s", "S")
+                offered = trends.rolling(series, "o", "O")
+                shift = trends.assess_shift(series, "s", "S")
+                out_bands[band] = {
+                    "bought": [None if v is None else round(v, 4) for _, v in bought],
+                    "offered": [None if v is None else round(v, 4) for _, v in offered],
+                    "sold": sum(p["s"] for p in series),
+                    "current": shift["current"], "baseline": shift["baseline"],
+                    "change": shift["change"], "shift": shift["shift"]}
+            per_lender[str(lid)] = {
+                "bought": bought_total,
+                # A mix taken over a handful of sales is noise drawn as signal.
+                "enoughToTrend": bought_total >= store.MIN_SCORED_LEADS,
+                "bands": out_bands}
+        metrics.append({"key": metric, "label": label, "money": is_money, "bands": bands})
+        by_metric[metric] = per_lender
+
+    lenders = [{"id": lid, "name": m["name"], "revenue": m["revenue"], "bought": m["bought"]}
+               for lid, m in money.items() if m["bought"] or m["revenue"]]
+    lenders.sort(key=lambda r: (-r["revenue"], -r["bought"]))
+    return {
+        "view": "customers",
+        "generatedUtc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+        "windowDays": days,
+        "trendWindow": trends.WINDOW,
+        # rolling points start a window in
+        "axis": axis[trends.WINDOW - 1:],
+        "lenders": lenders,
+        "metrics": metrics,
+        "mix": by_metric,
+    }
+
+
 def render(data, template: Path = TEMPLATE) -> str:
     html = template.read_text(encoding="utf-8")
     if STYLE_PLACEHOLDER in html:
@@ -365,6 +459,10 @@ def render(data, template: Path = TEMPLATE) -> str:
 
 def page(conn, days=30, source="external") -> bytes:
     return render(payload(conn, days, source)).encode("utf-8")
+
+
+def customer_page(conn, days=30) -> bytes:
+    return render(customer_payload(conn, days), CUSTOMER_TEMPLATE).encode("utf-8")
 
 
 def lender_page(conn, days=30) -> bytes:

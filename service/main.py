@@ -93,7 +93,8 @@ def page(title, body):
 
 
 def nav(active=""):
-    items = [("/", "Dashboard"), ("/lenders", "Lenders"), ("/scorecard", "Scorecard"),
+    items = [("/", "Dashboard"), ("/lenders", "Lenders"), ("/customers", "Customers"),
+             ("/scorecard", "Scorecard"),
              ("/affiliates", "Affiliates"), ("/quality", "Lead quality"),
              ("/pings", "Ping log"), ("/collection", "Collection"),
              ("/verify", "Window check"), ("/explore", "API explorer")]
@@ -146,6 +147,23 @@ def lenders_page(days=30):
                     '<div class="card"><p class="note">Nothing collected yet. '
                     '<a href="/collection">See what the collector is doing</a>.</p></div>')
     return dash.render(data, dash.LENDER_TEMPLATE).encode("utf-8")
+
+
+def customers_page(days=30):
+    """Per lender, the type of customer it buys and how that is moving:
+    each band's share of its purchases over time, against the band's
+    share of the leads it was offered."""
+    conn = store.connect(DB_PATH)
+    try:
+        data = dash.customer_payload(conn, days)
+    finally:
+        conn.close()
+    if not data["metrics"]:
+        return page("Customers", '<h1>Customers</h1>' + nav("/customers") +
+                    '<div class="card"><p class="note">Lead quality per lender is still being '
+                    'collected. <a href="/collection">See what the collector is doing</a>.'
+                    '</p></div>')
+    return dash.render(data, dash.CUSTOMER_TEMPLATE).encode("utf-8")
 
 
 def collection_page():
@@ -822,6 +840,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, dashboard_page(days, source))
             if path == "/lenders":
                 return self._send(200, lenders_page(days))
+            if path == "/customers":
+                return self._send(200, customers_page(days))
             if path == "/collection":
                 return self._send(200, collection_page())
             if path == "/affiliates":

@@ -332,3 +332,56 @@ class OfflineLenders(unittest.TestCase):
             {"pings": 140, "leads": 140, "applications": 140}, STAMP)
         self.assertEqual([r[0] for r in store.lender_result_league(self.conn)], [10])
         self.assertEqual(store.lender_result_reach(self.conn)[2], 5)
+
+
+class CustomerMix(unittest.TestCase):
+    """The customers page: each band's share of what a lender bought,
+    over time, against its share of what the lender was offered."""
+
+    def setUp(self):
+        self.conn = store.connect(":memory:")
+        self.addCleanup(self.conn.close)
+        store.save_lender_lookup(self.conn, [lookup(1, "Big T1", 10, "Big"),
+                                             lookup(62, "DCS", 22, "DCS")], STAMP)
+        for i in range(1, 29):
+            # Big buys 30% high-income for three weeks, then 60%.
+            high = 60 if i <= 7 else 30
+            store.save_tiers(self.conn, day(i), [tier(1, "Big T1", 400, 200, 100, revenue=1000.0)],
+                             None, STAMP)
+            store.save_quality_by_tier(self.conn, day(i), {
+                (1, METRIC, "3000+", 4, "Sold"): high,
+                (1, METRIC, "3000+", 4, "FilterFailed"): 50,
+                (1, METRIC, "<1", 0, "Sold"): 100 - high,
+                (1, METRIC, "<1", 0, "FilterFailed"): 150,
+                (1, "Age", "<18", 0, "Sold"): 5,
+                (1, "Age", "25-34", 2, "Sold"): 95,
+                (62, METRIC, "3000+", 4, "Sold"): 99,
+            }, STAMP)
+
+    def test_shares_of_what_was_bought_and_offered(self):
+        data = dash.customer_payload(self.conn, 30)
+        high = data["mix"][METRIC]["10"]["bands"]["3000+"]
+        self.assertAlmostEqual(high["bought"][-1], 0.6)
+        self.assertAlmostEqual(high["offered"][-1], 110 / 300, places=3)   # (60+50) of 300
+        self.assertEqual(len(high["bought"]), len(data["axis"]))
+
+    def test_a_shift_either_way_is_called(self):
+        mix = dash.customer_payload(self.conn, 30)["mix"][METRIC]["10"]["bands"]
+        self.assertEqual(mix["3000+"]["shift"], 1)
+        self.assertEqual(mix["<1"]["shift"], -1)
+
+    def test_excluded_lenders_and_test_ages_are_left_out(self):
+        data = dash.customer_payload(self.conn, 30)
+        self.assertNotIn("22", data["mix"][METRIC])
+        age = next(m for m in data["metrics"] if m["key"] == "Age")
+        self.assertEqual(age["bands"], ["25-34"])
+
+    def test_the_page_renders(self):
+        html = dash.customer_page(self.conn, 30).decode()
+        self.assertNotIn(dash.PLACEHOLDER, html)
+        self.assertNotIn(dash.STYLE_PLACEHOLDER, html)
+        self.assertIn('"view":"customers"', html)
+
+    def test_a_steady_mix_is_not_called_a_shift(self):
+        days = [{"day": f"d{i}", "s": 30, "S": 100} for i in range(28)]
+        self.assertEqual(trends.assess_shift(days, "s", "S")["shift"], 0)

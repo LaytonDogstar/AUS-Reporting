@@ -977,3 +977,16 @@ def lender_names(conn):
     """{lender_id: name} from the tier lookup."""
     return {r[0]: (r[1] or "").strip() or f"Lender {r[0]}" for r in conn.execute(
         "SELECT lender_id, MAX(lender_name) FROM lender_tier GROUP BY lender_id")}
+
+
+def lender_demographics_daily(conn, metric, days=30):
+    """[(day, lender_id, band, band_order, offered, sold)] - the mix a
+    lender was offered and bought, a day at a time, tiers summed."""
+    return conn.execute(
+        "SELECT q.business_date, COALESCE(t.lender_id, -q.lender_tier_id), q.band,"
+        " q.band_order, SUM(q.n), SUM(CASE WHEN q.result='Sold' THEN q.n ELSE 0 END)"
+        " FROM quality_tier_day q"
+        " LEFT JOIN lender_tier t ON t.lender_tier_id = q.lender_tier_id"
+        " WHERE q.metric=? AND q.business_date >= ?" + _not_test_lender() +
+        " GROUP BY 1, 2, q.band, q.band_order",
+        (metric, business_cutoff(days))).fetchall()

@@ -113,3 +113,35 @@ def assess(days, measure, window=WINDOW, measures=MEASURES):
     result["z"] = z
     result["flag"] = result["change"] <= -REL_DROP and z <= Z_DROP
     return result
+
+
+def assess_shift(days, num, den, window=WINDOW):
+    """Has a share moved, either way? The latest week against the weeks
+    before it, for a band's share of what a lender bought.
+
+    A drop in conversion is bad news; a shift in who a lender buys is
+    neither good nor bad, so both directions are called, on the same
+    terms as a drop: at least REL_DROP relative change and a
+    two-proportion z beyond Z_DROP either side.
+    """
+    recent, before = days[-window:], days[:-window]
+    rn = sum(d[num] or 0 for d in recent)
+    rd = sum(d[den] or 0 for d in recent)
+    bn = sum(d[num] or 0 for d in before)
+    bd = sum(d[den] or 0 for d in before)
+    current = (rn / rd) if rd else None
+    baseline = (bn / bd) if bd else None
+    out = {"current": current, "baseline": baseline, "change": None, "shift": 0,
+           "enough": rd >= MIN_RECENT and bd >= MIN_RECENT}
+    if current is None or not baseline:
+        return out
+    out["change"] = (current - baseline) / baseline
+    if not out["enough"]:
+        return out
+    pooled = (rn + bn) / (rd + bd)
+    se = math.sqrt(pooled * (1 - pooled) * (1 / rd + 1 / bd)) if 0 < pooled < 1 else 0
+    z = (current - baseline) / se if se else 0
+    out["z"] = z
+    if abs(out["change"]) >= REL_DROP and abs(z) >= -Z_DROP:
+        out["shift"] = 1 if z > 0 else -1
+    return out
