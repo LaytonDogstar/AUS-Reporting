@@ -150,7 +150,8 @@ def affiliate_trends(conn, days, source):
     cutoff = store.business_cutoff(days)
     rows = conn.execute(
         "SELECT affiliate_id, MAX(affiliate_name), business_date, SUM(received),"
-        " SUM(bs_extracted), SUM(submitted), SUM(sold), SUM(revenue) FROM affiliate_day"
+        " SUM(bs_extracted), SUM(submitted), SUM(sold), SUM(revenue),"
+        " SUM(bs_cost), SUM(profit) FROM affiliate_day"
         " WHERE business_date >= ? AND source = ? AND affiliate_id IS NOT NULL"
         + store._not_test() + " GROUP BY affiliate_id, business_date",
         (cutoff, source)).fetchall()
@@ -158,8 +159,11 @@ def affiliate_trends(conn, days, source):
     known = {r[0]: r[1] for r in conn.execute("SELECT affiliate_id, name FROM affiliate")}
 
     by_affiliate: dict[int, dict] = {}
-    for aid, name, day_, rec, ext, sub_, sold, rev in rows:
-        a = by_affiliate.setdefault(aid, {"name": known.get(aid) or name, "days": {}})
+    for aid, name, day_, rec, ext, sub_, sold, rev, bs_cost, profit in rows:
+        a = by_affiliate.setdefault(aid, {"name": known.get(aid) or name, "days": {},
+                                          "bs_cost": 0.0, "profit": 0.0})
+        a["bs_cost"] += bs_cost or 0
+        a["profit"] += profit or 0
         a["days"][day_] = {"day": day_, "received": rec or 0, "extracted": ext or 0,
                            "submitted": sub_ or 0, "sold": sold or 0, "revenue": rev or 0}
 
@@ -181,12 +185,16 @@ def affiliate_trends(conn, days, source):
                               "points": trends.rolling(series, num, den),
                               **trends.assess(series, name)}
         out.append({"id": aid, "name": a["name"], "leads": leads, "journey": journey,
+                    # Money over the window, for the trends table's own columns
+                    # and its default order.
+                    "revenue": sum(d["revenue"] for d in series),
+                    "bsCost": a["bs_cost"], "profit": a["profit"],
                     # A line through one or three leads is noise drawn as signal.
                     "enoughToTrend": leads >= store.MIN_SCORED_LEADS,
                     "journeyLabel": journeys.LABELS[journey],
                     "journeyNote": journeys.DESCRIPTIONS[journey],
                     "measures": measures})
-    out.sort(key=lambda r: -r["leads"])
+    out.sort(key=lambda r: (-r["revenue"], -r["leads"]))
     return out
 
 
@@ -213,7 +221,11 @@ def lender_payload(conn, days=30):
     its tiers, and what it buys by band against what it is offered."""
     rows = store.lender_daily(conn, days)
     all_days = sorted({r[2] for r in rows})
-    fields = ("processed", "sent", "accepted", "redirect", "revenue")
+    # Profit is the lender report's own: revenue less affiliate commission.
+    # It cannot see the internal sources' costs or bank statement costs,
+    # which are per lead rather than per lender, so it reads high.
+    fields = ("processed", "sent", "accepted", "redirect", "revenue",
+              "commission", "profit")
     blank = dict.fromkeys(fields, 0)
 
     by_lender: dict[int, dict] = {}
@@ -248,7 +260,7 @@ def lender_payload(conn, days=30):
         lenders.append({"id": lid, "name": lender["name"], **sums,
                         "measures": measures,
                         "tiers": sorted(tiers.get(lid, []), key=lambda t: -t["processed"])})
-    lenders.sort(key=lambda r: (-r["sent"], -r["processed"]))
+    lenders.sort(key=lambda r: (-r["revenue"], -r["sent"], -r["processed"]))
 
     demographics = {"metrics": [], "bands": {}, "byLender": {}, "all": {}}
     stored = set(store.lender_demographic_metrics(conn))

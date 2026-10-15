@@ -838,11 +838,12 @@ _LENDER_NAME = "COALESCE(NULLIF(TRIM(t.lender_name), ''), d.lender_tier_name)"
 
 def lender_daily(conn, days=30):
     """[(lender_id, lender_name, day, processed, sent, accepted,
-    redirect, revenue)] from the lender report, tiers summed."""
+    redirect, revenue, commission, profit)] from the lender report,
+    tiers summed."""
     return conn.execute(
         f"SELECT {_LENDER_ID}, MAX({_LENDER_NAME}), d.business_date,"
         " SUM(d.processed), SUM(d.sent), SUM(d.accepted), SUM(d.redirect),"
-        " SUM(d.revenue) FROM lender_tier_day d"
+        " SUM(d.revenue), SUM(d.commission), SUM(d.profit) FROM lender_tier_day d"
         " LEFT JOIN lender_tier t ON t.lender_tier_id = d.lender_tier_id"
         " WHERE d.business_date >= ?" + _not_test_lender() +
         f" GROUP BY {_LENDER_ID}, d.business_date",
@@ -854,7 +855,7 @@ def lender_tier_totals(conn, days=30):
     return conn.execute(
         f"SELECT {_LENDER_ID}, d.lender_tier_id, MAX(d.lender_tier_name), MAX(t.price),"
         " SUM(d.processed), SUM(d.sent), SUM(d.accepted), SUM(d.redirect),"
-        " SUM(d.revenue) FROM lender_tier_day d"
+        " SUM(d.revenue), SUM(d.commission), SUM(d.profit) FROM lender_tier_day d"
         " LEFT JOIN lender_tier t ON t.lender_tier_id = d.lender_tier_id"
         " WHERE d.business_date >= ?" + _not_test_lender() +
         f" GROUP BY {_LENDER_ID}, d.lender_tier_id HAVING SUM(d.processed) > 0",

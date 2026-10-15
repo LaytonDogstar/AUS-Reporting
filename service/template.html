@@ -130,10 +130,24 @@
   #watchTable tbody tr:hover { background: var(--page); }
   .watch-name { font-weight: 560; }
   .watch-journey { display: block; font-size: 12px; color: var(--muted); font-weight: 400; }
-  .watch-cell { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
-  .watch-cell svg { flex: none; width: 112px; height: 28px; display: block; }
-  .watch-val { font-variant-numeric: tabular-nums; min-width: 54px; text-align: right; }
-  .watch-chg { font-size: 12px; color: var(--ink-2); min-width: 40px; }
+  /* each measure is three columns under one group header: the line,
+     the latest week, and the change against the weeks before */
+  .scroll { overflow-x: auto; }
+  th[data-sort] { cursor: pointer; user-select: none; }
+  th[data-sort]:hover { color: var(--ink); }
+  th[data-sort]:focus-visible { outline: 2px solid var(--series-1); outline-offset: -2px; }
+  th[aria-sort] { color: var(--ink); }
+  th[aria-sort="descending"]::after { content: " \25BC"; font-size: 9px; }
+  th[aria-sort="ascending"]::after { content: " \25B2"; font-size: 9px; }
+  #watchTable th.grp { text-align: center; border-bottom: 0; padding-bottom: 0; }
+  #watchTable th.sub { font-size: 11px; padding-top: 2px; white-space: nowrap; }
+  #watchTable th.sub.line, #watchTable td.line { text-align: left; padding-left: 14px; }
+  #watchTable td.line svg { width: 72px; height: 26px; display: block; }
+  #watchTable th, #watchTable td { padding-left: 7px; padding-right: 7px; }
+  #watchTable td:first-child { min-width: 150px; }
+  #watchTable td.na { text-align: left; padding-left: 14px; }
+  .watch-val { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .watch-chg { font-size: 12px; color: var(--ink-2); white-space: nowrap; }
   .watch-drop { font-size: 12px; color: var(--critical); font-weight: 600; }
   .watch-na { font-size: 12px; color: var(--muted); }
   /* the page switch: affiliates and lenders */
@@ -207,16 +221,36 @@
   <section class="card" id="watchCard">
     <h2>Affiliate trends</h2>
     <p class="sub" id="watchSub"></p>
+    <div class="scroll">
     <table id="watchTable">
-      <thead><tr>
-        <th>Affiliate</th><th>Leads &rarr; statement</th>
-        <th>Submitted &rarr; sold</th><th>Earnings per lead</th>
-      </tr></thead>
+      <thead>
+        <tr>
+          <th rowspan="2" data-sort="name">Affiliate</th>
+          <th class="grp" colspan="3">Leads &rarr; statement</th>
+          <th class="grp" colspan="3">Submitted &rarr; sold</th>
+          <th class="grp" colspan="3">Earnings per lead</th>
+          <th rowspan="2" data-sort="revenue">Revenue</th>
+          <th rowspan="2" data-sort="bsCost">Statement cost</th>
+          <th rowspan="2" data-sort="profit">Profit</th>
+        </tr>
+        <tr>
+          <th class="sub line" data-sort="leads_to_statement:current">Trend</th>
+          <th class="sub" data-sort="leads_to_statement:current" title="The latest seven days">Latest</th>
+          <th class="sub" data-sort="leads_to_statement:change">Change</th>
+          <th class="sub line" data-sort="submitted_to_sold:current">Trend</th>
+          <th class="sub" data-sort="submitted_to_sold:current" title="The latest seven days">Latest</th>
+          <th class="sub" data-sort="submitted_to_sold:change">Change</th>
+          <th class="sub line" data-sort="earnings_per_lead:current">Trend</th>
+          <th class="sub" data-sort="earnings_per_lead:current" title="The latest seven days">Latest</th>
+          <th class="sub" data-sort="earnings_per_lead:change">Change</th>
+        </tr>
+      </thead>
       <tbody></tbody>
     </table>
+    </div>
     <p class="note">
       Each line is a rolling seven days. The figure beside it is the latest week, and the
-      change is against the weeks before it in the window. <b>&#9660; drop</b> marks a fall
+      change is against the weeks before it in the window. <b style="color:var(--critical)">&#9660;</b> in red marks a fall
       worth looking at: at least 10% lower and beyond what chance would produce for a
       conversion rate, at least 15% lower for earnings per lead, and only where the latest
       week had 50 or more to judge it on. Select a row for the detail.
@@ -431,7 +465,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
   // De-emphasis line, the latest point in the accent - or in the status
   // colour when it is a drop, which also carries a label beside it.
   function sparkline(points, flagged) {
-    const W = 112, H = 28, pad = 3;
+    const W = 72, H = 26, pad = 3;
     const vals = points.map((p) => p[1]).filter((v) => v != null);
     const svg = document.createElementNS(SVGNS, "svg");
     svg.setAttribute("width", W); svg.setAttribute("height", H);
@@ -450,10 +484,43 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     return svg;
   }
 
+  // The trends table sorts on any column; revenue, highest first, until
+  // someone picks another. Rows with nothing to show in the column - too
+  // few leads, or no statement step - stay at the bottom either way.
+  let watchSort = "revenue", watchDir = -1;
+  function watchValue(r, key) {
+    if (key === "name") return r.name.toLowerCase();
+    if (key === "revenue" || key === "bsCost" || key === "profit") return r[key];
+    const [measure, field] = key.split(":");
+    const m = r.measures[measure];
+    if (!m || !m.applies || !r.enoughToTrend) return null;
+    return m[field];
+  }
+  function sortedTrends() {
+    return [...(DATA.trends || [])].sort((a, b) => {
+      const va = watchValue(a, watchSort), vb = watchValue(b, watchSort);
+      if (va == null && vb == null) return b.revenue - a.revenue;
+      if (va == null) return 1;
+      if (vb == null) return -1;
+      if (va < vb) return -watchDir;
+      if (va > vb) return watchDir;
+      return b.revenue - a.revenue;
+    });
+  }
+  function syncWatchHeaders() {
+    $("watchTable").querySelectorAll("th[data-sort]").forEach((th) => {
+      // The trend and latest-week headers share a key; mark the latter.
+      const on = th.dataset.sort === watchSort && !th.classList.contains("line");
+      if (on) th.setAttribute("aria-sort", watchDir < 0 ? "descending" : "ascending");
+      else th.removeAttribute("aria-sort");
+    });
+  }
+
   function drawWatch() {
-    const rows = DATA.trends || [];
+    const rows = sortedTrends();
+    syncWatchHeaders();
     $("watchSub").textContent = rows.length
-      ? "The three measures to keep from falling, per affiliate, over the loaded window."
+      ? "The three measures to keep from falling, per affiliate, over the loaded window. Select a column heading to sort."
       : "Nothing collected for this source yet.";
     const body = $("watchTable").querySelector("tbody");
     body.innerHTML = "";
@@ -465,32 +532,40 @@ const DATA = /*__DASHBOARD_DATA__*/null;
         `<span class="watch-journey">${r.journeyLabel} · ${fmt(r.leads)} leads</span>`;
       tr.appendChild(name);
       for (const [key, , , show] of MEASURES) {
+        const NA_HTML = !r.measures[key].applies
+          ? '<span class="watch-na">Statements arrive with the lead</span>'
+          : '<span class="watch-na">Too few leads to trend</span>';
+        const NAME = r.name;
         const m = r.measures[key];
-        const td = document.createElement("td");
-        const cell = document.createElement("div");
-        cell.className = "watch-cell";
-        if (!m.applies) {
-          cell.innerHTML = '<span class="watch-na">Statements arrive with the lead</span>';
-        } else if (!r.enoughToTrend) {
-          cell.innerHTML = '<span class="watch-na">Too few leads to trend</span>';
-        } else {
-          cell.appendChild(sparkline(m.points, m.flag));
-          const val = document.createElement("span");
-          val.className = "watch-val"; val.textContent = m.current == null ? "—" : show(m.current);
-          cell.appendChild(val);
-          const chg = document.createElement("span");
-          chg.className = m.flag ? "watch-drop" : "watch-chg";
-          chg.textContent = m.change == null ? ""
-            : (m.flag ? "▼ drop " : "") + (m.change > 0 ? "+" : "") + Math.round(100 * m.change) + "%";
-          cell.appendChild(chg);
-          const tipText = `<b>${r.name}</b><div class="row"><span>Latest week</span><span>${
-            m.current == null ? "—" : show(m.current)}</span></div><div class="row"><span>Before</span><span>${
-            m.baseline == null ? "—" : show(m.baseline)}</span></div>` +
-            (m.enough ? "" : '<div class="row"><span>Too few to call a drop</span></div>');
-          cell.addEventListener("mousemove", (e) => showTip(e, tipText));
-          cell.addEventListener("mouseleave", hideTip);
+        if (!m.applies || !r.enoughToTrend) {
+          const td = document.createElement("td");
+          td.colSpan = 3; td.className = "na";
+          td.innerHTML = NA_HTML;
+          tr.appendChild(td);
+          continue;
         }
-        td.appendChild(cell);
+        const line = document.createElement("td");
+        line.className = "line";
+        line.appendChild(sparkline(m.points, m.flag));
+        const val = document.createElement("td");
+        val.className = "num watch-val"; val.textContent = m.current == null ? "—" : show(m.current);
+        const chg = document.createElement("td");
+        chg.className = "num " + (m.flag ? "watch-drop" : "watch-chg");
+        chg.textContent = m.change == null ? ""
+          : (m.flag ? "▼ " : "") + (m.change > 0 ? "+" : "") + Math.round(100 * m.change) + "%";
+        const tipText = `<b>${NAME}</b><div class="row"><span>Latest week</span><span>${
+          m.current == null ? "—" : show(m.current)}</span></div><div class="row"><span>Before</span><span>${
+          m.baseline == null ? "—" : show(m.baseline)}</span></div>` +
+          (m.enough ? "" : '<div class="row"><span>Too few to call a drop</span></div>');
+        for (const td of [line, val, chg]) {
+          td.addEventListener("mousemove", (e) => showTip(e, tipText));
+          td.addEventListener("mouseleave", hideTip);
+          tr.appendChild(td);
+        }
+      }
+      for (const v of [r.revenue, r.bsCost, r.profit]) {
+        const td = document.createElement("td");
+        td.className = "num"; td.textContent = money(v);
         tr.appendChild(td);
       }
       tr.addEventListener("click", () => {
@@ -841,6 +916,21 @@ const DATA = /*__DASHBOARD_DATA__*/null;
       o.value = a.id; o.textContent = a.name; sel.appendChild(o);
     });
   sel.addEventListener("change", () => { affiliate = sel.value; render(); });
+
+  $("watchTable").querySelectorAll("th[data-sort]").forEach((th) => {
+    th.tabIndex = 0;
+    const pick = () => {
+      const key = th.dataset.sort;
+      // Names read A to Z first; numbers highest first.
+      if (key === watchSort) watchDir = -watchDir;
+      else { watchSort = key; watchDir = key === "name" ? 1 : -1; }
+      drawWatch();
+    };
+    th.addEventListener("click", pick);
+    th.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); }
+    });
+  });
 
   $("rangeSeg").addEventListener("click", (evt) => {
     const b = evt.target.closest("button"); if (!b) return;
