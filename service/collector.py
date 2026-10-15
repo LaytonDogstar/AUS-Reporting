@@ -311,6 +311,23 @@ def reduce_affiliate_results(items):
             for k, (pings, cost) in counts.items()}
 
 
+def reduce_quality_bands(items):
+    """Bands only, no lender result. Rows in, counts out.
+
+    The result split lives in the population figures; what a single
+    affiliate's call adds is the mix it sends.
+    """
+    counts: dict[tuple[str, str, int], int] = {}
+    for it in items:
+        for metric in NUMERIC:
+            field = field_for(it, metric)
+            if field:
+                band, order = band_of(metric, it.get(field))
+                key = (metric, band, order)
+                counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
 def _num(row, *names, default=0):
     for n in names:
         if n in row and row[n] is not None:
@@ -426,7 +443,12 @@ def reduce_affiliates(payload):
 # that FF and non-FF affiliates can no longer be combined into a single
 # affiliate lead count.
 KINDS = ("tiers", "quality", "affiliates", "internal_affiliates",
-         "lender_results", "lender_lookup", "affiliate_lookup")
+         "lender_results", "lender_lookup", "affiliate_lookup",
+         "quality_by_affiliate")
+
+# Kinds that take more than one call, so they are collected after the
+# single-call ones rather than through _requests.
+MULTI_CALL_KINDS = ("quality_by_affiliate",)
 
 
 def _store_tiers(conn, iso, payload, ms, stamp):
@@ -521,6 +543,43 @@ def _requests(day: date):
     ]
 
 
+def collect_quality_by_affiliate(conn, iso, stamp):
+    """Lead quality for each affiliate that sent anything that day.
+
+    `LeadQualityReport` takes an `affiliateId`, so the mix a source
+    sends is one call per active affiliate - about twenty of them, a
+    second or two each. Which affiliates were active comes from the
+    affiliate reports already collected for the day, so a day collected
+    out of order simply finds none and is retried.
+
+    All or nothing: a partial day would understate every affiliate the
+    failed call belongs to, and nothing downstream could tell.
+    """
+    ids = [r[0] for r in conn.execute(
+        "SELECT DISTINCT affiliate_id FROM affiliate_day WHERE business_date=?"
+        " AND affiliate_id IS NOT NULL AND received > 0", (iso,))]
+    if not ids:
+        raise RuntimeError("no affiliate rows for this day yet")
+
+    qs = window(date.fromisoformat(iso))
+    counts: dict[tuple[int, str, str, int], int] = {}
+    rows = 0
+    for affiliate_id in sorted(ids):
+        status, payload, ms, error = fetch(
+            f"{API_BASE}/api/PublicReports/LeadQualityReport?{qs}"
+            f"&affiliateId={int(affiliate_id)}")
+        if error or status != 200:
+            raise RuntimeError(f"affiliate {affiliate_id}: {error or f'HTTP {status}'}")
+        items = (json.loads(payload.decode("utf-8", "replace")) or {}).get("Items") or []
+        rows += len(items)
+        for (metric, band, order), n in reduce_quality_bands(items).items():
+            counts[(affiliate_id, metric, band, order)] = \
+                counts.get((affiliate_id, metric, band, order), 0) + n
+        del items                               # rows do not outlive this call
+    store.save_quality_by_affiliate(conn, iso, counts, stamp)
+    return f"{len(ids)} affiliate(s), {rows:,} row(s) -> {len(counts)} count(s)"
+
+
 def collect_day(conn, day: date, kinds=KINDS):
     """One day. Skips any kind already recorded ok for that day, so adding
     a new report backfills only itself rather than refetching everything."""
@@ -544,6 +603,20 @@ def collect_day(conn, day: date, kinds=KINDS):
             out[kind] = "ok"
         except Exception as exc:                # noqa: BLE001
             store.mark(conn, iso, kind, "failed", f"{type(exc).__name__}: {exc}", ms, stamp)
+            out[kind] = str(exc)
+
+    for kind in MULTI_CALL_KINDS:
+        if kind not in kinds or kind in already:
+            continue
+        started = time.monotonic()
+        try:
+            detail = collect_quality_by_affiliate(conn, iso, stamp)
+            store.mark(conn, iso, kind, "ok", detail,
+                       int((time.monotonic() - started) * 1000), stamp)
+            out[kind] = "ok"
+        except Exception as exc:                # noqa: BLE001
+            store.mark(conn, iso, kind, "failed", f"{type(exc).__name__}: {exc}",
+                       int((time.monotonic() - started) * 1000), stamp)
             out[kind] = str(exc)
     return out
 
@@ -614,7 +687,7 @@ def reset(conn):
         for table in ("lender_tier_day", "totals_day", "quality_day",
                       "quality_day_meta", "affiliate_day", "affiliate_totals_day",
                       "lender_result_day", "lender_result_day_meta",
-                      "affiliate_result_day", "collection"):
+                      "affiliate_result_day", "quality_affiliate_day", "collection"):
             conn.execute(f"DELETE FROM {table}")
 
 

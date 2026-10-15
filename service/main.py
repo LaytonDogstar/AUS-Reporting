@@ -363,18 +363,30 @@ def scorecard_page(days=30):
     best = max(r["profit_per_lead"] for r in rows) or 1
     p.append('<h2>By affiliate</h2><div class="card"><table>'
              '<tr><th>Affiliate</th><th class="n">Leads</th><th class="n">Sold</th>'
+             '<th class="n">Expected</th><th class="n">Sells to</th>'
              '<th class="n">Acceptance</th><th class="n">Rev / lead</th>'
              '<th class="n">Profit / lead</th><th class="n">Profit</th><th></th></tr>')
     for r in rows:
         tag = ' <span class="note">internal</span>' if r["source"] == "internal" else ""
         acceptance = (f'{100 * r["acceptance"]:.1f}%' if r["acceptance"] is not None
                       else '<span class="note">—</span>')
+        expected = (f'{100 * r["expected"]:.1f}%' if r["expected"]
+                    else '<span class="note">—</span>')
+        index = r["quality_index"]
+        if index is None:
+            sells_to = '<span class="note">—</span>'
+        else:
+            cls_q = "ok" if index >= 1.1 else "bad" if index < 0.9 else ""
+            sells_to = (f'<span class="{cls_q}">{index:.2f}&times;</span>' if cls_q
+                        else f'{index:.2f}&times;')
         ppl = r["profit_per_lead"]
         width = int(90 * ppl / best) if ppl > 0 else 0
         cls = ' class="bad"' if ppl < 0 else ""
         p.append(f'<tr><td>{html.escape(r["name"] or "—")}{tag}</td>'
                  f'<td class="n">{r["leads"]:,}</td>'
                  f'<td class="n">{100 * r["sold_rate"]:.1f}%</td>'
+                 f'<td class="n">{expected}</td>'
+                 f'<td class="n">{sells_to}</td>'
                  f'<td class="n">{acceptance}</td>'
                  f'<td class="n">{r["revenue_per_lead"]:,.2f}</td>'
                  f'<td class="n"{cls}>{ppl:,.2f}</td>'
@@ -392,7 +404,15 @@ def scorecard_page(days=30):
              'keeps per lead it is sent — the figure to rank on. Revenue per lead flatters '
              'sources on high commission; volume flatters nobody. Bank statement cost is in '
              'the affiliate report but not in its profit column, so profit here is before '
-             'that cost.</p></div>')
+             'that cost.</p>'
+             '<p class="note"><strong>Expected</strong> is the sold rate this source\'s lead '
+             'mix would produce at population rates — a quality score that owes nothing to '
+             'how well the leads were sold. It is taken over monthly income, where the sold '
+             'rate runs from 15.1% under a dollar to 47.7% above three thousand. '
+             '<strong>Sells to</strong> is the actual sold rate over that expectation: above '
+             '1.00 means the source sells better than its leads alone predict, below means '
+             'worse. A source can send good leads and sell them badly, and only these two '
+             'columns apart can tell you which.</p></div>')
     return page("Affiliate scorecard", "".join(p))
 
 

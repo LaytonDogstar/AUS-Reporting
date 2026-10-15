@@ -79,7 +79,10 @@ class AffiliateSources(unittest.TestCase):
         kinds = [k for k, *_ in collector._requests(dt.date(2026, 10, 13))]
         self.assertIn("affiliates", kinds)
         self.assertIn("internal_affiliates", kinds)
-        self.assertEqual(set(collector.KINDS), set(kinds))
+        # every kind is collected by one route or the other
+        self.assertEqual(set(collector.KINDS),
+                         set(kinds) | set(collector.MULTI_CALL_KINDS))
+        self.assertFalse(set(kinds) & set(collector.MULTI_CALL_KINDS))
 
     def test_the_internal_report_is_a_different_endpoint(self):
         urls = {k: u for k, _m, u, _b, _h in collector._requests(dt.date(2026, 10, 13))}
@@ -402,3 +405,63 @@ class BusinessDates(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class QualityByAffiliate(unittest.TestCase):
+    """LeadQualityReport takes an affiliateId, so the mix a source sends
+    is one call per active affiliate rather than a dev ask. Verified
+    against the live API on 15 Oct 2026: the per-affiliate rows for a
+    day summed exactly to the unfiltered day."""
+
+    def setUp(self):
+        self.conn = store.connect(":memory:")
+        self.addCleanup(self.conn.close)
+        self.day = "2026-10-12"
+
+    def test_bands_are_counted_without_the_lender_result(self):
+        counts = collector.reduce_quality_bands([
+            {"WageAndCenterlinkMonthly": 2500, "Result": "Sold"},
+            {"WageAndCenterlinkMonthly": 2600, "Result": "Decline"},
+        ])
+        self.assertEqual(counts[("WagesAndCentrelinkMonthly", "2000-3000", 3)], 2)
+
+    def test_a_day_with_no_affiliate_rows_is_refused_not_stored_empty(self):
+        """Collected out of order, it would otherwise store nothing and
+        mark itself done."""
+        with self.assertRaises(RuntimeError):
+            collector.collect_quality_by_affiliate(self.conn, self.day, STAMP)
+
+    def test_what_a_band_is_worth_comes_from_the_population(self):
+        store.save_quality(self.conn, self.day, {
+            ("WagesAndCentrelinkMonthly", "3000+", 4, "Sold"): 48,
+            ("WagesAndCentrelinkMonthly", "3000+", 4, "Decline"): 52,
+            ("WagesAndCentrelinkMonthly", "<1", 0, "Sold"): 15,
+            ("WagesAndCentrelinkMonthly", "<1", 0, "Decline"): 85,
+        }, 200, STAMP)
+
+        rates = store.band_sold_rates(self.conn, "WagesAndCentrelinkMonthly", 30)
+        self.assertAlmostEqual(rates["3000+"][1], 0.48)
+        self.assertAlmostEqual(rates["<1"][1], 0.15)
+
+    def test_a_source_sending_better_leads_scores_higher(self):
+        store.save_quality(self.conn, self.day, {
+            ("WagesAndCentrelinkMonthly", "3000+", 4, "Sold"): 48,
+            ("WagesAndCentrelinkMonthly", "3000+", 4, "Decline"): 52,
+            ("WagesAndCentrelinkMonthly", "<1", 0, "Sold"): 15,
+            ("WagesAndCentrelinkMonthly", "<1", 0, "Decline"): 85,
+        }, 200, STAMP)
+        store.save_quality_by_affiliate(self.conn, self.day, {
+            (1, "WagesAndCentrelinkMonthly", "3000+", 4): 100,   # all high income
+            (2, "WagesAndCentrelinkMonthly", "<1", 0): 100,      # all low
+        }, STAMP)
+
+        quality = store.affiliate_quality(self.conn, "WagesAndCentrelinkMonthly", 30)
+        self.assertAlmostEqual(quality[1]["expected"], 0.48)
+        self.assertAlmostEqual(quality[2]["expected"], 0.15)
+
+    def test_test_affiliates_are_left_out_of_the_quality_figures_too(self):
+        store.save_quality_by_affiliate(self.conn, self.day, {
+            (144, "WagesAndCentrelinkMonthly", "3000+", 4): 128,
+        }, STAMP)
+        self.assertEqual(
+            store.affiliate_quality(self.conn, "WagesAndCentrelinkMonthly", 30), {})

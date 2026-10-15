@@ -201,6 +201,24 @@ CREATE TABLE IF NOT EXISTS lender_result_day_meta (
     collected_at TEXT NOT NULL
 );
 
+-- Lead quality per affiliate: the same bands, counted for one source
+-- at a time. LeadQualityReport takes an affiliateId filter, so this is
+-- one call per active affiliate per day rather than a dev ask.
+--
+-- No lender result here. The population's sold rate per band comes from
+-- quality_day; what this adds is the mix a source sends, which is what
+-- separates "sends good leads" from "sells well anyway".
+CREATE TABLE IF NOT EXISTS quality_affiliate_day (
+    business_date TEXT NOT NULL,
+    affiliate_id INTEGER NOT NULL,
+    metric TEXT NOT NULL,
+    band TEXT NOT NULL,
+    band_order INTEGER NOT NULL,
+    n INTEGER NOT NULL,
+    PRIMARY KEY (business_date, affiliate_id, metric, band)
+);
+CREATE INDEX IF NOT EXISTS qad_date ON quality_affiliate_day(business_date, metric);
+
 -- The affiliate lookup, from Affiliates. A snapshot, replaced whole.
 -- That endpoint also returns each affiliate's portal username and
 -- password and its Credfin secret key. None of those is read, let alone
@@ -403,6 +421,68 @@ def save_affiliates(conn, business_date, source, rows, totals, collected_at):
                 (business_date, source, totals["received"], totals["accepted_tc"], totals["bs_refreshed"], totals["duplicate"], totals["bs_extracted"], totals["submitted"], totals["sold"], totals["decline"], totals["redirect"], totals["funded"], totals["revenue"], totals["commission"], totals["bs_cost"], totals["final_commission"], totals["profit"], totals["final_profit"], collected_at))
 
 
+def save_quality_by_affiliate(conn, business_date, counts, collected_at):
+    """counts: {(affiliate_id, metric, band, band_order): n}"""
+    with conn:
+        conn.execute("DELETE FROM quality_affiliate_day WHERE business_date=?",
+                     (business_date,))
+        conn.executemany(
+            "INSERT INTO quality_affiliate_day (business_date, affiliate_id, metric,"
+            " band, band_order, n) VALUES (?,?,?,?,?,?)",
+            [(business_date, aid, metric, band, order, n)
+             for (aid, metric, band, order), n in sorted(counts.items())])
+
+
+def band_sold_rates(conn, metric, days=30):
+    """{band: (leads, sold rate)} across the whole population.
+
+    This is what a band is worth: of every lead that fell in it, how
+    many a lender bought. Measured over everyone, so one affiliate's
+    volume cannot move it much.
+    """
+    rows = conn.execute(
+        "SELECT band, result, SUM(n) FROM quality_day"
+        " WHERE metric=? AND business_date >= ? GROUP BY band, result",
+        (metric, business_cutoff(days))).fetchall()
+    totals: dict[str, list] = {}
+    for band, result, n in rows:
+        slot = totals.setdefault(band, [0, 0])
+        slot[0] += n
+        if result == "Sold":
+            slot[1] += n
+    return {band: (total, (sold / total) if total else 0)
+            for band, (total, sold) in totals.items()}
+
+
+def affiliate_quality(conn, metric, days=30):
+    """Per affiliate: the band mix it sends, and what that mix is worth.
+
+    `expected` is the sold rate this affiliate's mix would produce at
+    population rates - a quality score that owes nothing to how well
+    the leads were sold. Comparing it with the actual sold rate says
+    which of the two a source is good at.
+    """
+    cutoff = business_cutoff(days)
+    rates = band_sold_rates(conn, metric, days)
+    rows = conn.execute(
+        "SELECT affiliate_id, band, SUM(n) FROM quality_affiliate_day"
+        " WHERE metric=? AND business_date >= ?" + _not_test() +
+        " GROUP BY affiliate_id, band", (metric, cutoff)).fetchall()
+    by_affiliate: dict[int, dict[str, int]] = {}
+    for aid, band, n in rows:
+        by_affiliate.setdefault(aid, {})[band] = n
+
+    out = {}
+    for aid, bands in by_affiliate.items():
+        leads = sum(bands.values())
+        if not leads:
+            continue
+        expected = sum((bands.get(band, 0) / leads) * rate
+                       for band, (_n, rate) in rates.items())
+        out[aid] = {"leads": leads, "expected": expected, "bands": bands}
+    return out
+
+
 def save_lender_results(conn, business_date, counts, meta, collected_at):
     """counts: {(lender_id, tier_id, status_id): (pings, applications, cost)}"""
     with conn:
@@ -444,7 +524,14 @@ def save_affiliate_results(conn, business_date, counts, collected_at):
              for (affiliate, status), (pings, apps, cost) in sorted(counts.items())])
 
 
-def scorecard(conn, days=30, limit=80):
+# The metric the quality score is taken over. Monotonic across every
+# band on thirty days - 15.1% sold under a dollar a month, 47.7% above
+# three thousand - and populated for every lead, which the gambling and
+# dishonour fields are not.
+QUALITY_METRIC = "WagesAndCentrelinkMonthly"
+
+
+def scorecard(conn, days=30, limit=80, metric=QUALITY_METRIC):
     """One row per affiliate: what it sends, what it earns, what it is worth.
 
     The affiliate reports are keyed by name and the ping log by id, so
@@ -465,6 +552,7 @@ def scorecard(conn, days=30, limit=80):
         " GROUP BY a.affiliate_name, a.source HAVING leads > 0",
         (cutoff,)).fetchall()
     known = {r[0]: r[1] for r in conn.execute("SELECT affiliate_id, name FROM affiliate")}
+    quality = affiliate_quality(conn, metric, days)
     pings = {r[0]: r[1:] for r in conn.execute(
         "SELECT affiliate_id,"
         " SUM(CASE WHEN status_id IN (1,2,3) THEN pings ELSE 0 END) reached,"
@@ -474,11 +562,19 @@ def scorecard(conn, days=30, limit=80):
     out = []
     for aid, name, source, leads, sold, revenue, commission, bs_cost, profit in rows:
         reached, ping_sold = pings.get(aid, (0, 0))
+        q = quality.get(aid)
+        sold_rate = (sold / leads) if leads else 0
+        expected = q["expected"] if q else None
         out.append({
+            # What this source's lead mix is worth at population rates,
+            # and how its actual sold rate compares. Above 1.00 means it
+            # sells better than its leads alone would predict.
+            "expected": expected,
+            "quality_index": (sold_rate / expected) if expected else None,
             # The lookup's name where the id resolved, else the report's
             # own, which ends in the id: "Borrowly(59)".
             "id": aid, "name": known.get(aid) or name, "source": source, "leads": leads, "sold": sold,
-            "sold_rate": (sold / leads) if leads else 0,
+            "sold_rate": sold_rate,
             "revenue": revenue or 0, "commission": commission or 0,
             "bs_cost": bs_cost or 0, "profit": profit or 0,
             "revenue_per_lead": (revenue or 0) / leads if leads else 0,
