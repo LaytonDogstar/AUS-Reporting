@@ -14,6 +14,9 @@ by Railway from the `claude/code-review-tsyca6` branch; see
   fails on any call site that does not pass one. (Layton, 15 Oct 2026.)
 - Trend tables label each measure's columns (Trend, Latest, Change), sort on
   every column, and open sorted by revenue, highest first.
+- Lenders: Tippla stays in all reporting, with revenue shown as $0 (its tier
+  price is $0). The Dummy test lender (24) and DCS (22, offline) are left out
+  via `store.EXCLUDED_LENDER_IDS`. (Layton, 15 Oct 2026.)
 - FF (internal) and non-FF (external) affiliate counts are never added
   together; pages show one population at a time.
 - Lead-level identifiers (`LeadId`, `LeadApplicationId`) and the credential
