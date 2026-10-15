@@ -692,7 +692,48 @@ That is what lets affiliate money join the ping log, where the affiliate
 is an id and nothing else — and so what makes a per-affiliate quality
 score possible at all.
 
-## 25. What is still missing from the page
+## 25. What the scorecard says, 30 days
+
+Twenty-one affiliates sent a lead in the window; the other ninety-five
+in the report sent none. Ranked by profit per lead, which is revenue
+minus commission over leads received — what the business keeps per lead
+it is sent.
+
+| Affiliate | Leads | Sold | Acceptance | Profit / lead |
+|---|---|---|---|---|
+| Friendly Finance New Application (internal) | 9,961 | 58% | 33% | **11.22** |
+| Friendly Finance (internal) | 4,021 | 32% | 15% | 5.22 |
+| OF - WeFindLoans (internal) | 1,946 | 28% | 13% | 3.53 |
+| FF SEO (internal) | 1,179 | 41% | 16% | 3.51 |
+| JRF1st | 10,512 | 39% | 28% | 3.06 |
+| Borrowly | 10,076 | 40% | 18% | 1.75 |
+| MonziIFrame | 4,283 | 22% | 14% | 1.34 |
+| Friendly Finance Min Loan (internal) | 8,861 | 52% | 22% | **-10.76** |
+
+Overall it is 1.71 per lead across 65,854 leads.
+
+**Volume and worth do not agree.** JRF1st sends the most leads of any
+external source and earns 3.06 a lead; Borrowly sends almost as many at
+1.75. Acceptance says something different again — MoneySpot's leads are
+bought 58% of the times they reach a lender, the highest on the board,
+but only 1% of what it sends gets there at all.
+
+**One affiliate loses more than the rest make.** Friendly Finance Min
+Loan returns 49,481 of revenue on 8,861 leads and a profit of
+**-95,368** — every day of the thirty, not one bad week. The deduction
+is not bank statement cost, which is 2,528 for the month; something
+else in the internal profit computation accounts for 144,849. Internal
+profit is 48,431 in total, so this one brand cancels most of what the
+other five make. **What that computation deducts is worth asking, and
+if it is real spend, the campaign is worth stopping.**
+
+**Test affiliates are live in the reports.** `DummyJourney(144)` sent
+128 leads and sold 111 of them at zero revenue; `DummyImmediate(145)`,
+`ClearScore Test(162)` and `OverflowTest(13)` are also present. They
+inflate a sold rate without touching revenue, so they should be
+excluded by id once someone confirms the list.
+
+## 26. What is still missing from the page
 
 All of the above is **marginal** — how many applicants look a certain
 way. It does not say which ones are worth having.
