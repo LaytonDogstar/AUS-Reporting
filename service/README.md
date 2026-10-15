@@ -25,6 +25,15 @@ be added into a single figure, so the page is built per source and says
 which it is showing; the switch beside the affiliate filter moves
 between them.
 
+`/lenders` is the same look turned to the buying side, reached by the
+Affiliates | Lenders switch at the top of either page. Per lender it
+shows the three rates to keep from falling — how many offered leads
+pass its filters, how many of those it buys, how many sales reach its
+own page — as rolling seven-day lines, with its tiers beneath, and
+which customers it buys against those it is offered, band by band.
+Lenders are not split by source: the lender report covers every source
+together. The Dummy test lender is left out.
+
 The other pages are reached from the links under the tiles:
 `/scorecard` ranks affiliates on profit per lead, `/quality` is the
 affordability distributions split by lender result, `/pings` is the
@@ -44,14 +53,18 @@ read what was already stored.
 Measured 14 Oct 2026: about 25 seconds a day across the seven calls, so
 30 days took 15 minutes and 90 would take about three quarters of an
 hour. The ping log is most of the traffic, at roughly 23 MB a day.
+Lead quality per lender tier, added 15 Oct 2026, is the slowest part
+since: about sixty calls a day at five to six seconds each, run four at
+a time, so roughly a minute and a half a day on top.
 
 **An empty database rebuilds itself.** On start, if nothing has been
 collected, the service fills its whole history in one unattended pass.
 Nothing stored here is a system of record — the API can regenerate all of
 it — so losing the database should cost time, not data. That makes the
 Railway volume a convenience rather than a requirement: without one a
-redeploy clears the file and the service spends its first three
-quarters of an hour rebuilding, with nobody pressing anything.
+redeploy clears the file and the service spends its first three hours
+or so rebuilding ninety days, newest first, with nobody pressing
+anything.
 
 Mount a volume at `/data` to skip that. The service checks for the
 directory and falls back to a local file when it is absent, so there is
@@ -78,7 +91,7 @@ questions, and they survive intact.
 
 ### Collected data
 
-Five kinds and two lookups, in `store.py`:
+Seven kinds and two lookups, in `store.py`:
 
 **Lender tier figures, stored whole.** A tier name with its counts,
 revenue, commission and profit describes a commercial relationship, not a
@@ -119,6 +132,17 @@ collection, and both are what put names on the ping log, whose rows
 carry ids alone. `Affiliates` also returns each affiliate's portal
 username and password and its Credfin secret key — none of which is
 read, let alone stored.
+
+**Lead quality per affiliate and per lender tier.** The same bands,
+counted one affiliate or one tier at a time: `LeadQualityReport` takes
+an `affiliateId` and a `lenderTierId`. With the tier filter it returns
+every lead of the day and what that tier did with it — filtered out,
+ignored, declined, errored or sold — so what a lender was offered, let
+through and bought is answerable by band. Leads the tier was never
+offered come back as `Not Processed` and are not kept. About sixty tier
+calls a day at five to six seconds each, run four at a time
+(`QUALITY_WORKERS`). The `lenderId` filter is ignored by the API, which
+is why this is per tier.
 
 **Per affiliate, from the ping log.** The same rows counted a second
 way, by affiliate and status, so what lenders did with a source's leads

@@ -1,10 +1,19 @@
-"""Whether an affiliate's conversion is holding up over time.
+"""Whether conversion is holding up over time, per affiliate and per
+lender.
 
-Three measures, each the one Layton asked to watch:
+Per affiliate, the three measures Layton asked to watch:
 
     leads to statement   statements extracted / leads received
     submitted to sold    sold / submitted
     earnings per lead    revenue / leads received
+
+Per lender, from the lender report:
+
+    filter pass          sent / processed     how many leads get through
+                                              the lender's filters
+    acceptance           accepted / sent      how many of those it buys
+    redirect rate        redirect / accepted  how many sales reach the
+                                              lender's own page
 
 Daily rates on a small affiliate are mostly noise - ten leads and one
 sale is 10%, ten and none is 0% - so every point is a rolling seven
@@ -29,6 +38,16 @@ MEASURES = {
     "earnings_per_lead": ("revenue", "received"),
 }
 
+LENDER_MEASURES = {
+    "filter_pass": ("sent", "processed"),
+    "acceptance": ("accepted", "sent"),
+    "redirect_rate": ("redirect", "accepted"),
+}
+
+# Measures that are an amount per lead rather than a proportion, so no
+# two-proportion test applies and a wider margin stands in for one.
+AMOUNTS = ("earnings_per_lead",)
+
 
 def rolling(days, num, den, window=WINDOW):
     """[(day, rate)] where each rate covers the `window` days ending that day.
@@ -45,7 +64,7 @@ def rolling(days, num, den, window=WINDOW):
     return out
 
 
-def assess(days, measure, window=WINDOW):
+def assess(days, measure, window=WINDOW, measures=MEASURES):
     """The latest week against everything before it in the window.
 
     Returns current, baseline, relative change, and whether it is a drop
@@ -54,7 +73,7 @@ def assess(days, measure, window=WINDOW):
     per lead, a fall of EPL_REL_DROP. Too little volume returns no call
     rather than a guess.
     """
-    num, den = MEASURES[measure]
+    num, den = measures[measure]
     recent, before = days[-window:], days[:-window]
     rn = sum(d[num] or 0 for d in recent)
     rd = sum(d[den] or 0 for d in recent)
@@ -70,7 +89,7 @@ def assess(days, measure, window=WINDOW):
     if not result["enough"]:
         return result
 
-    if measure == "earnings_per_lead":
+    if measure in AMOUNTS:
         result["flag"] = result["change"] <= -EPL_REL_DROP
         return result
 

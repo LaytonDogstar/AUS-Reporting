@@ -136,6 +136,13 @@
   .watch-chg { font-size: 12px; color: var(--ink-2); min-width: 40px; }
   .watch-drop { font-size: 12px; color: var(--critical); font-weight: 600; }
   .watch-na { font-size: 12px; color: var(--muted); }
+  /* the page switch: affiliates and lenders */
+  a.seglink {
+    background: var(--surface); border-right: 1px solid var(--border);
+    color: var(--ink-2); font-size: 13px; padding: 6px 13px; text-decoration: none;
+  }
+  a.seglink:last-child { border-right: 0; }
+  a.seglink[aria-current="page"] { background: var(--series-1); color: #fff; font-weight: 560; }
   .multiples { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
   .multiples figure { margin: 0; }
   .multiples figcaption { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
@@ -167,6 +174,10 @@
   </header>
 
   <div class="filters">
+    <nav class="seg" aria-label="Page">
+      <a class="seglink" href="/" aria-current="page">Affiliates</a>
+      <a class="seglink" href="/lenders">Lenders</a>
+    </nav>
     <div class="seg" id="rangeSeg" role="group" aria-label="Date range">
       <button type="button" data-days="7">7 days</button>
       <button type="button" data-days="30" aria-pressed="true">30 days</button>

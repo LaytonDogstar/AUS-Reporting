@@ -31,7 +31,11 @@ import store
 import trends
 
 TEMPLATE = Path(__file__).with_name("template.html")
+LENDER_TEMPLATE = Path(__file__).with_name("lenders.html")
 PLACEHOLDER = "/*__DASHBOARD_DATA__*/null"
+# The lender page borrows the dashboard's stylesheet rather than keeping
+# a copy of it, so the two pages cannot drift apart in look.
+STYLE_PLACEHOLDER = "/*__SHARED_STYLE__*/"
 
 # The affiliate report's own funnel steps, given the stage ids the page
 # already knows. 10 and 13 are the two it treats as outcomes - the good
@@ -186,8 +190,102 @@ def affiliate_trends(conn, days, source):
     return out
 
 
+# The bands each lender's buying is broken down by, in the order offered
+# on the page. `money` puts a dollar sign on the band labels.
+DEMOGRAPHICS = (
+    ("WagesAndCentrelinkMonthly", "Monthly income (wages and Centrelink)", True),
+    ("WagesMonthly", "Monthly wages", True),
+    ("LoanAmount", "Loan amount", True),
+    ("Age", "Age", False),
+    ("CentrelinkAsPercentOfIncome", "Centrelink, % of income", False),
+    ("GamblingPercentageOfIncome", "Gambling, % of income", False),
+    ("IncomeSpentOnDayOfDeposit", "Income spent on payday, %", False),
+    ("TotalDishonours", "Dishonours", False),
+    ("TotalSaccDishonours", "SACC dishonours", False),
+    ("DishonourGreaterThan50DaysLast30Days", "Dishonours over 50 days, last 30 days", False),
+    ("SaccLoansFundedInLast14Days", "SACC loans funded, last 14 days", False),
+    ("SaccLoanFundedInStatementPeriod", "SACC loans funded in statement period", False),
+)
+
+
+def lender_payload(conn, days=30):
+    """The lender page: per lender, the three rates to keep from falling,
+    its tiers, and what it buys by band against what it is offered."""
+    rows = store.lender_daily(conn, days)
+    all_days = sorted({r[2] for r in rows})
+    fields = ("processed", "sent", "accepted", "redirect", "revenue")
+    blank = dict.fromkeys(fields, 0)
+
+    by_lender: dict[int, dict] = {}
+    totals: dict[str, dict] = {d: {"day": d, **blank} for d in all_days}
+    for lid, name, day_, *values in rows:
+        lender = by_lender.setdefault(lid, {"name": (name or "").strip() or f"Lender {lid}",
+                                            "days": {}})
+        point = {"day": day_, **{f: v or 0 for f, v in zip(fields, values)}}
+        lender["days"][day_] = point
+        for f in fields:
+            totals[day_][f] += point[f]
+
+    tiers: dict[int, list] = {}
+    for lid, tid, tname, price, *values in store.lender_tier_totals(conn, days):
+        tiers.setdefault(lid, []).append({
+            "id": tid, "name": tname, "price": price,
+            **{f: v or 0 for f, v in zip(fields, values)}})
+
+    lenders = []
+    for lid, lender in by_lender.items():
+        series = [lender["days"].get(d) or {"day": d, **blank} for d in all_days]
+        sums = {f: sum(p[f] for p in series) for f in fields}
+        if not sums["processed"]:
+            continue
+        measures = {}
+        for key, (num, den) in trends.LENDER_MEASURES.items():
+            measures[key] = {
+                # A line through a handful of leads is noise drawn as signal.
+                "enoughToTrend": sums[den] >= store.MIN_SCORED_LEADS,
+                "points": trends.rolling(series, num, den),
+                **trends.assess(series, key, measures=trends.LENDER_MEASURES)}
+        lenders.append({"id": lid, "name": lender["name"], **sums,
+                        "measures": measures,
+                        "tiers": sorted(tiers.get(lid, []), key=lambda t: -t["processed"])})
+    lenders.sort(key=lambda r: (-r["sent"], -r["processed"]))
+
+    demographics = {"metrics": [], "bands": {}, "byLender": {}, "all": {}}
+    stored = set(store.lender_demographic_metrics(conn))
+    for metric, label, money in DEMOGRAPHICS:
+        if metric not in stored:
+            continue
+        per_lender, bands = store.lender_demographics(conn, metric, days)
+        if not per_lender:
+            continue
+        everyone: dict[str, list] = {}
+        for counts in per_lender.values():
+            for band, trio in counts.items():
+                slot = everyone.setdefault(band, [0, 0, 0])
+                for i, n in enumerate(trio):
+                    slot[i] += n or 0
+        demographics["metrics"].append({"key": metric, "label": label, "money": money})
+        demographics["bands"][metric] = bands
+        demographics["byLender"][metric] = {str(k): v for k, v in per_lender.items()}
+        demographics["all"][metric] = everyone
+
+    return {
+        "view": "lenders",
+        "generatedUtc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+        "windowDays": days,
+        "trendWindow": trends.WINDOW,
+        "days": [totals[d] for d in all_days],
+        "lenders": lenders,
+        "demographics": demographics,
+    }
+
+
 def render(data, template: Path = TEMPLATE) -> str:
     html = template.read_text(encoding="utf-8")
+    if STYLE_PLACEHOLDER in html:
+        shared = TEMPLATE.read_text(encoding="utf-8")
+        start, end = shared.index("<style>") + len("<style>"), shared.index("</style>")
+        html = html.replace(STYLE_PLACEHOLDER, shared[start:end])
     if PLACEHOLDER not in html:
         raise ValueError(f"{template}: data placeholder not found")
     # The page is embedded in a <script>, so a closing tag inside the
@@ -198,3 +296,7 @@ def render(data, template: Path = TEMPLATE) -> str:
 
 def page(conn, days=30, source="external") -> bytes:
     return render(payload(conn, days, source)).encode("utf-8")
+
+
+def lender_page(conn, days=30) -> bytes:
+    return render(lender_payload(conn, days), LENDER_TEMPLATE).encode("utf-8")

@@ -65,6 +65,11 @@ def affiliate_id_from(name):
 TEST_AFFILIATE_IDS = (13, 144, 145, 162)        # OverflowTest, DummyJourney,
                                                 # DummyImmediate, ClearScore Test
 
+# The buying side's test traffic: "Dummy", tier "Dummy Buyer". Bought 111
+# of 112 leads over 30 days at $0, so it would read as the best lender
+# on the platform. Agreed with Layton 15 Oct 2026 to exclude it.
+TEST_LENDER_IDS = (24,)
+
 
 def business_today():
     """Today as the API dates it. The reports run on Sydney time, so a
@@ -220,6 +225,22 @@ CREATE TABLE IF NOT EXISTS quality_affiliate_day (
     PRIMARY KEY (business_date, affiliate_id, metric, band, result)
 );
 CREATE INDEX IF NOT EXISTS qad_date ON quality_affiliate_day(business_date, metric);
+
+-- Lead quality per lender tier: what each tier was offered, let through
+-- its filters, and bought, by band. Results are the tier's own:
+-- FilterFailed, Ignored, Decline, Error, Sold. Leads the tier was never
+-- offered ("Not Processed") are not stored - see the collector.
+CREATE TABLE IF NOT EXISTS quality_tier_day (
+    business_date TEXT NOT NULL,
+    lender_tier_id INTEGER NOT NULL,
+    metric TEXT NOT NULL,
+    band TEXT NOT NULL,
+    band_order INTEGER NOT NULL,
+    result TEXT NOT NULL,
+    n INTEGER NOT NULL,
+    PRIMARY KEY (business_date, lender_tier_id, metric, band, result)
+);
+CREATE INDEX IF NOT EXISTS qtd_metric ON quality_tier_day(metric, business_date);
 
 -- The affiliate lookup, from Affiliates. A snapshot, replaced whole.
 -- That endpoint also returns each affiliate's portal username and
@@ -451,6 +472,18 @@ def save_quality_by_affiliate(conn, business_date, counts, collected_at):
             " band, band_order, result, n) VALUES (?,?,?,?,?,?,?)",
             [(business_date, aid, metric, band, order, result, n)
              for (aid, metric, band, order, result), n in sorted(counts.items())])
+
+
+def save_quality_by_tier(conn, business_date, counts, collected_at):
+    """counts: {(lender_tier_id, metric, band, band_order, result): n}"""
+    with conn:
+        conn.execute("DELETE FROM quality_tier_day WHERE business_date=?",
+                     (business_date,))
+        conn.executemany(
+            "INSERT INTO quality_tier_day (business_date, lender_tier_id, metric,"
+            " band, band_order, result, n) VALUES (?,?,?,?,?,?,?)",
+            [(business_date, tid, metric, band, order, result, n)
+             for (tid, metric, band, order, result), n in sorted(counts.items())])
 
 
 def band_sold_rates(conn, metric, days=30, source=None):
@@ -777,3 +810,86 @@ def quality_distribution(conn, metric, days=30):
 def quality_metrics(conn):
     return [r[0] for r in conn.execute(
         "SELECT DISTINCT metric FROM quality_day ORDER BY metric")]
+
+
+# ----------------------------------------------------------------- lenders
+#
+# A lender is the sum of its tiers. Tiers are where filters and prices
+# live, but the question asked is about lenders - is this lender buying
+# a particular customer - and Moneyspot alone runs 28 tiers.
+
+# The lender report's names for the three stages a lead goes through at
+# a tier. `sent` is a lead that passed every one of the tier's filters
+# (Layton, 15 Oct 2026); `redirect` is a sale that made it to the
+# lender's own page.
+TIER_RESULTS_PASSED = ("Sold", "Decline", "Error")
+
+
+def _not_test_lender(column="t.lender_id"):
+    ids = ",".join(str(i) for i in TEST_LENDER_IDS)
+    return f" AND ({column} IS NULL OR {column} NOT IN ({ids}))"
+
+
+# A tier missing from the lookup still belongs somewhere: it stands as
+# its own lender, keyed by the negative tier id so it cannot collide.
+_LENDER_ID = "COALESCE(t.lender_id, -d.lender_tier_id)"
+_LENDER_NAME = "COALESCE(NULLIF(TRIM(t.lender_name), ''), d.lender_tier_name)"
+
+
+def lender_daily(conn, days=30):
+    """[(lender_id, lender_name, day, processed, sent, accepted,
+    redirect, revenue)] from the lender report, tiers summed."""
+    return conn.execute(
+        f"SELECT {_LENDER_ID}, MAX({_LENDER_NAME}), d.business_date,"
+        " SUM(d.processed), SUM(d.sent), SUM(d.accepted), SUM(d.redirect),"
+        " SUM(d.revenue) FROM lender_tier_day d"
+        " LEFT JOIN lender_tier t ON t.lender_tier_id = d.lender_tier_id"
+        " WHERE d.business_date >= ?" + _not_test_lender() +
+        f" GROUP BY {_LENDER_ID}, d.business_date",
+        (business_cutoff(days),)).fetchall()
+
+
+def lender_tier_totals(conn, days=30):
+    """Per tier over the window, with its lender and list price."""
+    return conn.execute(
+        f"SELECT {_LENDER_ID}, d.lender_tier_id, MAX(d.lender_tier_name), MAX(t.price),"
+        " SUM(d.processed), SUM(d.sent), SUM(d.accepted), SUM(d.redirect),"
+        " SUM(d.revenue) FROM lender_tier_day d"
+        " LEFT JOIN lender_tier t ON t.lender_tier_id = d.lender_tier_id"
+        " WHERE d.business_date >= ?" + _not_test_lender() +
+        f" GROUP BY {_LENDER_ID}, d.lender_tier_id HAVING SUM(d.processed) > 0",
+        (business_cutoff(days),)).fetchall()
+
+
+def lender_demographics(conn, metric, days=30):
+    """Per lender and band: offered, passed the filters, bought.
+
+    {lender_id: {band: [offered, passed, sold]}}, plus the bands in
+    order. Offered is every lead the lender's tiers were offered;
+    passed is what got through the filters (sold, declined, or an
+    error from the lender); sold is what it bought.
+
+    A lead offered to two tiers of one lender counts twice, as it does
+    in the lender report's own sums.
+    """
+    passed = ",".join(f"'{r}'" for r in TIER_RESULTS_PASSED)
+    rows = conn.execute(
+        f"SELECT COALESCE(t.lender_id, -q.lender_tier_id), q.band, q.band_order,"
+        f" SUM(q.n), SUM(CASE WHEN q.result IN ({passed}) THEN q.n ELSE 0 END),"
+        " SUM(CASE WHEN q.result='Sold' THEN q.n ELSE 0 END)"
+        " FROM quality_tier_day q"
+        " LEFT JOIN lender_tier t ON t.lender_tier_id = q.lender_tier_id"
+        " WHERE q.metric=? AND q.business_date >= ?" + _not_test_lender() +
+        " GROUP BY 1, q.band, q.band_order",
+        (metric, business_cutoff(days))).fetchall()
+    by_lender: dict[int, dict[str, list]] = {}
+    order: dict[str, int] = {}
+    for lid, band, band_order, offered, ok, sold in rows:
+        by_lender.setdefault(lid, {})[band] = [offered, ok, sold]
+        order[band] = band_order
+    return by_lender, [b for b, _ in sorted(order.items(), key=lambda bo: (bo[1], bo[0]))]
+
+
+def lender_demographic_metrics(conn):
+    return [r[0] for r in conn.execute(
+        "SELECT DISTINCT metric FROM quality_tier_day ORDER BY metric")]

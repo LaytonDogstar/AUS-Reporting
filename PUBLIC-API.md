@@ -743,3 +743,35 @@ so acceptance rate by band is in the database. The page was summing over
 that dimension and discarding it. Showing it turns "11% gamble heavily"
 into "leads gambling over 30% convert at X against Y for the rest", which
 is the question the whole engagement started with.
+
+## 27. Lead quality per lender tier
+
+Measured 15 Oct 2026 against 13 Oct.
+
+`LeadQualityReport` with `lenderTierId` returns **every lead of the day**
+— 1,777 rows, the same as the unfiltered call — but `Result` and
+`LenderTierName` become that tier's own: `FilterFailed`, `Ignored`,
+`Decline`, `Error`, `Sold`, or `Not Processed` when the lead never got
+as far as the tier because it sold higher up the tree or its journey
+ended first. Unfiltered, `Result` is only `Sold` or `Decline` and
+`LenderTierName` is filled only on sold rows.
+
+| Tier | Processed | Sent | Accepted | Filtered rows |
+|---|---:|---:|---:|---|
+| Tippla | 953 | 410 | 131 | 582 FilterFailed, 287 Error, 131 Sold, 693 Not Processed |
+| Moneyspot $5E | 1,105 | 375 | 15 | 791 FilterFailed, 367 Decline, 61 Ignored, 541 Not Processed |
+| WagePay API | 1,058 | 212 | 2 | 952 FilterFailed, 218 Decline, 17 Ignored, 588 Not Processed |
+
+So per tier and band: offered is every row but `Not Processed`, passed
+the filters is `Sold` + `Decline` + `Error` — which is how the lender
+report defines `sent` — and bought is `Sold`. That is what the lender
+page's "who the lender buys" view is built on.
+
+`lenderId` is **ignored**: the same three lenders by `lenderId` each
+returned the unfiltered day, `Decline` 1,048 and `Sold` 729. Collection
+is therefore per tier — about sixty a day are offered something — and a
+lender is the sum of its tiers.
+
+Two definitions confirmed by Layton the same day: `Sent` is the number of
+leads that passed all of the tier's filters, and `Redirect` is the number
+of accepted leads successfully redirected to the lender's page.

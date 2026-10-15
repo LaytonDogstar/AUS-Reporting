@@ -93,7 +93,7 @@ def page(title, body):
 
 
 def nav(active=""):
-    items = [("/", "Dashboard"), ("/scorecard", "Scorecard"),
+    items = [("/", "Dashboard"), ("/lenders", "Lenders"), ("/scorecard", "Scorecard"),
              ("/affiliates", "Affiliates"), ("/quality", "Lead quality"),
              ("/pings", "Ping log"), ("/collection", "Collection"),
              ("/verify", "Window check"), ("/explore", "API explorer")]
@@ -129,6 +129,23 @@ def dashboard_page(days=30, source="external"):
                     f'yet. <a href="/?source={other}">Try the other one</a>, or '
                     '<a href="/collection">see what the collector is doing</a>.</p></div>')
     return dash.render(data).encode("utf-8")
+
+
+def lenders_page(days=30):
+    """Per lender: whether its filter pass, acceptance and redirect rates
+    are holding up, and which customers it buys against those it is
+    offered. Lenders are not split by source - the lender report covers
+    every source together."""
+    conn = store.connect(DB_PATH)
+    try:
+        data = dash.lender_payload(conn, days)
+    finally:
+        conn.close()
+    if not data["lenders"]:
+        return page("Lenders", '<h1>Lenders</h1>' + nav("/lenders") +
+                    '<div class="card"><p class="note">Nothing collected yet. '
+                    '<a href="/collection">See what the collector is doing</a>.</p></div>')
+    return dash.render(data, dash.LENDER_TEMPLATE).encode("utf-8")
 
 
 def collection_page():
@@ -803,6 +820,8 @@ class Handler(BaseHTTPRequestHandler):
                 if source not in ("external", "internal"):
                     source = "external"
                 return self._send(200, dashboard_page(days, source))
+            if path == "/lenders":
+                return self._send(200, lenders_page(days))
             if path == "/collection":
                 return self._send(200, collection_page())
             if path == "/affiliates":

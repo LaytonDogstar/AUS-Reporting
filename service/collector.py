@@ -16,6 +16,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 
 import store
@@ -447,11 +448,12 @@ def reduce_affiliates(payload):
 # affiliate lead count.
 KINDS = ("tiers", "quality", "affiliates", "internal_affiliates",
          "lender_results", "lender_lookup", "affiliate_lookup",
-         "quality_by_affiliate")
+         "quality_by_affiliate", "quality_by_tier")
 
 # Kinds that take more than one call, so they are collected after the
-# single-call ones rather than through _requests.
-MULTI_CALL_KINDS = ("quality_by_affiliate",)
+# single-call ones rather than through _requests - which also means the
+# reports they take their list of ids from are already in.
+MULTI_CALL_KINDS = ("quality_by_affiliate", "quality_by_tier")
 
 
 def _store_tiers(conn, iso, payload, ms, stamp):
@@ -565,6 +567,55 @@ def fetch_retrying(url, attempts=3, pause=2.0):
     raise RuntimeError(error or f"HTTP {status}")
 
 
+# Calls in flight at once for the per-id quality reports. A tier call
+# takes five to six seconds and a day has about sixty, so one at a time
+# a fresh database's ninety days would take most of a working day.
+QUALITY_WORKERS = int(os.environ.get("QUALITY_WORKERS", "4"))
+
+
+def _quality_split(iso, ids, param):
+    """Band counts with the lender result, one LeadQualityReport call
+    per id under `param`. {(id, metric, band, order, result): n}, and
+    how many rows were read.
+
+    All or nothing: a partial day would understate every id the failed
+    call belongs to, and nothing downstream could tell.
+    """
+    qs = window(date.fromisoformat(iso))
+
+    def one(one_id):
+        try:
+            payload = fetch_retrying(
+                f"{API_BASE}/api/PublicReports/LeadQualityReport?{qs}&{param}={int(one_id)}")
+        except RuntimeError as exc:
+            raise RuntimeError(f"{param} {one_id}: {exc}") from None
+        items = (json.loads(payload.decode("utf-8", "replace")) or {}).get("Items") or []
+        # Reduced in the worker, so rows do not outlive the call
+        return one_id, len(items), reduce_quality_bands(items)
+
+    counts: dict[tuple, int] = {}
+    rows = 0
+    with ThreadPoolExecutor(max_workers=max(1, QUALITY_WORKERS)) as pool:
+        for one_id, n_rows, reduced in pool.map(one, sorted(ids)):
+            rows += n_rows
+            for (metric, band, order, result), n in reduced.items():
+                if result in NOT_OFFERED:
+                    continue
+                key = (one_id, metric, band, order, result)
+                counts[key] = counts.get(key, 0) + n
+    return counts, rows
+
+
+# With a lender tier filter, LeadQualityReport returns every lead of the
+# day, each with what that tier did with it: FilterFailed, Ignored,
+# Decline, Error, Sold - or "Not Processed" when the lead never got as
+# far as the tier, because it sold higher up the tree or the journey
+# ended first. Measured 15 Oct 2026. Those leads were never offered to
+# the tier and say nothing about it, so they are not kept: on a typical
+# tier they are a third to a half of the rows.
+NOT_OFFERED = ("Not Processed",)
+
+
 def collect_quality_by_affiliate(conn, iso, stamp):
     """Lead quality for each affiliate that sent anything that day.
 
@@ -573,34 +624,45 @@ def collect_quality_by_affiliate(conn, iso, stamp):
     second or two each. Which affiliates were active comes from the
     affiliate reports already collected for the day, so a day collected
     out of order simply finds none and is retried.
-
-    All or nothing: a partial day would understate every affiliate the
-    failed call belongs to, and nothing downstream could tell.
     """
     ids = [r[0] for r in conn.execute(
         "SELECT DISTINCT affiliate_id FROM affiliate_day WHERE business_date=?"
         " AND affiliate_id IS NOT NULL AND received > 0", (iso,))]
     if not ids:
         raise RuntimeError("no affiliate rows for this day yet")
-
-    qs = window(date.fromisoformat(iso))
-    counts: dict[tuple[int, str, str, int], int] = {}
-    rows = 0
-    for affiliate_id in sorted(ids):
-        try:
-            payload = fetch_retrying(
-                f"{API_BASE}/api/PublicReports/LeadQualityReport?{qs}"
-                f"&affiliateId={int(affiliate_id)}")
-        except RuntimeError as exc:
-            raise RuntimeError(f"affiliate {affiliate_id}: {exc}") from None
-        items = (json.loads(payload.decode("utf-8", "replace")) or {}).get("Items") or []
-        rows += len(items)
-        for (metric, band, order, result), n in reduce_quality_bands(items).items():
-            key = (affiliate_id, metric, band, order, result)
-            counts[key] = counts.get(key, 0) + n
-        del items                               # rows do not outlive this call
+    counts, rows = _quality_split(iso, ids, "affiliateId")
     store.save_quality_by_affiliate(conn, iso, counts, stamp)
     return f"{len(ids)} affiliate(s), {rows:,} row(s) -> {len(counts)} count(s)"
+
+
+def collect_quality_by_tier(conn, iso, stamp):
+    """Lead quality for each lender tier that was offered anything.
+
+    This is what says whether a lender buys a particular kind of
+    customer: per band, how many leads the tier was offered, how many
+    got through its filters, and how many it bought. Taken per tier
+    because the `lenderId` filter is ignored by the API - measured
+    15 Oct 2026, it returns the unfiltered day - while `lenderTierId`
+    is honoured.
+
+    About sixty tiers a day are offered something, at around three
+    seconds a call. Tiers offered nothing are skipped: there is nothing
+    to say about them.
+    """
+    have = conn.execute("SELECT COUNT(*) FROM lender_tier_day WHERE business_date=?",
+                        (iso,)).fetchone()[0]
+    if not have:
+        raise RuntimeError("no lender report for this day yet")
+    ids = [r[0] for r in conn.execute(
+        "SELECT lender_tier_id FROM lender_tier_day WHERE business_date=?"
+        " AND processed > 0", (iso,))]
+    counts, rows = _quality_split(iso, ids, "lenderTierId")
+    store.save_quality_by_tier(conn, iso, counts, stamp)
+    return f"{len(ids)} tier(s), {rows:,} row(s) -> {len(counts)} count(s)"
+
+
+MULTI_CALL_COLLECTORS = {"quality_by_affiliate": collect_quality_by_affiliate,
+                         "quality_by_tier": collect_quality_by_tier}
 
 
 def collect_day(conn, day: date, kinds=KINDS):
@@ -633,7 +695,7 @@ def collect_day(conn, day: date, kinds=KINDS):
             continue
         started = time.monotonic()
         try:
-            detail = collect_quality_by_affiliate(conn, iso, stamp)
+            detail = MULTI_CALL_COLLECTORS[kind](conn, iso, stamp)
             store.mark(conn, iso, kind, "ok", detail,
                        int((time.monotonic() - started) * 1000), stamp)
             out[kind] = "ok"
@@ -710,7 +772,8 @@ def reset(conn):
         for table in ("lender_tier_day", "totals_day", "quality_day",
                       "quality_day_meta", "affiliate_day", "affiliate_totals_day",
                       "lender_result_day", "lender_result_day_meta",
-                      "affiliate_result_day", "quality_affiliate_day", "collection"):
+                      "affiliate_result_day", "quality_affiliate_day",
+                      "quality_tier_day", "collection"):
             conn.execute(f"DELETE FROM {table}")
 
 

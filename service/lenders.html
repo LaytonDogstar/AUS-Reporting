@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AUS Lead Reporting · Lenders</title>
+<style>
+/*__SHARED_STYLE__*/
+  /* lender page additions; the rest is the dashboard's own */
+  .scroll { overflow-x: auto; }
+  .card-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+  .card-head h2 { margin-right: auto; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>AUS Lead Reporting</h1>
+    <span class="asof" id="asof"></span>
+    <span class="spacer"></span>
+    <button class="ghost" id="themeBtn" type="button">Dark mode</button>
+  </header>
+
+  <div class="filters">
+    <nav class="seg" aria-label="Page">
+      <a class="seglink" href="/">Affiliates</a>
+      <a class="seglink" href="/lenders" aria-current="page">Lenders</a>
+    </nav>
+    <label class="lbl" for="lenderSel">Lender</label>
+    <select id="lenderSel"><option value="all">All lenders</option></select>
+    <span class="spacer"></span>
+  </div>
+
+  <div class="tiles" id="tiles"></div>
+
+  <section class="card" id="watchCard">
+    <h2>Lender trends</h2>
+    <p class="sub" id="watchSub"></p>
+    <div class="scroll">
+    <table id="watchTable">
+      <thead><tr>
+        <th>Lender</th><th>Passed filters</th><th>Accepted</th><th>Redirected</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+    </div>
+    <p class="note">
+      <b>Passed filters</b> is leads sent to the lender over leads it was offered: how many
+      get through its filters. <b>Accepted</b> is how many of those it bought.
+      <b>Redirected</b> is how many sales made it to the lender&rsquo;s own page. Each line
+      is a rolling seven days; the figure beside it is the latest week, and the change is
+      against the weeks before it. <b>&#9660; drop</b> marks a fall of at least 10% that is
+      beyond what chance would produce, judged only where the latest week had 50 or more.
+      Select a row for the detail and the lender&rsquo;s tiers.
+    </p>
+  </section>
+
+  <section class="card hidden" id="detailCard">
+    <h2 id="detailTitle"></h2>
+    <p class="sub" id="detailSub"></p>
+    <div class="multiples">
+      <figure><figcaption>Passed filters <span class="cap-sub" id="cap_fp"></span></figcaption>
+        <svg id="det_fp" role="img" aria-label="Share of offered leads passing the filters, rolling seven days"></svg></figure>
+      <figure><figcaption>Accepted <span class="cap-sub" id="cap_acc"></span></figcaption>
+        <svg id="det_acc" role="img" aria-label="Share of sent leads accepted, rolling seven days"></svg></figure>
+      <figure><figcaption>Redirected <span class="cap-sub" id="cap_red"></span></figcaption>
+        <svg id="det_red" role="img" aria-label="Share of sales redirected, rolling seven days"></svg></figure>
+    </div>
+    <h3 style="font-size:13px;margin:22px 0 6px">Tiers</h3>
+    <div class="scroll">
+    <table id="tierTable">
+      <thead><tr>
+        <th>Tier</th><th>List price</th><th>Offered</th><th>Passed filters</th>
+        <th>Accepted</th><th>Redirected</th><th>Revenue</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+    </div>
+  </section>
+
+  <section class="card" id="demoCard">
+    <div class="card-head">
+      <h2>Who the lender buys</h2>
+      <label class="lbl demo-body" for="metricSel">Broken down by</label>
+      <select class="demo-body" id="metricSel"></select>
+    </div>
+    <p class="sub" id="demoSub"></p>
+    <div class="legend demo-body">
+      <span><i style="background:var(--baseline)"></i>Share of leads offered</span>
+      <span><i style="background:var(--series-1)"></i>Share of leads bought</span>
+    </div>
+    <svg id="demo" role="img" aria-label="Mix of leads offered against leads bought, by band"></svg>
+    <div class="scroll demo-body">
+    <table id="demoTable" style="margin-top:14px">
+      <thead><tr>
+        <th>Band</th><th>Offered</th><th>Passed filters</th><th>Bought</th>
+        <th>Share offered</th><th>Share bought</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+    </div>
+    <p class="note demo-body" id="demoNote">
+      A band whose share bought sits well above its share offered is a customer this lender
+      favours; one well below is a customer it avoids. <b>Passed filters</b> and
+      <b>Bought</b> show where that happens: at the filters, or at the lender&rsquo;s own
+      decision. A lead offered to two tiers of the same lender counts twice, as it does in
+      the lender report.
+    </p>
+  </section>
+
+  <footer id="foot"></footer>
+</div>
+
+<div id="tip" role="status" aria-live="polite"></div>
+
+<script>
+const DATA = /*__DASHBOARD_DATA__*/null;
+
+(function () {
+  "use strict";
+  if (!DATA) { document.body.innerHTML = "<p style='padding:2rem'>No data was built into this page.</p>"; return; }
+
+  const $ = (id) => document.getElementById(id);
+  const fmt = (n) => (n == null ? "—" : Math.round(n).toLocaleString("en-AU"));
+  const pct = (n) => (n == null ? "—" : n.toFixed(1) + "%");
+  const rate = (v) => (v == null ? "—" : pct(100 * v));
+  const money = (n) => (n == null ? "—" : "$" + Math.round(n).toLocaleString("en-AU"));
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  let lender = "all";
+  const lenders = DATA.lenders || [];
+  const byId = new Map(lenders.map((l) => [String(l.id), l]));
+  const demo = DATA.demographics || { metrics: [] };
+  let metric = demo.metrics.length ? demo.metrics[0].key : null;
+
+  // ---- tooltip -----------------------------------------------------
+  const tip = $("tip");
+  function showTip(evt, html) {
+    tip.innerHTML = html;
+    tip.style.opacity = "1";
+    const pad = 14, r = tip.getBoundingClientRect();
+    let x = evt.clientX + pad, y = evt.clientY + pad;
+    if (x + r.width > innerWidth - 8) x = evt.clientX - r.width - pad;
+    if (y + r.height > innerHeight - 8) y = evt.clientY - r.height - pad;
+    tip.style.left = x + "px"; tip.style.top = y + "px";
+  }
+  const hideTip = () => { tip.style.opacity = "0"; };
+
+  const SVGNS = "http://www.w3.org/2000/svg";
+  function el(name, attrs, parent) {
+    const n = document.createElementNS(SVGNS, name);
+    for (const k in attrs) n.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(n);
+    return n;
+  }
+
+  // ---- trends ------------------------------------------------------
+  const MEASURES = [
+    ["filter_pass", "det_fp", "cap_fp"],
+    ["acceptance", "det_acc", "cap_acc"],
+    ["redirect_rate", "det_red", "cap_red"],
+  ];
+
+  function sparkline(points, flagged) {
+    const W = 112, H = 28, pad = 3;
+    const vals = points.map((p) => p[1]).filter((v) => v != null);
+    const svg = document.createElementNS(SVGNS, "svg");
+    svg.setAttribute("width", W); svg.setAttribute("height", H);
+    if (vals.length < 2) return svg;
+    const lo = Math.min(...vals), hi = Math.max(...vals), span = hi - lo || hi || 1;
+    const x = (i) => pad + (i / (points.length - 1)) * (W - 2 * pad);
+    const y = (v) => H - pad - ((v - lo) / span) * (H - 2 * pad);
+    let d = "";
+    points.forEach(([, v], i) => { if (v != null) d += (d ? "L" : "M") + x(i) + "," + y(v); });
+    el("path", { d, fill: "none", stroke: "var(--muted)", "stroke-width": 2,
+                 "stroke-linejoin": "round", "stroke-linecap": "round" }, svg);
+    let li = points.length - 1;
+    while (li >= 0 && points[li][1] == null) li--;
+    if (li >= 0) el("circle", { cx: x(li), cy: y(points[li][1]), r: 3.5,
+                                fill: flagged ? "var(--critical)" : "var(--series-1)" }, svg);
+    return svg;
+  }
+
+  function drawWatch() {
+    $("watchSub").textContent = lenders.length
+      ? "The three rates to keep from falling, per lender, over the loaded window. Busiest first."
+      : "Nothing collected yet.";
+    const body = $("watchTable").querySelector("tbody");
+    body.innerHTML = "";
+    for (const r of lenders) {
+      const tr = document.createElement("tr");
+      if (String(r.id) === lender) tr.style.background = "var(--page)";
+      const name = document.createElement("td");
+      name.innerHTML = `<span class="watch-name">${esc(r.name)}</span>` +
+        `<span class="watch-journey">${fmt(r.sent)} passed filters · ${fmt(r.accepted)} bought</span>`;
+      tr.appendChild(name);
+      for (const [key] of MEASURES) {
+        const m = r.measures[key];
+        const td = document.createElement("td");
+        const cell = document.createElement("div");
+        cell.className = "watch-cell";
+        if (!m.enoughToTrend) {
+          cell.innerHTML = key === "filter_pass" || r.sent
+            ? '<span class="watch-na">Too few to trend</span>'
+            : '<span class="watch-na">Nothing passed its filters</span>';
+        } else {
+          cell.appendChild(sparkline(m.points, m.flag));
+          const val = document.createElement("span");
+          val.className = "watch-val"; val.textContent = rate(m.current);
+          cell.appendChild(val);
+          const chg = document.createElement("span");
+          chg.className = m.flag ? "watch-drop" : "watch-chg";
+          chg.textContent = m.change == null ? ""
+            : (m.flag ? "▼ drop " : "") + (m.change > 0 ? "+" : "") + Math.round(100 * m.change) + "%";
+          cell.appendChild(chg);
+          const tipText = `<b>${esc(r.name)}</b><div class="row"><span>Latest week</span><span>${
+            rate(m.current)}</span></div><div class="row"><span>Before</span><span>${
+            rate(m.baseline)}</span></div>` +
+            (m.enough ? "" : '<div class="row"><span>Too few to call a drop</span></div>');
+          cell.addEventListener("mousemove", (e) => showTip(e, tipText));
+          cell.addEventListener("mouseleave", hideTip);
+        }
+        td.appendChild(cell);
+        tr.appendChild(td);
+      }
+      tr.addEventListener("click", () => {
+        lender = String(r.id);
+        $("lenderSel").value = lender;
+        render();
+        $("detailCard").scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+      body.appendChild(tr);
+    }
+  }
+
+  // One chart per rate, each on its own axis. The earlier weeks' level
+  // is a solid hairline, so a fall below it reads without a second series.
+  function drawDetailChart(svg, points, baseline, flagged) {
+    svg.innerHTML = "";
+    const W = svg.clientWidth || 300, H = 190;
+    svg.setAttribute("height", H);
+    const m = { t: 12, r: 12, b: 24, l: 52 };
+    const iw = W - m.l - m.r, ih = H - m.t - m.b;
+    const vals = points.map((p) => p[1]).filter((v) => v != null);
+    if (vals.length < 2) return;
+    const top = Math.max(...vals, baseline || 0) * 1.05 || 0.01;
+    const raw = top / 4, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    const step = [1, 2, 2.5, 5, 10].map((f) => f * mag).find((v) => v >= raw);
+    const max = step * 4;
+    const x = (i) => m.l + (i / (points.length - 1)) * iw;
+    const y = (v) => m.t + ih - (v / max) * ih;
+    for (let i = 0; i <= 4; i++) {
+      const v = (max / 4) * i, yy = y(v);
+      el("line", { x1: m.l, x2: m.l + iw, y1: yy, y2: yy, class: "gridline" }, svg);
+      const t = el("text", { x: m.l - 6, y: yy + 4, class: "tick", "text-anchor": "end" }, svg);
+      t.textContent = rate(v);
+    }
+    [0, points.length - 1].forEach((i) => {
+      const t = el("text", { x: x(i), y: H - 6, class: "tick",
+                             "text-anchor": i ? "end" : "start" }, svg);
+      t.textContent = points[i][0].slice(8, 10) + "/" + points[i][0].slice(5, 7);
+    });
+    if (baseline != null) {
+      el("line", { x1: m.l, x2: m.l + iw, y1: y(baseline), y2: y(baseline),
+                   stroke: "var(--baseline)", "stroke-width": 1.5 }, svg);
+      const bt = el("text", { x: m.l + 4, y: y(baseline) - 5, class: "tick" }, svg);
+      bt.textContent = "earlier " + rate(baseline);
+    }
+    let d = "";
+    points.forEach(([, v], i) => { if (v != null) d += (d ? "L" : "M") + x(i) + "," + y(v); });
+    el("path", { d, fill: "none", stroke: "var(--series-1)", "stroke-width": 2,
+                 "stroke-linejoin": "round", "stroke-linecap": "round" }, svg);
+    const last = points.length - 1;
+    if (points[last][1] != null)
+      el("circle", { cx: x(last), cy: y(points[last][1]), r: 4,
+                     fill: flagged ? "var(--critical)" : "var(--series-1)",
+                     stroke: "var(--surface)", "stroke-width": 2 }, svg);
+
+    const cross = el("line", { y1: m.t, y2: m.t + ih, stroke: "var(--baseline)",
+                               "stroke-width": 1, opacity: 0 }, svg);
+    const hit = el("rect", { x: m.l, y: m.t, width: iw, height: ih, fill: "transparent" }, svg);
+    hit.addEventListener("mousemove", (e) => {
+      const box = svg.getBoundingClientRect();
+      const i = Math.max(0, Math.min(last, Math.round(((e.clientX - box.left - m.l) / iw) * last)));
+      cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("opacity", 1);
+      const [day, v] = points[i];
+      showTip(e, `<b>Seven days to ${day}</b><div class="row"><span>Rate</span><span>${rate(v)}</span></div>`);
+    });
+    hit.addEventListener("mouseleave", () => { cross.setAttribute("opacity", 0); hideTip(); });
+  }
+
+  function drawDetail() {
+    const card = $("detailCard");
+    const r = byId.get(lender);
+    if (!r) { card.classList.add("hidden"); return; }
+    card.classList.remove("hidden");
+    $("detailTitle").textContent = r.name;
+    $("detailSub").textContent = `${fmt(r.processed)} offered · ${fmt(r.sent)} passed filters · ` +
+      `${fmt(r.accepted)} bought · ${money(r.revenue)} revenue over ${DATA.windowDays} days.`;
+    for (const [key, svgId, capId] of MEASURES) {
+      const m = r.measures[key], svg = $(svgId);
+      if (!m.enoughToTrend) {
+        svg.innerHTML = ""; svg.setAttribute("height", 40);
+        const t = el("text", { x: 0, y: 24, class: "tick" }, svg);
+        t.textContent = "Too few leads to draw a trend.";
+        $(capId).textContent = "";
+        continue;
+      }
+      $(capId).textContent = m.current == null ? "" : "· latest week " + rate(m.current);
+      drawDetailChart(svg, m.points, m.baseline, m.flag);
+    }
+    const share = (a, b) => (b ? rate(a / b) : "—");
+    $("tierTable").querySelector("tbody").innerHTML = r.tiers.map((t) => `
+      <tr><td>${esc(t.name || ("Tier " + t.id))}</td>
+        <td class="num">${t.price == null ? "—" : "$" + t.price.toFixed(2)}</td>
+        <td class="num">${fmt(t.processed)}</td>
+        <td class="num">${fmt(t.sent)} <span style="color:var(--muted)">${share(t.sent, t.processed)}</span></td>
+        <td class="num">${fmt(t.accepted)} <span style="color:var(--muted)">${share(t.accepted, t.sent)}</span></td>
+        <td class="num">${fmt(t.redirect)} <span style="color:var(--muted)">${share(t.redirect, t.accepted)}</span></td>
+        <td class="num">${money(t.revenue)}</td></tr>`).join("");
+  }
+
+  // ---- demographics -------------------------------------------------
+  function bandLabel(band, isMoney) {
+    if (band === "unknown") return "Not known";
+    if (!isMoney) return band;
+    if (band.startsWith("<")) return "under $" + Number(band.slice(1)).toLocaleString("en-AU");
+    if (band.endsWith("+")) return "$" + Number(band.slice(0, -1)).toLocaleString("en-AU") + "+";
+    return band.split("-").map((v) => "$" + Number(v).toLocaleString("en-AU")).join("–");
+  }
+
+  function demoRows() {
+    if (!metric) return [];
+    const counts = lender === "all"
+      ? (demo.all[metric] || {})
+      : ((demo.byLender[metric] || {})[lender] || {});
+    const bands = (demo.bands[metric] || []).filter((b) => counts[b] && counts[b][0] > 0);
+    const offered = bands.reduce((s, b) => s + counts[b][0], 0);
+    const sold = bands.reduce((s, b) => s + counts[b][2], 0);
+    return bands.map((b) => {
+      const [o, p, s] = counts[b];
+      return { band: b, offered: o, passed: p, sold: s,
+               shareOffered: offered ? o / offered : 0, shareSold: sold ? s / sold : null };
+    });
+  }
+
+  function drawDemo() {
+    const svg = $("demo");
+    svg.innerHTML = "";
+    const info = demo.metrics.find((x) => x.key === metric);
+    const who = lender === "all" ? "all lenders" : (byId.get(lender) || { name: "this lender" }).name;
+    const rows = demoRows();
+    const sold = rows.reduce((s, r) => s + r.sold, 0);
+    document.querySelectorAll(".demo-body").forEach((n) =>
+      n.classList.toggle("hidden", !demo.metrics.length));
+    if (!info || !rows.length) {
+      $("demoSub").textContent = demo.metrics.length
+        ? `Nothing was offered to ${who} in this window.`
+        : "Still being collected — this fills in as each day's lead quality comes in.";
+      svg.setAttribute("height", 10);
+      $("demoTable").querySelector("tbody").innerHTML = "";
+      return;
+    }
+    $("demoSub").textContent = `${info.label}: the mix of leads offered to ${who}, against the mix it bought` +
+      (sold ? "." : " — it bought nothing in this window.");
+
+    const rowH = 34, gap = 6, labelW = 160, valueW = 130;
+    const W = svg.clientWidth || 900;
+    const barW = Math.max(60, W - labelW - valueW);
+    const H = rows.length * (rowH + gap);
+    svg.setAttribute("height", H);
+    const max = Math.max(...rows.map((r) => Math.max(r.shareOffered, r.shareSold || 0)), 0.01);
+    rows.forEach((r, i) => {
+      const y = i * (rowH + gap);
+      const t = el("text", { x: labelW - 12, y: y + rowH / 2 + 4, class: "tick",
+                             "text-anchor": "end", fill: "var(--ink-2)" }, svg);
+      t.textContent = bandLabel(r.band, info.money);
+      el("rect", { x: labelW, y: y + 2, width: Math.max(2, (r.shareOffered / max) * barW),
+                   height: 13, rx: 3, fill: "var(--baseline)" }, svg);
+      if (r.shareSold != null)
+        el("rect", { x: labelW, y: y + 17, width: Math.max(2, (r.shareSold / max) * barW),
+                     height: 13, rx: 3, fill: "var(--series-1)" }, svg);
+      const v = el("text", { x: labelW + barW + 10, y: y + rowH / 2 + 4, class: "tick num",
+                             fill: "var(--ink-2)" }, svg);
+      v.textContent = rate(r.shareOffered) + " → " + (r.shareSold == null ? "—" : rate(r.shareSold));
+      const hit = el("rect", { x: 0, y, width: W, height: rowH, fill: "transparent" }, svg);
+      hit.addEventListener("mousemove", (e) => showTip(e,
+        `<b>${esc(bandLabel(r.band, info.money))}</b>
+         <div class="row"><span>Offered</span><span>${fmt(r.offered)}</span></div>
+         <div class="row"><span>Passed filters</span><span>${fmt(r.passed)} · ${r.offered ? rate(r.passed / r.offered) : "—"}</span></div>
+         <div class="row"><span>Bought</span><span>${fmt(r.sold)} · ${r.passed ? rate(r.sold / r.passed) : "—"} of passed</span></div>`));
+      hit.addEventListener("mouseleave", hideTip);
+    });
+
+    $("demoTable").querySelector("tbody").innerHTML = rows.map((r) => `
+      <tr><td>${esc(bandLabel(r.band, info.money))}</td>
+        <td class="num">${fmt(r.offered)}</td>
+        <td class="num">${fmt(r.passed)} <span style="color:var(--muted)">${r.offered ? rate(r.passed / r.offered) : "—"}</span></td>
+        <td class="num">${fmt(r.sold)} <span style="color:var(--muted)">${r.passed ? rate(r.sold / r.passed) : "—"}</span></td>
+        <td class="num">${rate(r.shareOffered)}</td>
+        <td class="num">${r.shareSold == null ? "—" : rate(r.shareSold)}</td></tr>`).join("");
+  }
+
+  // ---- render ------------------------------------------------------
+  function render() {
+    const one = byId.get(lender);
+    const t = one || lenders.reduce((acc, l) => {
+      for (const k of ["processed", "sent", "accepted", "redirect", "revenue"]) acc[k] += l[k];
+      return acc;
+    }, { processed: 0, sent: 0, accepted: 0, redirect: 0, revenue: 0 });
+    const buying = lenders.filter((l) => l.accepted > 0).length;
+    const share = (a, b, what) => (b ? rate(a / b) + " " + what : "—");
+    $("tiles").innerHTML = [
+      ["Offered", fmt(t.processed), one ? `${DATA.windowDays} days` : `${DATA.windowDays} days, across tiers`],
+      ["Passed filters", fmt(t.sent), share(t.sent, t.processed, "of offered")],
+      ["Bought", fmt(t.accepted), share(t.accepted, t.sent, "of passed")],
+      ["Redirected", fmt(t.redirect), share(t.redirect, t.accepted, "of bought")],
+      ["Revenue", money(t.revenue), one ? (t.accepted ? "$" + (t.revenue / t.accepted).toFixed(2) + " per sale" : "—")
+                                         : `${buying} lenders buying`],
+    ].map(([k, v, s]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s}</div></div>`).join("");
+
+    drawWatch();
+    drawDetail();
+    drawDemo();
+  }
+
+  // ---- controls ----------------------------------------------------
+  const sel = $("lenderSel");
+  [...lenders].sort((a, b) => a.name.localeCompare(b.name)).forEach((l) => {
+    const o = document.createElement("option");
+    o.value = String(l.id); o.textContent = l.name; sel.appendChild(o);
+  });
+  sel.addEventListener("change", () => { lender = sel.value; render(); });
+
+  const msel = $("metricSel");
+  for (const m of demo.metrics) {
+    const o = document.createElement("option");
+    o.value = m.key; o.textContent = m.label; msel.appendChild(o);
+  }
+  msel.addEventListener("change", () => { metric = msel.value; drawDemo(); });
+
+  const themeBtn = $("themeBtn");
+  const isDark = () =>
+    document.documentElement.getAttribute("data-theme") === "dark"
+    || (!document.documentElement.hasAttribute("data-theme")
+        && matchMedia("(prefers-color-scheme: dark)").matches);
+  const syncThemeLabel = () => { themeBtn.textContent = isDark() ? "Light mode" : "Dark mode"; };
+  themeBtn.addEventListener("click", () => {
+    document.documentElement.setAttribute("data-theme", isDark() ? "light" : "dark");
+    syncThemeLabel();
+    render();
+  });
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", syncThemeLabel);
+  syncThemeLabel();
+  addEventListener("resize", () => render());
+
+  const gen = new Date(DATA.generatedUtc);
+  $("asof").textContent = "Data as at " + gen.toISOString().slice(0, 16).replace("T", " ") +
+    " UTC · " + DATA.windowDays + " days loaded · All sources";
+  $("foot").innerHTML =
+    "Lenders cover every source together: the lender report does not split by affiliate. " +
+    "Reporting days are Sydney local time. Collected once a day from the PublicReports API, so the newest day is yesterday.<br>" +
+    "The Dummy test lender is left out. “Bought” means accepted by the lender; funded outcomes are not reported back.";
+
+  render();
+})();
+</script>
+</body>
+</html>
