@@ -121,6 +121,13 @@ class Payload(unittest.TestCase):
         self.assertEqual([a["id"] for a in ext["affiliates"]], [EXT])
         self.assertEqual([a["id"] for a in ff["affiliates"]], [FF])
 
+    def test_all_sources_adds_both_populations_from_the_ping_log(self):
+        p = dash.today_payload(self.conn, "today", "all")
+        self.assertEqual(sum(p["total"]["day"]["leads"]), 26)        # 20 + 6, no test traffic
+        self.assertEqual(sum(p["total"]["day"]["sold"]), 17)         # 14 + 3
+        self.assertEqual({a["id"]: a["internal"] for a in p["affiliates"]}, {EXT: False, FF: True})
+        self.assertIsNotNone(p["ff"])
+
     def test_without_the_lookup_neither_population_shows_anything(self):
         self.conn.execute("DELETE FROM affiliate")
         self.conn.commit()
@@ -238,12 +245,15 @@ class Pages(unittest.TestCase):
 
     def test_both_pages_render_with_the_pop_up(self):
         for which in ("today", "yesterday"):
-            for source in ("external", "internal"):
+            for source in ("all", "external", "internal"):
                 with self.subTest(which=which, source=source):
                     html = main.today_page(which, source).decode()
                     self.assertIn('id="chartPop"', html)
                     self.assertIn('"page":"' + which + '"', html)
                     self.assertNotIn("/*__DASHBOARD_DATA__*/", html)
+
+    def test_the_combined_view_is_the_default(self):
+        self.assertIn('"source":"all"', main.today_page("today").decode())
 
     def test_an_empty_database_still_renders(self):
         tmp = Path(self.enterContext(tempfile.TemporaryDirectory())) / "e.db"

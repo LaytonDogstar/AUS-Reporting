@@ -150,9 +150,9 @@ def lenders_page(days=30):
     return dash.render(data, dash.LENDER_TEMPLATE).encode("utf-8")
 
 
-def today_page(which="today", source="external"):
-    """The day hour by hour against the norm, one population at a time:
-    today read live, or yesterday."""
+def today_page(which="today", source="all"):
+    """The day hour by hour against the norm, for all sources or one
+    population: today read live, or yesterday."""
     conn = store.connect(DB_PATH)
     try:
         data = dash.today_payload(conn, which, source)
@@ -861,9 +861,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/lenders":
                 return self._send(200, lenders_page(days))
             if path in ("/today", "/yesterday"):
-                source = params.get("source", "external")
-                if source not in ("external", "internal"):
-                    source = "external"
+                source = params.get("source", "all")
+                if source not in dash.TODAY_SOURCES:
+                    source = "all"
                 if path == "/today" and params.get("refresh") == "1":
                     collector.live_in_background(DB_PATH)
                     return self._send(303, b"", "text/plain",

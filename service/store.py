@@ -787,7 +787,16 @@ def _in_source(conn, source):
     """SQL keeping one population's affiliates, test traffic left out.
     An affiliate missing from a loaded lookup counts as external: every
     internal source is in it, because the lookup is where 'internal'
-    comes from. With no lookup at all, nothing is kept."""
+    comes from. With no lookup at all, nothing is kept.
+
+    `all` keeps both. That is sound here and only here: the hour tables
+    come from the ping log, which counts an FF lead and an external one
+    the same way. The two affiliate reports do not - the dev team said
+    on 13 Oct 2026 that FF counts carry their own computation - so the
+    pages built on those reports still show one population at a time."""
+    test = ",".join(str(i) for i in TEST_AFFILIATE_IDS)
+    if source == "all":
+        return f" AND affiliate_id NOT IN ({test})"
     known = is_internal_map(conn)
     if not known:
         # Without the lookup nothing says which sources are FF, and
@@ -796,7 +805,6 @@ def _in_source(conn, source):
         return " AND 0"
     internal = [a for a, i in known.items() if i]
     ids = ",".join(str(i) for i in internal) or "NULL"
-    test = ",".join(str(i) for i in TEST_AFFILIATE_IDS)
     op = "IN" if source == "internal" else "NOT IN"
     return f" AND affiliate_id {op} ({ids}) AND affiliate_id NOT IN ({test})"
 
@@ -815,7 +823,8 @@ def hour_meta(conn, business_date):
 
 
 def hour_rows(conn, dates, source):
-    """(leads rows, sales rows) for the given days and one population.
+    """(leads rows, sales rows) for the given days and one population,
+    or both (`all`).
 
     leads: (date, hour, affiliate_id, leads, sold_leads)
     sales: (date, hour, affiliate_id, lender_id, tier_id, reached, sold, value)

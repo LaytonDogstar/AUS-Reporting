@@ -72,6 +72,7 @@
       <a class="seglink" id="navYesterday" href="/yesterday">Yesterday</a>
     </nav>
     <nav class="seg" aria-label="Population">
+      <a class="seglink" id="srcAll" href="?source=all">All sources</a>
       <a class="seglink" id="srcExternal" href="?source=external">External affiliates</a>
       <a class="seglink" id="srcInternal" href="?source=internal">FF (internal)</a>
     </nav>
@@ -83,7 +84,7 @@
   <p class="fine" id="tileNote"></p>
 
   <section class="card hidden" id="ffCard">
-    <h2>Google Ads</h2>
+    <h2>Google Ads · FF</h2>
     <p class="sub" id="ffSub"></p>
     <div class="tiles" id="ffTiles" style="margin-bottom:8px"></div>
   </section>
@@ -401,7 +402,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
 
   // ---- header, switches -------------------------------------------------
   $(isToday ? "navToday" : "navYesterday").setAttribute("aria-current", "page");
-  $(DATA.source === "internal" ? "srcInternal" : "srcExternal").setAttribute("aria-current", "page");
+  $({ all: "srcAll", internal: "srcInternal" }[DATA.source] || "srcExternal").setAttribute("aria-current", "page");
   if (isToday) {
     const r = $("refreshLink");
     r.classList.remove("hidden");
@@ -519,6 +520,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
       const div = document.createElement("div");
       div.className = "mini";
       div.innerHTML = `<div class="top"><div><div class="nm">${esc(a.name)}</div>
+          ${DATA.source === "all" && a.internal ? '<div class="s">FF (internal)</div>' : ""}
           <div><span class="big">${fmt(s.sold)}</span> <span class="s">sales · ${fmt(s.leads)} leads pinged</span></div></div></div>
         <div class="s">${D.sold ? rate(s.sold / D.sold) : "—"} of ${dayWord}'s sales · ${money(s.value)} · ${money2(s.sold ? s.value / s.sold : null)}/sale</div>
         <div class="s">buy-rate <b>${rate(br)}</b> ${hasNorm ? arrow(p, 5) + " vs " + rate(brN) + " typical" : ""}</div>`;
@@ -721,7 +723,8 @@ const DATA = /*__DASHBOARD_DATA__*/null;
   syncThemeLabel();
 
   $("foot").innerHTML =
-    "One population at a time: FF and external affiliate counts are never added together. " +
+    "All sources adds FF and external leads together, which is sound here because both come from the ping log and are counted alike; " +
+    "the Affiliates page still shows one population at a time, because the two affiliate reports count differently. " +
     "Hours and days are Sydney time, as the API dates them. Today is read live from the ping log every ten minutes; " +
     "yesterday is the finished day once collected. Sales and revenue exclude the Dummy test lender and DCS; test affiliates are left out of leads. " +
     "The ping log carries each lead's identifier, used only to find the hour of its first ping and never stored.";

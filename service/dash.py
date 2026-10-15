@@ -51,7 +51,13 @@ FUNNEL = (
 )
 
 SOURCE_LABELS = {"external": "External affiliates",
-                 "internal": "Internal sources (FF)"}
+                 "internal": "Internal sources (FF)",
+                 "all": "All sources"}
+
+# Which populations the Today and Yesterday pages can show. `all` is
+# offered there alone: their figures come from the ping log, which
+# counts both populations alike, where the affiliate reports do not.
+TODAY_SOURCES = ("all", "external", "internal")
 
 
 def stages():
@@ -706,6 +712,7 @@ def today_payload(conn, which="today", source="external"):
     tiers = {r[0]: {"tier": r[1], "lender_id": r[2], "lender": r[3]} for r in conn.execute(
         "SELECT lender_tier_id, lender_tier_name, lender_id, lender_name FROM lender_tier")}
     affiliates = {r[0]: r[1] for r in conn.execute("SELECT affiliate_id, name FROM affiliate")}
+    internal = store.is_internal_map(conn)
 
     n_norm = len(norm_days) or 1
 
@@ -765,7 +772,7 @@ def today_payload(conn, which="today", source="external"):
     # FF money: Google Ads spend beside what it bought. The day's own,
     # and the norm days' pooled, from the internal report.
     ff = None
-    if source == "internal":
+    if source in ("internal", "all"):
         cur = store.ff_money(conn, iso)
         pooled = {"revenue": 0.0, "adword_spent": 0.0, "profit": 0.0, "bs_cost": 0.0}
         counted = 0
@@ -795,7 +802,8 @@ def today_payload(conn, which="today", source="external"):
         "movers": movers(lender_rows, day_sum["leads"], norm_sum["leads"]),
         "epl": epl_breakdown(lender_rows),
         "tiers": entity_list(tier_rows, TOP_TIERS * 3, key="sold"),
-        "affiliates": entity_list(affs),
+        "affiliates": [{**a, "internal": internal.get(a["id"], False)}
+                       for a in entity_list(affs)],
         "ff": ff,
         "moverMin": MOVER_MIN,
         "moversShown": MOVERS_SHOWN,

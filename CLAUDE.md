@@ -24,8 +24,10 @@ by Railway from the `claude/code-review-tsyca6` branch; see
 - Lenders: Tippla stays in all reporting, with revenue shown as $0 (its tier
   price is $0). The Dummy test lender (24) and DCS (22, offline) are left out
   via `store.EXCLUDED_LENDER_IDS`. (Layton, 15 Oct 2026.)
-- FF (internal) and non-FF (external) affiliate counts are never added
-  together; pages show one population at a time.
+- FF (internal) and non-FF (external) affiliate counts from the two affiliate
+  reports are never added together; pages built on those reports show one
+  population at a time. Today and Yesterday also offer All sources, and open
+  on it: their figures come from the ping log, which counts both alike.
 - Lead-level identifiers (`LeadId`, `LeadApplicationId`) and the credential
   fields returned by `Affiliates` are never stored.
 

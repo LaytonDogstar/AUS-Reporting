@@ -57,9 +57,13 @@ earnings per sale and revenue, the top affiliates, the lenders buying
 harder or pulling back against what their usual share of the day's
 leads would have bought, why earnings per sale moved (mix against
 price, lender by lender, adding up to the gap), the cumulative pace
-against the typical path, every lender, and the top tiers' pace. One
-population at a time, by the same switch as the Affiliates page; the
-FF view adds Google Ads spend, return on it and profit after it.
+against the typical path, every lender, and the top tiers' pace. All
+sources together by default, or one population by the switch beside
+it. Adding the two is sound here, where it is not on the Affiliates
+page: these figures come from the ping log, which counts an FF lead
+and an external one alike, while the two affiliate reports do not.
+The All and FF views add Google Ads spend, return on it and profit
+after it.
 Today is read live every ten minutes (`LIVE_SECONDS`), and
 `/today?refresh=1` reads it now; yesterday is the finished day once
 collected, and the last live read until then.
