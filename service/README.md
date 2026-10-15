@@ -11,6 +11,26 @@ it. The funnel, the affordability indicators, campaign attribution and
 both cost columns all live there and still need a collector running
 inside the network.
 
+## The page
+
+`/` is the dashboard: tiles, a daily trend, the funnel and an affiliate
+table, with a 7/30/90-day range and an affiliate filter. The look is
+`template.html`, a copy of the one in `dashboard/` — that build queries
+the source database from inside the network, this one renders the same
+page from what the collector stored, so it can live on a public URL.
+`dash.py` is the join between them.
+
+**It shows one population at a time.** FF and non-FF lead counts cannot
+be added into a single figure, so the page is built per source and says
+which it is showing; the switch beside the affiliate filter moves
+between them.
+
+The other pages are reached from the links under the tiles:
+`/scorecard` ranks affiliates on profit per lead, `/quality` is the
+affordability distributions split by lender result, `/pings` is the
+ping log, `/affiliates` the funnel per source, and `/collection` is the
+collector's own health.
+
 ## How it runs
 
 A background thread wakes every 30 minutes, finds days that have not been

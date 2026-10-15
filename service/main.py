@@ -18,6 +18,7 @@ from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import collector
+import dash
 import store
 
 APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
@@ -92,10 +93,10 @@ def page(title, body):
 
 
 def nav(active=""):
-    items = [("/", "Overview"), ("/scorecard", "Scorecard"),
+    items = [("/", "Dashboard"), ("/scorecard", "Scorecard"),
              ("/affiliates", "Affiliates"), ("/quality", "Lead quality"),
-             ("/pings", "Ping log"), ("/verify", "Window check"),
-             ("/explore", "API explorer")]
+             ("/pings", "Ping log"), ("/collection", "Collection"),
+             ("/verify", "Window check"), ("/explore", "API explorer")]
     return ('<p class="note">' + " &middot; ".join(
         f"<strong>{t}</strong>" if h == active else f'<a href="{h}">{t}</a>'
         for h, t in items) + "</p>")
@@ -107,7 +108,30 @@ def money(v):
 
 # ----------------------------------------------------------------- pages
 
-def overview():
+def dashboard_page(days=30, source="external"):
+    """The dashboard proper: tiles, trend and funnel, from collected counts.
+
+    Built for one population at a time. FF and non-FF lead counts cannot
+    be added into a single figure, so a page showing both would open on
+    a headline number that does not mean anything.
+    """
+    conn = store.connect(DB_PATH)
+    try:
+        data = dash.payload(conn, days, source)
+    finally:
+        conn.close()
+    if not data["applications"]:
+        other = "internal" if source == "external" else "external"
+        return page("Dashboard", f'<h1>Dashboard</h1><p class="sub">'
+                    f'{html.escape(dash.SOURCE_LABELS.get(source, source))}, last '
+                    f'{days} days.</p>' + nav("/") +
+                    '<div class="card"><p class="note">Nothing collected for this source '
+                    f'yet. <a href="/?source={other}">Try the other one</a>, or '
+                    '<a href="/collection">see what the collector is doing</a>.</p></div>')
+    return dash.render(data).encode("utf-8")
+
+
+def collection_page():
     conn = store.connect(DB_PATH)
     series = store.totals_series(conn, 60)
     missing = collector.missing_days(conn)
@@ -119,7 +143,7 @@ def overview():
 
     p = ["<h1>Overflow reporting</h1>",
          '<p class="sub">Collected from the PublicReports API. Lead rows are reduced to '
-         'counts per band before anything is written.</p>', nav("/")]
+         'counts per band before anything is written.</p>', nav("/collection")]
 
     status, ms, err = collector.anonymous_check()
     if err:
@@ -754,7 +778,12 @@ class Handler(BaseHTTPRequestHandler):
             days = 30
         try:
             if path == "/":
-                return self._send(200, overview())
+                source = params.get("source", "external")
+                if source not in ("external", "internal"):
+                    source = "external"
+                return self._send(200, dashboard_page(days, source))
+            if path == "/collection":
+                return self._send(200, collection_page())
             if path == "/affiliates":
                 return self._send(200, affiliates_page(days))
             if path == "/scorecard":
