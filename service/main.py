@@ -6,7 +6,6 @@ store.py. This file serves pages and triggers collection.
 
 from __future__ import annotations
 
-import base64
 import gzip
 import hmac
 import html
@@ -15,9 +14,11 @@ import os
 import re
 import threading
 import traceback
+import urllib.parse
 from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import auth
 import collector
 import dash
 import store
@@ -30,6 +31,39 @@ GUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}
 DATEISH = re.compile(r"^\d{4}-\d{2}-\d{2}")
 
 _busy = threading.Lock()
+
+# Who the current request is for, so a page can show an admin's buttons
+# and carry the form token without every renderer taking a user.
+CURRENT = threading.local()
+
+
+def auth_path():
+    """The logins live beside the collected data, in their own file, so
+    clearing the data never touches a login. On a Railway volume both
+    survive a deploy."""
+    return os.environ.get("AUTH_DB_PATH") or os.path.join(
+        os.path.dirname(os.path.abspath(DB_PATH)), "auth.db")
+
+
+def current_user():
+    return getattr(CURRENT, "user", None)
+
+
+def is_admin():
+    u = current_user()
+    return bool(u) and u["role"] == "admin"
+
+
+def post_button(action, label, cls="btn", fields=None, confirm=None):
+    """An action as a POST form carrying the session's form token. Every
+    action is one: a link that changes something can be followed from
+    another site by anyone who can get an admin to click it."""
+    u = current_user() or {}
+    hidden = "".join(f'<input type="hidden" name="{html.escape(k)}" value="{html.escape(str(v))}">'
+                     for k, v in {"csrf": u.get("csrf", ""), **(fields or {})}.items())
+    onsubmit = f' onsubmit="return confirm({html.escape(json.dumps(confirm))})"' if confirm else ""
+    return (f'<form method="post" action="{html.escape(action)}" style="display:inline"{onsubmit}>'
+            f'{hidden}<button class="{cls}" type="submit">{html.escape(label)}</button></form>')
 
 
 # ---------------------------------------------------------------- shaping
@@ -82,6 +116,16 @@ code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.
 a.btn{display:inline-block;background:var(--accent);color:#fff;text-decoration:none;padding:8px 15px;
 border-radius:7px;font-weight:600;font-size:13.5px;margin-right:8px}
 a.btn.quiet{background:transparent;color:var(--accent);border:1px solid var(--line)}
+button.btn{background:var(--accent);color:#fff;border:0;padding:8px 15px;border-radius:7px;
+font:inherit;font-weight:600;font-size:13.5px;margin-right:8px;cursor:pointer}
+button.btn.quiet{background:transparent;color:var(--accent);border:1px solid var(--line)}
+button.btn.small{padding:4px 10px;font-size:12.5px;font-weight:500;margin:0 4px 0 0}
+button.btn.danger{background:transparent;color:var(--bad);border:1px solid var(--line)}
+input.f,select.f{font:inherit;font-size:14px;padding:7px 10px;border:1px solid var(--line);
+border-radius:7px;background:var(--card);color:var(--fg)}
+.cred{background:var(--bg);border:1px solid var(--line);border-left:3px solid var(--ok);
+border-radius:8px;padding:10px 12px;margin:10px 0}
+.cred code{font-size:15px;user-select:all}
 .note{color:var(--muted);font-size:13px}
 .bar{height:7px;background:var(--accent);border-radius:4px;display:inline-block;min-width:2px}
 """
@@ -95,10 +139,15 @@ def page(title, body):
 
 def nav(active=""):
     items = [("/", "Dashboard"), ("/lenders", "Lenders"), ("/customers", "Customers"),
+             ("/today", "Today"), ("/yesterday", "Yesterday"),
              ("/scorecard", "Scorecard"),
              ("/affiliates", "Affiliates"), ("/quality", "Lead quality"),
              ("/pings", "Ping log"), ("/collection", "Collection"),
              ("/verify", "Window check"), ("/explore", "API explorer")]
+    role = (current_user() or {}).get("role", "admin")
+    items = [(h, t) for h, t in items if role == "admin" or auth.can_view(role, h)]
+    if role == "admin":
+        items.append(("/admin", "Admin"))
     return ('<p class="note">' + " &middot; ".join(
         f"<strong>{t}</strong>" if h == active else f'<a href="{h}">{t}</a>'
         for h, t in items) + "</p>")
@@ -122,6 +171,9 @@ def dashboard_page(days=30, source="external"):
         data = dash.payload(conn, days, source)
     finally:
         conn.close()
+    role = (current_user() or {}).get("role", "admin")
+    data["pagesAllowed"] = [h for h in ("/scorecard", "/quality", "/pings", "/affiliates",
+                                        "/collection") if auth.can_view(role, h)]
     if not data["applications"]:
         other = "internal" if source == "external" else "external"
         return page("Dashboard", f'<h1>Dashboard</h1><p class="sub">'
@@ -209,9 +261,12 @@ def collection_page():
         p.append('<p class="warn">Collecting now — this page refreshes as days land.</p>'
                  '<meta http-equiv="refresh" content="20">')
     else:
-        p.append('<a class="btn" href="/collect">Collect missing days</a>'
-                 '<a class="btn quiet" href="/collect?days=90">Backfill 90 days</a>'
-                 '<a class="btn quiet" href="/reset">Clear and start again</a>')
+        if is_admin():
+            p.append(post_button("/collect", "Collect missing days") +
+                     post_button("/collect", "Backfill 90 days", "btn quiet", {"days": 90}) +
+                     '<a class="btn quiet" href="/reset">Clear and start again</a>')
+        else:
+            p.append('<p class="note">An admin can collect missing days or start again.</p>')
     p.append(f'<p class="note">{len(series)} day(s) stored &middot; '
              f'{len(missing)} missing in the last {collector.BACKFILL_DAYS} &middot; '
              f'the background collector wakes every {collector.WAKE_SECONDS // 60} min '
@@ -645,7 +700,7 @@ def confirm_reset():
             '<p class="sub">Removes every stored day — tiers, totals and quality counts — '
             "so a backfill starts clean. Use it when the collection itself was wrong, not "
             "merely stale. The API explorer's recorded shapes are kept.</p>"
-            '<div class="card"><a class="btn" href="/reset?confirm=yes">Yes, clear it</a>'
+            '<div class="card">' + post_button("/reset", "Yes, clear it") +
             '<a class="btn quiet" href="/">Cancel</a></div>')
 
 
@@ -691,7 +746,8 @@ def explore_page():
          '<p class="sub">Calls every endpoint once and records the shape of each response — '
          'field names, types and numbers, with strings reduced to a length. For inspecting the '
          'API, not for collection.</p>', nav("/explore"),
-         '<div class="card"><a class="btn" href="/explore/run">Call all seven endpoints</a></div>']
+         ('<div class="card">' + post_button("/explore/run", "Call all seven endpoints") + '</div>'
+          if is_admin() else '<p class="note">An admin can call the endpoints again.</p>')]
     if rows:
         p.append(f'<p class="note">Last run {html.escape(latest)} UTC</p><div class="card"><table>'
                  '<tr><th>Endpoint</th><th>Status</th><th class="n">Size</th><th class="n">Time</th></tr>')
@@ -797,25 +853,200 @@ def collect_in_background(days):
     return True
 
 
+# ----------------------------------------------------------------- logins
+
+def login_page(next_path="/", error=""):
+    err = f'<p class="bad">{html.escape(error)}</p>' if error else ""
+    return page("Sign in", f"""
+<div style="max-width:360px;margin:9vh auto 0">
+<h1>AUS Lead Reporting</h1><p class="sub">Sign in to continue</p>
+<form method="post" action="/login" class="card" style="padding:20px">
+<input type="hidden" name="next" value="{html.escape(next_path)}">
+<p><label class="note" for="u">Username</label><br>
+<input class="f" id="u" name="username" autocomplete="username" autocapitalize="none"
+ spellcheck="false" required autofocus style="width:100%"></p>
+<p><label class="note" for="p">Password</label><br>
+<input class="f" id="p" name="password" type="password" autocomplete="current-password"
+ required style="width:100%"></p>
+<button class="btn" type="submit" style="width:100%;margin:6px 0 0">Sign in</button>{err}
+</form>
+<p class="note">Ask an admin for a login. Passwords are generated for you and can be reset,
+not recovered.</p></div>""")
+
+
+def _when(ts):
+    if not ts:
+        return "—"
+    t = datetime.fromisoformat(ts).astimezone(store.REPORT_TZ)
+    return t.strftime("%d %b %H:%M")
+
+
+def admin_page(notice=""):
+    """Users, adding one, and the login log - the US dashboard's admin
+    tab, without its storage and tree-upload cards."""
+    conn = auth.connect(auth_path())
+    try:
+        rows, log = auth.users(conn), auth.login_log(conn, 200)
+    finally:
+        conn.close()
+    me = current_user()["username"]
+    roles = "".join(f'<option value="{r}">{html.escape(auth.ROLE_LABELS[r])}</option>'
+                    for r in auth.ROLES)
+    p = ["<h1>Admin</h1>",
+         '<p class="sub">Who can sign in, what they can see, and when they last did.</p>',
+         nav(), notice,
+         '<h2>Add a user</h2><div class="card">'
+         '<form method="post" action="/admin/create" style="display:flex;gap:8px;flex-wrap:wrap">'
+         f'<input type="hidden" name="csrf" value="{html.escape(current_user()["csrf"])}">'
+         '<input class="f" name="username" placeholder="username, e.g. sam or sam@company.com"'
+         ' autocapitalize="none" spellcheck="false" required style="min-width:260px">'
+         f'<select class="f" name="role">{roles}</select>'
+         '<button class="btn" type="submit">Create &amp; generate password</button></form>'
+         '<p class="note" style="margin-top:10px">The generated password is shown once — copy it '
+         'and send it to the person. It is stored only as a salted hash and can be reset, not '
+         'recovered. <b>Viewer</b>: the dashboard pages. <b>Analyst</b>: those and the '
+         'diagnostic pages (collection, ping log, window check, API explorer), read-only. '
+         '<b>Admin</b>: everything, including collecting, clearing and managing users.</p></div>',
+         '<h2>Users</h2><div class="card" style="overflow-x:auto"><table>'
+         '<tr><th>User</th><th>Role</th><th>Status</th><th>Created</th><th>Last sign-in</th>'
+         '<th class="n">Sign-ins</th><th>Last seen</th><th>Actions</th></tr>',
+         f'<tr><td><b>{auth.BREAK_GLASS}</b></td><td>admin</td><td class="ok">always</td>'
+         '<td colspan="4" class="note">The <code>APP_PASSWORD</code> sign-in. Not stored here, so it '
+         'cannot be locked out or deleted; change it in Railway.</td><td></td></tr>']
+    for u in rows:
+        name = u["username"]
+        self_row = name == me
+        role_sel = "".join(f'<option value="{r}"{" selected" if r == u["role"] else ""}>{r}</option>'
+                           for r in auth.ROLES)
+        role_cell = (u["role"] if self_row else
+                     f'<form method="post" action="/admin/role" style="display:inline">'
+                     f'<input type="hidden" name="csrf" value="{html.escape(current_user()["csrf"])}">'
+                     f'<input type="hidden" name="username" value="{html.escape(name)}">'
+                     f'<select class="f" name="role" onchange="this.form.submit()" '
+                     f'style="padding:3px 6px;font-size:13px">{role_sel}</select></form>')
+        actions = ""
+        if not self_row:
+            actions = (post_button("/admin/reset", "Reset password", "btn quiet small", {"username": name},
+                                   f"Reset {name}'s password? Their current one stops working.") +
+                       post_button("/admin/active", "Deactivate" if u["active"] else "Activate",
+                                   "btn quiet small", {"username": name, "active": 0 if u["active"] else 1}) +
+                       post_button("/admin/delete", "Delete", "btn danger small", {"username": name},
+                                   f"Delete {name}? This cannot be undone."))
+        actions += f' <a class="note" href="/admin/activity?u={urllib.parse.quote(name)}">activity</a>'
+        p.append(f'<tr><td><b>{html.escape(name)}</b>{" <span class=note>(you)</span>" if self_row else ""}</td>'
+                 f'<td>{role_cell}</td>'
+                 f'<td class="{"ok" if u["active"] else "warn"}">{"active" if u["active"] else "deactivated"}</td>'
+                 f'<td class="note">{_when(u["created_at"])}'
+                 f'{" by " + html.escape(u["created_by"]) if u["created_by"] else ""}</td>'
+                 f'<td>{_when(u["last_login"])}</td><td class="n">{u["logins"]}</td>'
+                 f'<td>{_when(u["last_seen"])}</td><td style="white-space:nowrap">{actions}</td></tr>')
+    if not rows:
+        p.append('<tr><td colspan="8" class="note">No users yet — add one above.</td></tr>')
+    p.append("</table></div>")
+    p.append('<h2>Sign-ins</h2><div class="card" style="overflow-x:auto"><table>'
+             '<tr><th>When (Sydney)</th><th>User</th><th>Result</th><th>Role</th><th>Address</th>'
+             '<th>Device</th></tr>')
+    for e in log:
+        p.append(f'<tr><td>{_when(e["at"])}</td><td>{html.escape(e["username"] or "—")}</td>'
+                 f'<td class="{"ok" if e["ok"] else "bad"}">{"signed in" if e["ok"] else "failed"}</td>'
+                 f'<td>{html.escape(e["role"] or "—")}</td><td class="mono">{html.escape(e["ip"] or "")}</td>'
+                 f'<td class="note">{html.escape(auth.device(e["user_agent"]))}</td></tr>')
+    if not log:
+        p.append('<tr><td colspan="6" class="note">No sign-ins recorded yet.</td></tr>')
+    p.append(f'</table><p class="note">The last 200. After {auth.LOCKOUT_FAILURES} failures in '
+             f'{auth.LOCKOUT_MINUTES} minutes from one address, sign-ins from it are refused until '
+             f'the window passes.</p></div>')
+    return page("Admin", "".join(p))
+
+
+def admin_activity_page(username):
+    conn = auth.connect(auth_path())
+    try:
+        sittings = auth.sessions_for(conn, username)
+    finally:
+        conn.close()
+    p = [f"<h1>{html.escape(username)} — activity</h1>",
+         '<p class="sub">Pages opened, grouped into sittings: a new one starts after a '
+         '15-minute gap. Time is from the first page to the last in each.</p>',
+         '<p><a href="/admin">&larr; Admin</a></p><div class="card"><table>'
+         '<tr><th>Sitting started (Sydney)</th><th class="n">Minutes</th><th class="n">Pages</th>'
+         '<th>Sections viewed</th></tr>']
+    for s_ in sittings[:200]:
+        mins = round((s_["last"] - s_["start"]).total_seconds() / 60)
+        p.append(f'<tr><td>{_when(s_["start"].isoformat())}</td><td class="n">{mins}</td>'
+                 f'<td class="n">{s_["views"]}</td>'
+                 f'<td class="note">{html.escape(", ".join(s_["pages"]))}</td></tr>')
+    if not sittings:
+        p.append('<tr><td colspan="4" class="note">Nothing recorded yet.</td></tr>')
+    p.append("</table></div>")
+    return page(f"{username} activity", "".join(p))
+
+
+def user_bar(user):
+    """Who is signed in, an Admin link for admins, and Sign out - added
+    to the top of every page, whatever template drew it."""
+    admin = (' <a href="/admin" style="color:inherit">Admin</a> ·'
+             if user["role"] == "admin" else "")
+    return (
+        '<div style="max-width:1180px;margin:0 auto;padding:8px 16px 0;display:flex;gap:8px;'
+        'justify-content:flex-end;align-items:center;font:12.5px/1.4 system-ui,sans-serif;opacity:.8">'
+        f'<span>{html.escape(user["username"])} · {html.escape(user["role"])}</span> ·{admin}'
+        '<form method="post" action="/logout" style="display:inline;margin:0">'
+        f'<input type="hidden" name="csrf" value="{html.escape(user["csrf"])}">'
+        '<button type="submit" style="background:none;border:0;padding:0;color:inherit;'
+        'font:inherit;text-decoration:underline;cursor:pointer">Sign out</button></form></div>')
+
+
+def safe_next(target):
+    """Only a path on this site: never `//elsewhere` or a full URL."""
+    target = target or "/"
+    if not target.startswith("/") or target.startswith("//") or "\\" in target:
+        return "/"
+    return target
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "overflow/2.0"
+    COOKIE = "ovs"
 
     def log_message(self, fmt, *args):
         print(f"{self.address_string()} {fmt % args}", flush=True)
 
-    def _authorised(self):
-        if not APP_PASSWORD:
-            return False
-        header = self.headers.get("Authorization", "")
-        if not header.startswith("Basic "):
-            return False
-        try:
-            _, _, supplied = base64.b64decode(header[6:]).decode().partition(":")
-        except Exception:                            # noqa: BLE001
-            return False
-        return hmac.compare_digest(supplied, APP_PASSWORD)
+    # ---- who is asking ------------------------------------------------
+    def _client_ip(self):
+        # The last address is the one Railway's proxy added; anything
+        # before it came from the client and could be anything.
+        fwd = self.headers.get("X-Forwarded-For", "")
+        return fwd.split(",")[-1].strip() if fwd else self.client_address[0]
 
+    def _token(self):
+        for part in self.headers.get("Cookie", "").split(";"):
+            k, _, v = part.strip().partition("=")
+            if k == self.COOKIE:
+                return v
+        return None
+
+    def _user(self):
+        token = self._token()
+        if not token:
+            return None
+        conn = auth.connect(auth_path())
+        try:
+            return auth.session_user(conn, token)
+        finally:
+            conn.close()
+
+    def _cookie(self, token, max_age):
+        secure = "; Secure" if self.headers.get("X-Forwarded-Proto", "") == "https" else ""
+        return (f"{self.COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; "
+                f"Max-Age={max_age}{secure}")
+
+    # ---- responses ----------------------------------------------------
     def _send(self, code, body, ctype="text/html; charset=utf-8", headers=None):
+        user = current_user()
+        if user and ctype.startswith("text/html") and b"<body" in body[:20000]:
+            body = re.sub(rb"<body([^>]*)>", lambda m: m.group(0) + user_bar(user).encode(),
+                          body, count=1)
         # The dashboard pages carry their data inline - up to a megabyte
         # on the Customers page - and it compresses about tenfold.
         accepts = self.headers.get("Accept-Encoding", "") if self.headers else ""
@@ -830,24 +1061,60 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("X-Frame-Options", "DENY")
+        if user:
+            self.send_header("Cache-Control", "no-store")
         for k, v in (headers or {}).items():
             self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
 
+    def _redirect(self, location, headers=None):
+        return self._send(303, b"", "text/plain", {"Location": location, **(headers or {})})
+
+    def _forbidden(self):
+        return self._send(403, page("Not available", "<h1>Not available to your login</h1>"
+                                    '<p class="sub">Ask an admin if you need it.</p>'
+                                    '<p><a href="/">Dashboard</a></p>'))
+
+    def _not_configured(self):
+        return self._send(503, page("Not configured",
+            "<h1>Not configured</h1><p class='sub'>Set <code>APP_PASSWORD</code> in Railway "
+            "&rarr; Variables. A Railway URL is public, so nothing is served without one.</p>"))
+
+    # ---- GET ------------------------------------------------------------
     def do_GET(self):                                # noqa: N802
+        CURRENT.user = None
         path, _, query = self.path.partition("?")
-        params = dict(p.split("=", 1) for p in query.split("&") if "=" in p)
+        params = {k: v[0] for k, v in urllib.parse.parse_qs(query).items()}
 
         if path == "/healthz":
             return self._send(200, b"ok", "text/plain; charset=utf-8")
         if not APP_PASSWORD:
-            return self._send(503, page("Not configured",
-                "<h1>Not configured</h1><p class='sub'>Set <code>APP_PASSWORD</code> in Railway "
-                "&rarr; Variables. A Railway URL is public, so nothing is served without one.</p>"))
-        if not self._authorised():
-            return self._send(401, b"Authentication required", "text/plain; charset=utf-8",
-                              {"WWW-Authenticate": 'Basic realm="Overflow reporting"'})
+            return self._not_configured()
+        user = self._user()
+        if path == "/login":
+            if user:
+                return self._redirect(safe_next(params.get("next")))
+            return self._send(200, login_page(safe_next(params.get("next"))))
+        if not user:
+            return self._redirect("/login?next=" + urllib.parse.quote(safe_next(self.path)))
+        CURRENT.user = user
+        if path.startswith("/admin") or path == "/reset":
+            allowed = user["role"] == "admin"
+        else:
+            allowed = auth.can_view(user["role"], path)
+        if not allowed:
+            return self._forbidden()
+        try:
+            conn = auth.connect(auth_path())
+            try:
+                auth.record_view(conn, user["username"], path)
+            finally:
+                conn.close()
+        except Exception as exc:                     # noqa: BLE001
+            print(f"activity not recorded: {exc}", flush=True)
+
         try:
             days = max(1, min(365, int(params.get("days", "30"))))
         except ValueError:
@@ -865,9 +1132,11 @@ class Handler(BaseHTTPRequestHandler):
                 if source not in dash.TODAY_SOURCES:
                     source = "all"
                 if path == "/today" and params.get("refresh") == "1":
+                    # A live read of the public API: costs nothing to
+                    # repeat and changes nothing stored for a past day,
+                    # so any signed-in user may ask for one.
                     collector.live_in_background(DB_PATH)
-                    return self._send(303, b"", "text/plain",
-                                      {"Location": f"/today?source={source}"})
+                    return self._redirect(f"/today?source={source}")
                 return self._send(200, today_page(path[1:], source))
             if path == "/customers":
                 return self._send(200, customers_page(days))
@@ -883,21 +1152,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, quality_page(days))
             if path == "/explore":
                 return self._send(200, explore_page())
-            if path == "/explore/run":
-                explore_run()
-                return self._send(303, b"", "text/plain", {"Location": "/explore"})
             if path == "/verify":
                 return self._send(200, verify_page(min(days, 10)))
             if path == "/reset":
-                if params.get("confirm") == "yes":
-                    conn = store.connect(DB_PATH)
-                    collector.reset(conn)
-                    conn.close()
-                    return self._send(303, b"", "text/plain", {"Location": "/"})
                 return self._send(200, page("Reset", confirm_reset()))
-            if path == "/collect":
-                collect_in_background(days if "days" in params else collector.DAYS_PER_WAKE)
-                return self._send(303, b"", "text/plain", {"Location": "/"})
+            if path == "/admin":
+                return self._send(200, admin_page())
+            if path == "/admin/activity":
+                return self._send(200, admin_activity_page(params.get("u", "")))
             if path.startswith("/shape/"):
                 body = shape_page(int(path.rsplit("/", 1)[1]))
                 return self._send(200, body) if body else self._send(404, page("Not found", "<h1>Not found</h1>"))
@@ -906,9 +1168,131 @@ class Handler(BaseHTTPRequestHandler):
                                                  f"{html.escape(traceback.format_exc())}</pre>"))
         return self._send(404, page("Not found", '<h1>Not found</h1><p><a href="/">home</a></p>'))
 
+    # ---- POST -----------------------------------------------------------
+    def do_POST(self):                               # noqa: N802
+        CURRENT.user = None
+        path = self.path.partition("?")[0]
+        try:
+            length = min(int(self.headers.get("Content-Length", "0") or 0), 16384)
+        except ValueError:
+            length = 0
+        form = {k: v[0] for k, v in urllib.parse.parse_qs(
+            self.rfile.read(length).decode("utf-8", "replace")).items()}
+        if not APP_PASSWORD:
+            return self._not_configured()
+
+        if path == "/login":
+            return self._login(form)
+
+        user = self._user()
+        if not user:
+            return self._redirect("/login")
+        # Every action carries the session's form token: a page on
+        # another site can make a browser send the cookie, not the token.
+        if not hmac.compare_digest(form.get("csrf", ""), user["csrf"]):
+            return self._send(403, page("Expired", "<h1>That form had expired</h1>"
+                                        '<p class="sub">Go back, reload the page and try again.</p>'))
+        CURRENT.user = user
+
+        if path == "/logout":
+            conn = auth.connect(auth_path())
+            try:
+                auth.end_session(conn, self._token())
+            finally:
+                conn.close()
+            return self._redirect("/login", {"Set-Cookie": self._cookie("", 0)})
+
+        if user["role"] != "admin":
+            return self._forbidden()
+        try:
+            if path == "/collect":
+                try:
+                    days = max(1, min(365, int(form.get("days", collector.DAYS_PER_WAKE))))
+                except ValueError:
+                    days = collector.DAYS_PER_WAKE
+                collect_in_background(days)
+                return self._redirect("/collection")
+            if path == "/reset":
+                conn = store.connect(DB_PATH)
+                collector.reset(conn)
+                conn.close()
+                return self._redirect("/collection")
+            if path == "/explore/run":
+                explore_run()
+                return self._redirect("/explore")
+            if path.startswith("/admin/"):
+                return self._admin_action(path, form, user)
+        except Exception:                            # noqa: BLE001
+            return self._send(500, page("Error", f"<h1>Error</h1><pre class='mono'>"
+                                                 f"{html.escape(traceback.format_exc())}</pre>"))
+        return self._send(404, page("Not found", "<h1>Not found</h1>"))
+
+    def _login(self, form):
+        username = (form.get("username") or "").strip().lower()
+        password = form.get("password") or ""
+        next_path = safe_next(form.get("next"))
+        ip, agent = self._client_ip(), self.headers.get("User-Agent", "")
+        conn = auth.connect(auth_path())
+        try:
+            if auth.locked_out(conn, ip):
+                auth.record_login(conn, username, False, None, ip, agent)
+                return self._send(429, login_page(next_path, "Too many failed sign-ins. Wait "
+                                                  f"{auth.LOCKOUT_MINUTES} minutes and try again."))
+            role = auth.check_password(conn, username, password, APP_PASSWORD)
+            auth.record_login(conn, username, bool(role), role, ip, agent)
+            if not role:
+                return self._send(401, login_page(next_path, "That username and password do not match."))
+            token, _csrf = auth.start_session(conn, username)
+            auth.prune(conn)
+        finally:
+            conn.close()
+        return self._redirect(next_path, {"Set-Cookie": self._cookie(token, auth.SESSION_DAYS * 86400)})
+
+    def _admin_action(self, path, form, user):
+        target = (form.get("username") or "").strip().lower()
+        if target == user["username"] and path != "/admin/create":
+            # An admin cannot lock themselves out from here.
+            return self._send(400, admin_page('<div class="card bad">You cannot change your own '
+                                              'login here.</div>'))
+        conn = auth.connect(auth_path())
+        notice = ""
+        try:
+            if path == "/admin/create":
+                try:
+                    pw = auth.create_user(conn, target, form.get("role", "viewer"), user["username"])
+                    notice = self._cred_box(auth.clean_username(target), pw, "one-time password")
+                except ValueError as exc:
+                    notice = f'<div class="card bad">{html.escape(str(exc))}</div>'
+            elif path == "/admin/reset":
+                try:
+                    notice = self._cred_box(target, auth.reset_password(conn, target), "new password")
+                except ValueError as exc:
+                    notice = f'<div class="card bad">{html.escape(str(exc))}</div>'
+            elif path == "/admin/role":
+                auth.set_role(conn, target, form.get("role", ""))
+            elif path == "/admin/active":
+                auth.set_active(conn, target, form.get("active") == "1")
+            elif path == "/admin/delete":
+                auth.delete_user(conn, target)
+            else:
+                return self._send(404, page("Not found", "<h1>Not found</h1>"))
+        finally:
+            conn.close()
+        if notice:
+            # The password is in this response and nowhere else, so it is
+            # rendered here rather than redirected to.
+            return self._send(200, admin_page(notice))
+        return self._redirect("/admin")
+
+    @staticmethod
+    def _cred_box(username, password, label):
+        return (f'<div class="cred"><b>{html.escape(username)}</b> — {label} (copy it now; it is '
+                f'shown once): <code>{html.escape(password)}</code></div>')
+
 
 if __name__ == "__main__":
     store.connect(DB_PATH).close()
+    auth.connect(auth_path()).close()
     collector.start(DB_PATH)
     print(f"listening on 0.0.0.0:{PORT}, db at {DB_PATH}", flush=True)
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

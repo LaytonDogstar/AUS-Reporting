@@ -96,16 +96,49 @@ a time, so roughly a minute and a half a day on top.
 
 **An empty database rebuilds itself.** On start, if nothing has been
 collected, the service fills its whole history in one unattended pass.
-Nothing stored here is a system of record — the API can regenerate all of
-it — so losing the database should cost time, not data. That makes the
-Railway volume a convenience rather than a requirement: without one a
-redeploy clears the file and the service spends its first three hours
-or so rebuilding ninety days, newest first, with nobody pressing
-anything.
+Nothing collected here is a system of record — the API can regenerate
+all of it — so losing the database should cost time, not data. Without
+a volume a redeploy clears the file and the service spends its first
+three hours or so rebuilding ninety days, newest first, with nobody
+pressing anything.
 
-Mount a volume at `/data` to skip that. The service checks for the
-directory and falls back to a local file when it is absent, so there is
-no setting to change either way.
+**The logins are another matter: they need the volume.** Users, the
+sign-in log and page views live in `auth.db` beside the collected data,
+and nothing can regenerate them. Mount a volume at `/data`; the service
+checks for the directory and uses it, so there is no setting to change.
+Without one every deploy deletes every login, and only the
+`APP_PASSWORD` sign-in still works.
+
+## Logins
+
+Modelled on the US dashboard's. Sign in at `/login`; a session lasts 30
+days, or 7 unused. An admin adds a user on `/admin` with a role, and the
+service generates the password — shown once, stored only as a salted
+scrypt hash, reset rather than recovered.
+
+| Role | Sees |
+|---|---|
+| Viewer | Affiliates, Lenders, Customers, Today, Yesterday, Scorecard, Lead quality, Affiliate funnel |
+| Analyst | those, and the diagnostic pages: Collection, Ping log, Window check, API explorer — read-only |
+| Admin | everything, and collecting, clearing, calling the API explorer, and managing users |
+
+`/admin` lists the users with their role, status, last sign-in and last
+page view; changes a role, resets a password, deactivates or deletes a
+user, each taking effect on a live session at once; shows the sign-in
+log with address and device; and each user's activity, grouped into
+sittings after a 15-minute gap. An admin cannot change their own login
+there.
+
+**`APP_PASSWORD` is the break-glass admin.** Sign in as `admin` with it.
+It is never stored, so it cannot be locked out, deleted or lost with the
+database; change it in Railway.
+
+Every action — collecting, clearing, user changes, signing out — is a
+POST carrying the session's form token, never a link, so another site
+cannot trigger one by getting an admin to click. After ten failed
+sign-ins in fifteen minutes from one address, that address is refused
+until the window passes; per address, not per username, so nobody can
+lock a real user out by guessing at their name.
 
 ## What it stores
 
@@ -247,18 +280,18 @@ All in the web UI. Nothing to install.
 
    | Name | Value |
    |---|---|
-   | `APP_PASSWORD` | a password you choose, to open the page |
+   | `APP_PASSWORD` | the break-glass admin password: sign in as `admin` with it |
    | `OVERFLOW_API_USER` | the admin.overflowhub.com.au login |
    | `OVERFLOW_API_PASSWORD` | its password |
 
    The service refuses to serve anything until `APP_PASSWORD` is set,
    because a Railway URL is public.
 5. **Settings → Networking → Generate Domain.** That is your URL.
-6. *Optional:* **Data → Add Volume**, mount path `/data`. Without one the
-   history resets on each deploy, which costs nothing but a re-run.
+6. **Data → Add Volume**, mount path `/data`. Required for logins to
+   survive a deploy, and it ends the multi-hour rebuild after each one.
 
-Open the URL, enter any username and the `APP_PASSWORD` you set, and
-press **Call all seven endpoints**.
+Open the URL, sign in as `admin` with the `APP_PASSWORD` you set, and
+add users on the Admin page.
 
 ## What the page answers
 

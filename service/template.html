@@ -1243,9 +1243,12 @@ const DATA = /*__DASHBOARD_DATA__*/null;
   (function pagesNav() {
     const el = $("pagesNav");
     if (!el) return;
+    // Only the pages this login can open: the server says which.
+    const allowed = DATA.pagesAllowed || null;
     el.innerHTML = [["/scorecard", "Scorecard"], ["/quality", "Lead quality"],
                     ["/pings", "Ping log"], ["/affiliates", "Affiliate funnel"],
                     ["/collection", "Collection"]]
+      .filter(([href]) => !allowed || allowed.includes(href))
       .map(([href, text]) => `<a href="${href}">${text}</a>`).join(" &middot; ");
   })();
 

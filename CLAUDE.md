@@ -31,7 +31,19 @@ by Railway from the `claude/code-review-tsyca6` branch; see
 - Lead-level identifiers (`LeadId`, `LeadApplicationId`) and the credential
   fields returned by `Affiliates` are never stored.
 
+## Access
+
+- Every page needs a login (`service/auth.py`): Viewer (dashboard pages),
+  Analyst (those plus diagnostics, read-only), Admin (everything, plus
+  actions and `/admin`). A new page must be added to `auth.VIEWER_PATHS` or
+  `auth.ANALYST_PATHS`, or only admins can open it.
+- Every action is a POST carrying the session's form token (`post_button`),
+  never a GET link.
+- `APP_PASSWORD` signs in as the break-glass `admin` and is never stored.
+
 ## Deploying
 
-Railway has no volume, so every push wipes the live database and starts a
-rebuild of several hours. Batch changes into as few pushes as possible.
+Logins live in `auth.db` beside the data and need the Railway volume at
+`/data`. Without the volume every push wipes the live database, logins
+included, and starts a rebuild of several hours. Batch changes into as few
+pushes as possible.
