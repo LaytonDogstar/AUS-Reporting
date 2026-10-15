@@ -171,3 +171,47 @@ class BackfilledIds(unittest.TestCase):
         self.assertEqual(conn.execute(
             "SELECT affiliate_id FROM affiliate_day").fetchone()[0], 59)
         self.assertEqual(len(dash.payload(conn, 30, "external")["applications"]), 1)
+
+
+class AffiliateTrends(unittest.TestCase):
+    """The three measures Layton watches, per affiliate, per journey."""
+
+    def setUp(self):
+        self.path = str(Path(self.enterContext(tempfile.TemporaryDirectory())) / "tr.db")
+        self.conn = store.connect(self.path)
+        self.addCleanup(self.conn.close)
+        today = store.business_today()
+        for i in range(14):
+            day = (today - __import__("datetime").timedelta(days=14 - i)).isoformat()
+            store.save_affiliates(self.conn, day, "external", [
+                affiliate_row("JRF1st(63)", 100, 40, decline=60, bs=0, submitted=100),
+                affiliate_row("MoneyMe(1)", 100, 30, decline=70, bs=50, submitted=50),
+                affiliate_row("Small(500)", 2, 1, decline=1, bs=1, submitted=2),
+                affiliate_row("DummyJourney(144)", 10, 9, bs=9, submitted=10),
+            ], None, STAMP)
+        self.rows = {r["name"]: r for r in dash.affiliate_trends(self.conn, 30, "external")}
+
+    def test_every_real_affiliate_has_the_three_measures(self):
+        for name in ("JRF1st(63)", "MoneyMe(1)"):
+            self.assertEqual(set(self.rows[name]["measures"]),
+                             {"leads_to_statement", "submitted_to_sold", "earnings_per_lead"})
+
+    def test_statements_supplied_has_no_statement_rate(self):
+        """Zero extracted is a step that does not happen, not a drop."""
+        jrf = self.rows["JRF1st(63)"]
+        self.assertEqual(jrf["journey"], "immediate_with_statements")
+        self.assertFalse(jrf["measures"]["leads_to_statement"]["applies"])
+        self.assertTrue(self.rows["MoneyMe(1)"]["measures"]["leads_to_statement"]["applies"])
+
+    def test_the_rates_are_the_ones_asked_for(self):
+        m = self.rows["MoneyMe(1)"]["measures"]
+        self.assertAlmostEqual(m["leads_to_statement"]["current"], 0.5)     # 50 / 100
+        self.assertAlmostEqual(m["submitted_to_sold"]["current"], 0.6)      # 30 / 50
+        self.assertAlmostEqual(m["earnings_per_lead"]["current"], 3.0)      # 300 / 100
+
+    def test_a_tiny_affiliate_is_not_trended(self):
+        self.assertFalse(self.rows["Small(500)"]["enoughToTrend"])
+        self.assertTrue(self.rows["MoneyMe(1)"]["enoughToTrend"])
+
+    def test_test_traffic_is_left_out(self):
+        self.assertNotIn("DummyJourney(144)", self.rows)

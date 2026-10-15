@@ -124,6 +124,23 @@
     border-radius: 7px; padding: 10px 12px; margin: 0 0 14px;
   }
   .hidden { display: none !important; }
+  /* affiliate trends: a sparkline per measure, then the detail charts */
+  #watchTable td { vertical-align: middle; }
+  #watchTable tbody tr { cursor: pointer; }
+  #watchTable tbody tr:hover { background: var(--page); }
+  .watch-name { font-weight: 560; }
+  .watch-journey { display: block; font-size: 12px; color: var(--muted); font-weight: 400; }
+  .watch-cell { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
+  .watch-cell svg { flex: none; width: 112px; height: 28px; display: block; }
+  .watch-val { font-variant-numeric: tabular-nums; min-width: 54px; text-align: right; }
+  .watch-chg { font-size: 12px; color: var(--ink-2); min-width: 40px; }
+  .watch-drop { font-size: 12px; color: var(--critical); font-weight: 600; }
+  .watch-na { font-size: 12px; color: var(--muted); }
+  .multiples { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+  .multiples figure { margin: 0; }
+  .multiples figcaption { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+  .multiples .cap-sub { font-weight: 400; color: var(--ink-2); }
+  @media (max-width: 760px) { .multiples { grid-template-columns: 1fr; } }
 
   #tip {
     position: fixed; pointer-events: none; z-index: 9;
@@ -174,6 +191,38 @@
       <span><i style="background:var(--series-2)"></i>Sold to a lender</span>
     </div>
     <svg id="trend" height="260" role="img" aria-label="Daily applications and sales"></svg>
+  </section>
+
+  <section class="card" id="watchCard">
+    <h2>Affiliate trends</h2>
+    <p class="sub" id="watchSub"></p>
+    <table id="watchTable">
+      <thead><tr>
+        <th>Affiliate</th><th>Leads &rarr; statement</th>
+        <th>Submitted &rarr; sold</th><th>Earnings per lead</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+    <p class="note">
+      Each line is a rolling seven days. The figure beside it is the latest week, and the
+      change is against the weeks before it in the window. <b>&#9660; drop</b> marks a fall
+      worth looking at: at least 10% lower and beyond what chance would produce for a
+      conversion rate, at least 15% lower for earnings per lead, and only where the latest
+      week had 50 or more to judge it on. Select a row for the detail.
+    </p>
+  </section>
+
+  <section class="card hidden" id="detailCard">
+    <h2 id="detailTitle"></h2>
+    <p class="sub" id="detailSub"></p>
+    <div class="multiples">
+      <figure><figcaption>Leads &rarr; statement <span class="cap-sub" id="cap_l2s"></span></figcaption>
+        <svg id="det_l2s" role="img" aria-label="Leads to statement, rolling seven days"></svg></figure>
+      <figure><figcaption>Submitted &rarr; sold <span class="cap-sub" id="cap_s2s"></span></figcaption>
+        <svg id="det_s2s" role="img" aria-label="Submitted to sold, rolling seven days"></svg></figure>
+      <figure><figcaption>Earnings per lead <span class="cap-sub" id="cap_epl"></span></figcaption>
+        <svg id="det_epl" role="img" aria-label="Earnings per lead, rolling seven days"></svg></figure>
+    </div>
   </section>
 
   <section class="card">
@@ -361,6 +410,167 @@ const DATA = /*__DASHBOARD_DATA__*/null;
   };
 
   // ---- daily volume ------------------------------------------------
+  // ---- affiliate trends ----------------------------------------------
+  const MEASURES = [
+    ["leads_to_statement", "det_l2s", "cap_l2s", (v) => pct(100 * v)],
+    ["submitted_to_sold", "det_s2s", "cap_s2s", (v) => pct(100 * v)],
+    ["earnings_per_lead", "det_epl", "cap_epl", (v) => "$" + v.toFixed(2)],
+  ];
+
+  // De-emphasis line, the latest point in the accent - or in the status
+  // colour when it is a drop, which also carries a label beside it.
+  function sparkline(points, flagged) {
+    const W = 112, H = 28, pad = 3;
+    const vals = points.map((p) => p[1]).filter((v) => v != null);
+    const svg = document.createElementNS(SVGNS, "svg");
+    svg.setAttribute("width", W); svg.setAttribute("height", H);
+    if (vals.length < 2) return svg;
+    const lo = Math.min(...vals), hi = Math.max(...vals), span = hi - lo || hi || 1;
+    const x = (i) => pad + (i / (points.length - 1)) * (W - 2 * pad);
+    const y = (v) => H - pad - ((v - lo) / span) * (H - 2 * pad);
+    let d = "";
+    points.forEach(([, v], i) => { if (v != null) d += (d ? "L" : "M") + x(i) + "," + y(v); });
+    el("path", { d, fill: "none", stroke: "var(--muted)", "stroke-width": 2,
+                 "stroke-linejoin": "round", "stroke-linecap": "round" }, svg);
+    let li = points.length - 1;
+    while (li >= 0 && points[li][1] == null) li--;
+    if (li >= 0) el("circle", { cx: x(li), cy: y(points[li][1]), r: 3.5,
+                                fill: flagged ? "var(--critical)" : "var(--series-1)" }, svg);
+    return svg;
+  }
+
+  function drawWatch() {
+    const rows = DATA.trends || [];
+    $("watchSub").textContent = rows.length
+      ? "The three measures to keep from falling, per affiliate, over the loaded window."
+      : "Nothing collected for this source yet.";
+    const body = $("watchTable").querySelector("tbody");
+    body.innerHTML = "";
+    for (const r of rows) {
+      const tr = document.createElement("tr");
+      if (String(r.id) === affiliate) tr.style.background = "var(--page)";
+      const name = document.createElement("td");
+      name.innerHTML = `<span class="watch-name">${r.name}</span>` +
+        `<span class="watch-journey">${r.journeyLabel} · ${fmt(r.leads)} leads</span>`;
+      tr.appendChild(name);
+      for (const [key, , , show] of MEASURES) {
+        const m = r.measures[key];
+        const td = document.createElement("td");
+        const cell = document.createElement("div");
+        cell.className = "watch-cell";
+        if (!m.applies) {
+          cell.innerHTML = '<span class="watch-na">Statements arrive with the lead</span>';
+        } else if (!r.enoughToTrend) {
+          cell.innerHTML = '<span class="watch-na">Too few leads to trend</span>';
+        } else {
+          cell.appendChild(sparkline(m.points, m.flag));
+          const val = document.createElement("span");
+          val.className = "watch-val"; val.textContent = m.current == null ? "—" : show(m.current);
+          cell.appendChild(val);
+          const chg = document.createElement("span");
+          chg.className = m.flag ? "watch-drop" : "watch-chg";
+          chg.textContent = m.change == null ? ""
+            : (m.flag ? "▼ drop " : "") + (m.change > 0 ? "+" : "") + Math.round(100 * m.change) + "%";
+          cell.appendChild(chg);
+          const tipText = `<b>${r.name}</b><div class="row"><span>Latest week</span><span>${
+            m.current == null ? "—" : show(m.current)}</span></div><div class="row"><span>Before</span><span>${
+            m.baseline == null ? "—" : show(m.baseline)}</span></div>` +
+            (m.enough ? "" : '<div class="row"><span>Too few to call a drop</span></div>');
+          cell.addEventListener("mousemove", (e) => showTip(e, tipText));
+          cell.addEventListener("mouseleave", hideTip);
+        }
+        td.appendChild(cell);
+        tr.appendChild(td);
+      }
+      tr.addEventListener("click", () => {
+        affiliate = String(r.id);
+        $("affSel").value = affiliate;
+        render();
+        $("detailCard").scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+      body.appendChild(tr);
+    }
+  }
+
+  // One chart per measure, each on its own axis: three scales never share
+  // one. The earlier weeks' level is a solid hairline, so a fall below it
+  // reads without a second series.
+  function drawDetailChart(svg, points, baseline, show, flagged) {
+    svg.innerHTML = "";
+    const W = svg.clientWidth || 300, H = 190;
+    svg.setAttribute("height", H);
+    const m = { t: 12, r: 12, b: 24, l: 52 };
+    const iw = W - m.l - m.r, ih = H - m.t - m.b;
+    const vals = points.map((p) => p[1]).filter((v) => v != null);
+    if (vals.length < 2) return;
+    const top = Math.max(...vals, baseline || 0) * 1.05;
+    const raw = top / 4, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    const step = [1, 2, 2.5, 5, 10].map((f) => f * mag).find((v) => v >= raw);
+    const max = step * 4;
+    const x = (i) => m.l + (i / (points.length - 1)) * iw;
+    const y = (v) => m.t + ih - (v / max) * ih;
+    for (let i = 0; i <= 4; i++) {
+      const v = (max / 4) * i, yy = y(v);
+      el("line", { x1: m.l, x2: m.l + iw, y1: yy, y2: yy, class: "gridline" }, svg);
+      const t = el("text", { x: m.l - 6, y: yy + 4, class: "tick", "text-anchor": "end" }, svg);
+      t.textContent = show(v);
+    }
+    [0, points.length - 1].forEach((i) => {
+      const t = el("text", { x: x(i), y: H - 6, class: "tick",
+                             "text-anchor": i ? "end" : "start" }, svg);
+      t.textContent = points[i][0].slice(8, 10) + "/" + points[i][0].slice(5, 7);
+    });
+    if (baseline != null) {
+      el("line", { x1: m.l, x2: m.l + iw, y1: y(baseline), y2: y(baseline),
+                   stroke: "var(--baseline)", "stroke-width": 1.5 }, svg);
+      const bt = el("text", { x: m.l + 4, y: y(baseline) - 5, class: "tick" }, svg);
+      bt.textContent = "earlier " + show(baseline);
+    }
+    let d = "";
+    points.forEach(([, v], i) => { if (v != null) d += (d ? "L" : "M") + x(i) + "," + y(v); });
+    el("path", { d, fill: "none", stroke: "var(--series-1)", "stroke-width": 2,
+                 "stroke-linejoin": "round", "stroke-linecap": "round" }, svg);
+    const last = points.length - 1;
+    if (points[last][1] != null)
+      el("circle", { cx: x(last), cy: y(points[last][1]), r: 4,
+                     fill: flagged ? "var(--critical)" : "var(--series-1)",
+                     stroke: "var(--surface)", "stroke-width": 2 }, svg);
+
+    const cross = el("line", { y1: m.t, y2: m.t + ih, stroke: "var(--baseline)",
+                               "stroke-width": 1, opacity: 0 }, svg);
+    const hit = el("rect", { x: m.l, y: m.t, width: iw, height: ih, fill: "transparent" }, svg);
+    hit.addEventListener("mousemove", (e) => {
+      const box = svg.getBoundingClientRect();
+      const i = Math.max(0, Math.min(last, Math.round(((e.clientX - box.left - m.l) / iw) * last)));
+      cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("opacity", 1);
+      const [day, v] = points[i];
+      showTip(e, `<b>Seven days to ${day}</b><div class="row"><span>Value</span><span>${
+        v == null ? "—" : show(v)}</span></div>`);
+    });
+    hit.addEventListener("mouseleave", () => { cross.setAttribute("opacity", 0); hideTip(); });
+  }
+
+  function drawDetail() {
+    const card = $("detailCard");
+    const r = (DATA.trends || []).find((t) => String(t.id) === affiliate);
+    if (!r) { card.classList.add("hidden"); return; }
+    card.classList.remove("hidden");
+    $("detailTitle").textContent = r.name;
+    $("detailSub").textContent = r.journeyLabel + (r.journeyNote ? " — " + r.journeyNote : "");
+    for (const [key, svgId, capId, show] of MEASURES) {
+      const m = r.measures[key], svg = $(svgId);
+      if (!m.applies) {
+        svg.innerHTML = ""; svg.setAttribute("height", 40);
+        const t = el("text", { x: 0, y: 24, class: "tick" }, svg);
+        t.textContent = "No statement step — they arrive with the lead.";
+        $(capId).textContent = "";
+        continue;
+      }
+      $(capId).textContent = m.current == null ? "" : "· latest week " + show(m.current);
+      drawDetailChart(svg, m.points, m.baseline, show, m.flag);
+    }
+  }
+
   function drawTrend(series) {
     const svg = $("trend");
     svg.innerHTML = "";
@@ -563,6 +773,8 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     drawTrend(series);
     drawFunnel(counts);
     drawQuality();
+    drawWatch();
+    drawDetail();
 
     const who2 = affiliate === "all" ? "" : " Bars show " + affName.get(affiliate) + "'s own mix beside it.";
     $("qualitySub").textContent =

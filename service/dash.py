@@ -26,7 +26,9 @@ import datetime as dt
 import json
 from pathlib import Path
 
+import journeys
 import store
+import trends
 
 TEMPLATE = Path(__file__).with_name("template.html")
 PLACEHOLDER = "/*__DASHBOARD_DATA__*/null"
@@ -104,6 +106,7 @@ def payload(conn, days=30, source="external"):
                      "SELECT DISTINCT band, band_order FROM quality_day WHERE metric=?",
                      (store.QUALITY_METRIC,))}, key=lambda bo: bo[1])]
     scored = [r for r in store.scorecard(conn, days) if r["source"] == source]
+    trend_rows = affiliate_trends(conn, days, source)
 
     return {
         "qualityMetric": "Monthly income (wages and Centrelink)",
@@ -114,6 +117,8 @@ def payload(conn, days=30, source="external"):
                        "acceptance": r["acceptance"],
                        "profitPerLead": r["profit_per_lead"],
                        "profit": r["profit"]} for r in scored],
+        "trends": trend_rows,
+        "trendWindow": trends.WINDOW,
         "affiliateQuality": {str(aid): {"leads": q["leads"], "expected": q["expected"],
                                         "bands": q["bands"]}
                              for aid, q in quality.items()},
@@ -128,6 +133,57 @@ def payload(conn, days=30, source="external"):
         "accepts": accepts,
         "stage_counts": stage_counts,
     }
+
+
+def affiliate_trends(conn, days, source):
+    """Per affiliate: the three measures Layton watches, as rolling
+    seven-day series, each with a call on whether it has dropped.
+
+    Every day in the window is present for every affiliate, zero-filled,
+    so a week with no leads reads as a gap in volume rather than being
+    silently skipped over.
+    """
+    cutoff = store.business_cutoff(days)
+    rows = conn.execute(
+        "SELECT affiliate_id, MAX(affiliate_name), business_date, SUM(received),"
+        " SUM(bs_extracted), SUM(submitted), SUM(sold), SUM(revenue) FROM affiliate_day"
+        " WHERE business_date >= ? AND source = ? AND affiliate_id IS NOT NULL"
+        + store._not_test() + " GROUP BY affiliate_id, business_date",
+        (cutoff, source)).fetchall()
+    all_days = sorted({r[2] for r in rows})
+    known = {r[0]: r[1] for r in conn.execute("SELECT affiliate_id, name FROM affiliate")}
+
+    by_affiliate: dict[int, dict] = {}
+    for aid, name, day_, rec, ext, sub_, sold, rev in rows:
+        a = by_affiliate.setdefault(aid, {"name": known.get(aid) or name, "days": {}})
+        a["days"][day_] = {"day": day_, "received": rec or 0, "extracted": ext or 0,
+                           "submitted": sub_ or 0, "sold": sold or 0, "revenue": rev or 0}
+
+    out = []
+    for aid, a in by_affiliate.items():
+        series = [a["days"].get(d) or {"day": d, "received": 0, "extracted": 0,
+                                        "submitted": 0, "sold": 0, "revenue": 0}
+                  for d in all_days]
+        leads = sum(d["received"] for d in series)
+        if not leads:
+            continue
+        journey = journeys.journey_of(aid, source)
+        measures = {}
+        for name, (num, den) in trends.MEASURES.items():
+            if name == "leads_to_statement" and not journeys.has_statement_step(journey):
+                measures[name] = {"applies": False}
+                continue
+            measures[name] = {"applies": True,
+                              "points": trends.rolling(series, num, den),
+                              **trends.assess(series, name)}
+        out.append({"id": aid, "name": a["name"], "leads": leads, "journey": journey,
+                    # A line through one or three leads is noise drawn as signal.
+                    "enoughToTrend": leads >= store.MIN_SCORED_LEADS,
+                    "journeyLabel": journeys.LABELS[journey],
+                    "journeyNote": journeys.DESCRIPTIONS[journey],
+                    "measures": measures})
+    out.sort(key=lambda r: -r["leads"])
+    return out
 
 
 def render(data, template: Path = TEMPLATE) -> str:
