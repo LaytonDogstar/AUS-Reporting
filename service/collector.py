@@ -312,18 +312,21 @@ def reduce_affiliate_results(items):
 
 
 def reduce_quality_bands(items):
-    """Bands only, no lender result. Rows in, counts out.
+    """Bands and the lender result, without the cardinality guards the
+    population reduction needs. Rows in, counts out.
 
-    The result split lives in the population figures; what a single
-    affiliate's call adds is the mix it sends.
+    The result is kept so a band's sold rate can be taken within one
+    population: scoring an external source against figures that include
+    internal traffic marks it down for the company it keeps.
     """
-    counts: dict[tuple[str, str, int], int] = {}
+    counts: dict[tuple[str, str, int, str], int] = {}
     for it in items:
+        result = str(it.get(RESULT_FIELD) or "unknown")
         for metric in NUMERIC:
             field = field_for(it, metric)
             if field:
                 band, order = band_of(metric, it.get(field))
-                key = (metric, band, order)
+                key = (metric, band, order, result)
                 counts[key] = counts.get(key, 0) + 1
     return counts
 
@@ -543,6 +546,25 @@ def _requests(day: date):
     ]
 
 
+def fetch_retrying(url, attempts=3, pause=2.0):
+    """A GET that survives a dropped connection.
+
+    A single-call report is retried by the next scheduler pass, which
+    costs one call. A day of per-affiliate calls is not: one drop
+    among twenty discards the other nineteen, and the day is never
+    collected if the drop repeats. Measured 15 Oct 2026, roughly one
+    call in twenty was reset by the proxy in front of this collector.
+    """
+    status = payload = error = None
+    for attempt in range(attempts):
+        status, payload, _ms, error = fetch(url)
+        if status == 200 and payload:
+            return payload
+        if attempt + 1 < attempts:
+            time.sleep(pause * (attempt + 1))
+    raise RuntimeError(error or f"HTTP {status}")
+
+
 def collect_quality_by_affiliate(conn, iso, stamp):
     """Lead quality for each affiliate that sent anything that day.
 
@@ -565,16 +587,17 @@ def collect_quality_by_affiliate(conn, iso, stamp):
     counts: dict[tuple[int, str, str, int], int] = {}
     rows = 0
     for affiliate_id in sorted(ids):
-        status, payload, ms, error = fetch(
-            f"{API_BASE}/api/PublicReports/LeadQualityReport?{qs}"
-            f"&affiliateId={int(affiliate_id)}")
-        if error or status != 200:
-            raise RuntimeError(f"affiliate {affiliate_id}: {error or f'HTTP {status}'}")
+        try:
+            payload = fetch_retrying(
+                f"{API_BASE}/api/PublicReports/LeadQualityReport?{qs}"
+                f"&affiliateId={int(affiliate_id)}")
+        except RuntimeError as exc:
+            raise RuntimeError(f"affiliate {affiliate_id}: {exc}") from None
         items = (json.loads(payload.decode("utf-8", "replace")) or {}).get("Items") or []
         rows += len(items)
-        for (metric, band, order), n in reduce_quality_bands(items).items():
-            counts[(affiliate_id, metric, band, order)] = \
-                counts.get((affiliate_id, metric, band, order), 0) + n
+        for (metric, band, order, result), n in reduce_quality_bands(items).items():
+            key = (affiliate_id, metric, band, order, result)
+            counts[key] = counts.get(key, 0) + n
         del items                               # rows do not outlive this call
     store.save_quality_by_affiliate(conn, iso, counts, stamp)
     return f"{len(ids)} affiliate(s), {rows:,} row(s) -> {len(counts)} count(s)"

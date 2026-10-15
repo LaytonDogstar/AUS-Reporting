@@ -205,17 +205,19 @@ CREATE TABLE IF NOT EXISTS lender_result_day_meta (
 -- at a time. LeadQualityReport takes an affiliateId filter, so this is
 -- one call per active affiliate per day rather than a dev ask.
 --
--- No lender result here. The population's sold rate per band comes from
--- quality_day; what this adds is the mix a source sends, which is what
--- separates "sends good leads" from "sells well anyway".
+-- The lender result is kept, so a band's sold rate can be taken within
+-- one population. Against everyone, every external source scores badly
+-- and every internal one well - internal traffic sells at 49% against
+-- 27% - which says nothing about the leads.
 CREATE TABLE IF NOT EXISTS quality_affiliate_day (
     business_date TEXT NOT NULL,
     affiliate_id INTEGER NOT NULL,
     metric TEXT NOT NULL,
     band TEXT NOT NULL,
     band_order INTEGER NOT NULL,
+    result TEXT NOT NULL,
     n INTEGER NOT NULL,
-    PRIMARY KEY (business_date, affiliate_id, metric, band)
+    PRIMARY KEY (business_date, affiliate_id, metric, band, result)
 );
 CREATE INDEX IF NOT EXISTS qad_date ON quality_affiliate_day(business_date, metric);
 
@@ -283,6 +285,7 @@ def connect(path: str) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=30000")
     _migrate_affiliate_source(conn)
+    _migrate_quality_affiliate_result(conn)
     conn.executescript(SCHEMA)
     _migrate_metric_names(conn)
     _migrate_affiliate_id(conn)
@@ -342,6 +345,23 @@ def _migrate_affiliate_source(conn):
 # before that are the same measure and belong in the same series, so
 # they are renamed in place rather than left as a second metric.
 RENAMED_METRICS = {"CenterlinkMonthly": "WagesAndCentrelinkMonthly"}
+
+
+def _migrate_quality_affiliate_result(conn):
+    """Drop a per-affiliate quality table written before the result was
+    kept. Those rows cannot be split by outcome after the fact, and the
+    days refetch in about twenty seconds each."""
+    have = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    if "quality_affiliate_day" not in have:
+        return
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(quality_affiliate_day)")}
+    if "result" in columns:
+        return
+    with conn:
+        conn.execute("DROP TABLE quality_affiliate_day")
+        if "collection" in have:
+            conn.execute("DELETE FROM collection WHERE kind='quality_by_affiliate'")
 
 
 def _migrate_metric_names(conn):
@@ -422,28 +442,38 @@ def save_affiliates(conn, business_date, source, rows, totals, collected_at):
 
 
 def save_quality_by_affiliate(conn, business_date, counts, collected_at):
-    """counts: {(affiliate_id, metric, band, band_order): n}"""
+    """counts: {(affiliate_id, metric, band, band_order, result): n}"""
     with conn:
         conn.execute("DELETE FROM quality_affiliate_day WHERE business_date=?",
                      (business_date,))
         conn.executemany(
             "INSERT INTO quality_affiliate_day (business_date, affiliate_id, metric,"
-            " band, band_order, n) VALUES (?,?,?,?,?,?)",
-            [(business_date, aid, metric, band, order, n)
-             for (aid, metric, band, order), n in sorted(counts.items())])
+            " band, band_order, result, n) VALUES (?,?,?,?,?,?,?)",
+            [(business_date, aid, metric, band, order, result, n)
+             for (aid, metric, band, order, result), n in sorted(counts.items())])
 
 
-def band_sold_rates(conn, metric, days=30):
-    """{band: (leads, sold rate)} across the whole population.
+def band_sold_rates(conn, metric, days=30, source=None):
+    """{band: (leads, sold rate)} - what a band is worth.
 
-    This is what a band is worth: of every lead that fell in it, how
-    many a lender bought. Measured over everyone, so one affiliate's
-    volume cannot move it much.
+    Within one population when `source` is given, which is the only
+    comparison that means anything: internal traffic sells at 49%
+    against external's 27%, so scoring an external affiliate against
+    everyone marks it down for the company it keeps.
     """
-    rows = conn.execute(
-        "SELECT band, result, SUM(n) FROM quality_day"
-        " WHERE metric=? AND business_date >= ? GROUP BY band, result",
-        (metric, business_cutoff(days))).fetchall()
+    cutoff = business_cutoff(days)
+    if source is None:
+        rows = conn.execute(
+            "SELECT band, result, SUM(n) FROM quality_day"
+            " WHERE metric=? AND business_date >= ? GROUP BY band, result",
+            (metric, cutoff)).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT q.band, q.result, SUM(q.n) FROM quality_affiliate_day q"
+            " WHERE q.metric=? AND q.business_date >= ?" + _not_test("q.affiliate_id") +
+            " AND q.affiliate_id IN (SELECT DISTINCT affiliate_id FROM affiliate_day"
+            "   WHERE source=? AND affiliate_id IS NOT NULL)"
+            " GROUP BY q.band, q.result", (metric, cutoff, source)).fetchall()
     totals: dict[str, list] = {}
     for band, result, n in rows:
         slot = totals.setdefault(band, [0, 0])
@@ -454,7 +484,7 @@ def band_sold_rates(conn, metric, days=30):
             for band, (total, sold) in totals.items()}
 
 
-def affiliate_quality(conn, metric, days=30):
+def affiliate_quality(conn, metric, days=30, source=None):
     """Per affiliate: the band mix it sends, and what that mix is worth.
 
     `expected` is the sold rate this affiliate's mix would produce at
@@ -463,7 +493,7 @@ def affiliate_quality(conn, metric, days=30):
     which of the two a source is good at.
     """
     cutoff = business_cutoff(days)
-    rates = band_sold_rates(conn, metric, days)
+    rates = band_sold_rates(conn, metric, days, source)
     rows = conn.execute(
         "SELECT affiliate_id, band, SUM(n) FROM quality_affiliate_day"
         " WHERE metric=? AND business_date >= ?" + _not_test() +
@@ -552,7 +582,8 @@ def scorecard(conn, days=30, limit=80, metric=QUALITY_METRIC):
         " GROUP BY a.affiliate_name, a.source HAVING leads > 0",
         (cutoff,)).fetchall()
     known = {r[0]: r[1] for r in conn.execute("SELECT affiliate_id, name FROM affiliate")}
-    quality = affiliate_quality(conn, metric, days)
+    quality = {source: affiliate_quality(conn, metric, days, source)
+               for source in SOURCES}
     pings = {r[0]: r[1:] for r in conn.execute(
         "SELECT affiliate_id,"
         " SUM(CASE WHEN status_id IN (1,2,3) THEN pings ELSE 0 END) reached,"
@@ -562,7 +593,7 @@ def scorecard(conn, days=30, limit=80, metric=QUALITY_METRIC):
     out = []
     for aid, name, source, leads, sold, revenue, commission, bs_cost, profit in rows:
         reached, ping_sold = pings.get(aid, (0, 0))
-        q = quality.get(aid)
+        q = quality.get(source, {}).get(aid)
         sold_rate = (sold / leads) if leads else 0
         expected = q["expected"] if q else None
         out.append({

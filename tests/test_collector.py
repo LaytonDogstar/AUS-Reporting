@@ -25,7 +25,10 @@ STAMP = "2026-10-13T00:00:00+00:00"
 
 
 def affiliate_row(name, received=10, revenue=100.0, profit=40.0):
-    return {"name": name, "received": received, "accepted_tc": 1, "bs_refreshed": 0,
+    """As the collector builds one: the id parsed out of the name, the
+    way the affiliate reports deliver it."""
+    return {"name": name, "affiliate_id": store.affiliate_id_from(name),
+            "received": received, "accepted_tc": 1, "bs_refreshed": 0,
             "duplicate": 0, "bs_extracted": 2, "submitted": 3, "sold": 1, "decline": 2,
             "redirect": 0, "funded": 0, "revenue": revenue, "commission": 60.0,
             "bs_cost": 1.0, "final_commission": 59.0, "profit": profit,
@@ -418,12 +421,16 @@ class QualityByAffiliate(unittest.TestCase):
         self.addCleanup(self.conn.close)
         self.day = "2026-10-12"
 
-    def test_bands_are_counted_without_the_lender_result(self):
+    def test_bands_are_counted_with_the_lender_result(self):
+        """The result is kept so a band's sold rate can be taken within
+        one population rather than against everyone."""
         counts = collector.reduce_quality_bands([
             {"WageAndCenterlinkMonthly": 2500, "Result": "Sold"},
             {"WageAndCenterlinkMonthly": 2600, "Result": "Decline"},
         ])
-        self.assertEqual(counts[("WagesAndCentrelinkMonthly", "2000-3000", 3)], 2)
+        self.assertEqual(counts[("WagesAndCentrelinkMonthly", "2000-3000", 3, "Sold")], 1)
+        self.assertEqual(
+            counts[("WagesAndCentrelinkMonthly", "2000-3000", 3, "Decline")], 1)
 
     def test_a_day_with_no_affiliate_rows_is_refused_not_stored_empty(self):
         """Collected out of order, it would otherwise store nothing and
@@ -451,17 +458,42 @@ class QualityByAffiliate(unittest.TestCase):
             ("WagesAndCentrelinkMonthly", "<1", 0, "Decline"): 85,
         }, 200, STAMP)
         store.save_quality_by_affiliate(self.conn, self.day, {
-            (1, "WagesAndCentrelinkMonthly", "3000+", 4): 100,   # all high income
-            (2, "WagesAndCentrelinkMonthly", "<1", 0): 100,      # all low
+            (1, "WagesAndCentrelinkMonthly", "3000+", 4, "Sold"): 100,   # high income
+            (2, "WagesAndCentrelinkMonthly", "<1", 0, "Sold"): 100,      # low
         }, STAMP)
 
         quality = store.affiliate_quality(self.conn, "WagesAndCentrelinkMonthly", 30)
         self.assertAlmostEqual(quality[1]["expected"], 0.48)
         self.assertAlmostEqual(quality[2]["expected"], 0.15)
 
+    def test_a_source_is_scored_against_its_own_population(self):
+        """Internal traffic sells at 49% against external's 27%, so
+        scoring an external source against everyone marks it down for
+        the company it keeps."""
+        store.save_affiliates(self.conn, self.day, "external",
+                              [affiliate_row("Outside(1)")], None, STAMP)
+        store.save_affiliates(self.conn, self.day, "internal",
+                              [affiliate_row("Inside(2)")], None, STAMP)
+        store.save_quality_by_affiliate(self.conn, self.day, {
+            (1, "WagesAndCentrelinkMonthly", "3000+", 4, "Sold"): 20,
+            (1, "WagesAndCentrelinkMonthly", "3000+", 4, "Decline"): 80,
+            (2, "WagesAndCentrelinkMonthly", "3000+", 4, "Sold"): 60,
+            (2, "WagesAndCentrelinkMonthly", "3000+", 4, "Decline"): 40,
+        }, STAMP)
+
+        external = store.band_sold_rates(self.conn, "WagesAndCentrelinkMonthly",
+                                         30, "external")
+        internal = store.band_sold_rates(self.conn, "WagesAndCentrelinkMonthly",
+                                         30, "internal")
+        self.assertAlmostEqual(external["3000+"][1], 0.20)
+        self.assertAlmostEqual(internal["3000+"][1], 0.60)
+        # and the external affiliate is judged against 20%, not 40%
+        q = store.affiliate_quality(self.conn, "WagesAndCentrelinkMonthly", 30, "external")
+        self.assertAlmostEqual(q[1]["expected"], 0.20)
+
     def test_test_affiliates_are_left_out_of_the_quality_figures_too(self):
         store.save_quality_by_affiliate(self.conn, self.day, {
-            (144, "WagesAndCentrelinkMonthly", "3000+", 4): 128,
+            (144, "WagesAndCentrelinkMonthly", "3000+", 4, "Sold"): 128,
         }, STAMP)
         self.assertEqual(
             store.affiliate_quality(self.conn, "WagesAndCentrelinkMonthly", 30), {})

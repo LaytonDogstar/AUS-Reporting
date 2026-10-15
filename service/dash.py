@@ -92,7 +92,31 @@ def payload(conn, days=30, source="external"):
                            "IsActive": bool(is_active), "IsDeleted": False,
                            "IsInternalSource": bool(is_internal)})
 
+    # Lead quality, and the scorecard, so the page carries the whole
+    # answer rather than linking to it. Both are per source, like the
+    # rest of the page.
+    rates = store.band_sold_rates(conn, store.QUALITY_METRIC, days, source)
+    quality = store.affiliate_quality(conn, store.QUALITY_METRIC, days, source)
+    bands = [{"band": band, "order": order, "leads": rates.get(band, (0, 0))[0],
+              "soldRate": rates.get(band, (0, 0))[1]}
+             for band, order in sorted(
+                 {(b, o) for b, o in conn.execute(
+                     "SELECT DISTINCT band, band_order FROM quality_day WHERE metric=?",
+                     (store.QUALITY_METRIC,))}, key=lambda bo: bo[1])]
+    scored = [r for r in store.scorecard(conn, days) if r["source"] == source]
+
     return {
+        "qualityMetric": "Monthly income (wages and Centrelink)",
+        "qualityBands": bands,
+        "scorecard": [{"id": r["id"], "name": r["name"], "leads": r["leads"],
+                       "soldRate": r["sold_rate"], "expected": r["expected"],
+                       "index": r["quality_index"],
+                       "acceptance": r["acceptance"],
+                       "profitPerLead": r["profit_per_lead"],
+                       "profit": r["profit"]} for r in scored],
+        "affiliateQuality": {str(aid): {"leads": q["leads"], "expected": q["expected"],
+                                        "bands": q["bands"]}
+                             for aid, q in quality.items()},
         "generatedUtc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
         "windowDays": days,
         "reportingTimeZone": "AUS Eastern Standard Time",

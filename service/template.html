@@ -183,6 +183,31 @@
     <svg id="funnel" role="img" aria-label="Applications reaching each stage"></svg>
   </section>
 
+  <section class="card" id="qualityCard">
+    <h2>Lead quality</h2>
+    <p class="sub" id="qualitySub"></p>
+    <svg id="quality" role="img" aria-label="Sold rate by income band"></svg>
+    <p class="note" id="qualityNote"></p>
+  </section>
+
+  <section class="card" id="scoreCard">
+    <h2>Scorecard</h2>
+    <p class="sub">What a lead from each source is worth. Ranked by profit per lead.</p>
+    <table id="scoreTable">
+      <thead><tr>
+        <th>Affiliate</th><th>Leads</th><th>Sold</th><th>Expected</th>
+        <th>Sells to</th><th>Profit / lead</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+    <p class="note">
+      <b>Expected</b> is the sold rate this source&rsquo;s lead mix would produce at the
+      population rates above &mdash; quality, owing nothing to how well the leads were
+      sold. <b>Sells to</b> is the actual rate over that expectation: above 1.00 is
+      selling better than the leads alone predict.
+    </p>
+  </section>
+
   <section class="card">
     <h2>Affiliates</h2>
     <p class="sub">Applications and sales over the selected period.</p>
@@ -409,6 +434,41 @@ const DATA = /*__DASHBOARD_DATA__*/null;
   }
 
   // ---- funnel ------------------------------------------------------
+  // Sold rate by income band, with the selected affiliate's own mix
+  // over it. The rates are the population's - one source cannot move
+  // them - so the two together say whether a source sends leads that
+  // sell, or sells the leads it sends.
+  function drawQuality() {
+    const svg = $("quality");
+    svg.innerHTML = "";
+    const bands = DATA.qualityBands || [];
+    if (!bands.length) { svg.setAttribute("height", 20); return; }
+
+    const mine = affiliate === "all" ? null : (DATA.affiliateQuality || {})[affiliate];
+    const rowH = 30, gap = 3, labelW = 150, valueW = 150;
+    const H = bands.length * (rowH + gap) + 8;
+    const W = svg.clientWidth || 900;
+    const barW = Math.max(60, W - labelW - valueW);
+    svg.setAttribute("height", H);
+    const maxRate = Math.max(...bands.map((b) => b.soldRate), 0.01);
+
+    bands.forEach((b, i) => {
+      const y = i * (rowH + gap);
+      const t = el("text", { x: labelW - 12, y: y + rowH / 2 + 4, class: "tick",
+                             "text-anchor": "end", fill: "var(--ink-2)" }, svg);
+      t.textContent = b.band === "<1" ? "under $1" : "$" + b.band;
+
+      el("rect", { x: labelW, y: y + 5, width: Math.max(2, (b.soldRate / maxRate) * barW),
+                   height: rowH - 10, rx: 3, fill: "var(--series-1)" }, svg);
+
+      const share = mine && mine.leads ? (mine.bands[b.band] || 0) / mine.leads : null;
+      const v = el("text", { x: labelW + barW + 10, y: y + rowH / 2 + 4, class: "tick",
+                             fill: "var(--ink-2)" }, svg);
+      v.textContent = pct(100 * b.soldRate) + " sold"
+        + (share === null ? "" : "  ·  " + pct(100 * share) + " of their leads");
+    });
+  }
+
   function drawFunnel(counts) {
     const svg = $("funnel");
     svg.innerHTML = "";
@@ -501,6 +561,27 @@ const DATA = /*__DASHBOARD_DATA__*/null;
 
     drawTrend(series);
     drawFunnel(counts);
+    drawQuality();
+
+    const who2 = affiliate === "all" ? "" : " Bars show " + affName.get(affiliate) + "'s own mix beside it.";
+    $("qualitySub").textContent =
+      (DATA.qualityMetric || "Lead quality") + ": how often a lead in each band sold." + who2;
+    const mine = affiliate === "all" ? null : (DATA.affiliateQuality || {})[affiliate];
+    $("qualityNote").textContent = mine
+      ? "Expected sold rate for this mix: " + pct(100 * mine.expected) + "."
+      : "Select an affiliate to see its own mix against these rates.";
+
+    const score = (DATA.scorecard || []).filter(
+      (r) => affiliate === "all" || String(r.id) === affiliate);
+    $("scoreTable").querySelector("tbody").innerHTML = score.map((r) => `
+      <tr${String(r.id) === affiliate ? ' style="background:var(--page);font-weight:560"' : ""}>
+        <td>${r.name}</td>
+        <td class="num">${fmt(r.leads)}</td>
+        <td class="num">${pct(100 * r.soldRate)}</td>
+        <td class="num">${r.expected == null ? "—" : pct(100 * r.expected)}</td>
+        <td class="num">${r.index == null ? "—" : r.index.toFixed(2) + "×"}</td>
+        <td class="num">${r.profitPerLead == null ? "—" : r.profitPerLead.toFixed(2)}</td>
+      </tr>`).join("");
 
     $("affTable").querySelector("tbody").innerHTML = affs.map((a) => `
       <tr${a.id === affiliate ? ' style="background:var(--page);font-weight:560"' : ""}>
