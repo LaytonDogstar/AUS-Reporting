@@ -335,8 +335,9 @@ class OfflineLenders(unittest.TestCase):
 
 
 class CustomerMix(unittest.TestCase):
-    """The customers page: each band's share of what a lender bought,
-    over time, against its share of what the lender was offered."""
+    """Buyer profiles, as the US dashboard lays them out: what each
+    lender buys against the pool of every lead received, every measure
+    at once, with each band's share of its purchases over time."""
 
     def setUp(self):
         self.conn = store.connect(":memory:")
@@ -348,39 +349,81 @@ class CustomerMix(unittest.TestCase):
             high = 60 if i <= 7 else 30
             store.save_tiers(self.conn, day(i), [tier(1, "Big T1", 400, 200, 100, revenue=1000.0)],
                              None, STAMP)
+            # the pool: every lead received, a quarter of them high-income
+            store.save_quality(self.conn, day(i), {
+                (METRIC, "3000+", 4, "Sold"): 100, (METRIC, "3000+", 4, "Decline"): 150,
+                (METRIC, "<1", 0, "Sold"): 100, (METRIC, "<1", 0, "Decline"): 650,
+                ("EmploymentStatus", "Full time", 0, "Sold"): 200,
+                ("EmploymentStatus", "Centrelink", 0, "Decline"): 800,
+                ("Age", "<18", 0, "Decline"): 10, ("Age", "25-34", 2, "Sold"): 990,
+            }, 1000, STAMP)
             store.save_quality_by_tier(self.conn, day(i), {
                 (1, METRIC, "3000+", 4, "Sold"): high,
-                (1, METRIC, "3000+", 4, "FilterFailed"): 50,
                 (1, METRIC, "<1", 0, "Sold"): 100 - high,
-                (1, METRIC, "<1", 0, "FilterFailed"): 150,
+                (1, "EmploymentStatus", "Full time", 0, "Sold"): 100,
                 (1, "Age", "<18", 0, "Sold"): 5,
                 (1, "Age", "25-34", 2, "Sold"): 95,
                 (62, METRIC, "3000+", 4, "Sold"): 99,
             }, STAMP)
 
-    def test_shares_of_what_was_bought_and_offered(self):
-        data = dash.customer_payload(self.conn, 30)
-        high = data["mix"][METRIC]["10"]["bands"]["3000+"]
-        self.assertAlmostEqual(high["bought"][-1], 0.6)
-        self.assertAlmostEqual(high["offered"][-1], 110 / 300, places=3)   # (60+50) of 300
-        self.assertEqual(len(high["bought"]), len(data["axis"]))
+    def level(self, data, metric, band):
+        a = next(a for a in data["attrs"] if a["key"] == metric)
+        return next(l for l in a["levels"] if l["band"] == band)
 
-    def test_a_shift_either_way_is_called(self):
-        mix = dash.customer_payload(self.conn, 30)["mix"][METRIC]["10"]["bands"]
-        self.assertEqual(mix["3000+"]["shift"], 1)
-        self.assertEqual(mix["<1"]["shift"], -1)
+    def test_share_index_and_take_against_the_pool(self):
+        data = dash.customer_payload(self.conn, 30)
+        high = self.level(data, METRIC, "3000+")
+        self.assertAlmostEqual(high["poolShare"], 0.25)
+        cell = high["cells"]["10"]
+        share = (60 * 7 + 30 * 21) / (100 * 28)
+        self.assertAlmostEqual(cell["share"], share)
+        self.assertAlmostEqual(cell["index"], 100 * share / 0.25)
+        self.assertAlmostEqual(cell["take"], (60 * 7 + 30 * 21) / (250 * 28))
+
+    def test_every_measure_at_once_categoricals_first(self):
+        keys = [a["key"] for a in dash.customer_payload(self.conn, 30)["attrs"]]
+        self.assertEqual(keys[0], "EmploymentStatus")
+        self.assertIn(METRIC, keys)
+        self.assertIn("Age", keys)
+
+    def test_the_trend_is_its_share_over_time_with_shifts_either_way(self):
+        data = dash.customer_payload(self.conn, 30)
+        t = data["trends"]["10"][METRIC]
+        self.assertAlmostEqual(t["3000+"]["share"][-1], 0.6)
+        self.assertEqual(len(t["3000+"]["share"]), len(data["axis"]))
+        self.assertEqual(t["3000+"]["shift"], 1)
+        self.assertEqual(t["<1"]["shift"], -1)
+        self.assertAlmostEqual(self.level(data, METRIC, "3000+")["pool"][-1], 0.25)
 
     def test_excluded_lenders_and_test_ages_are_left_out(self):
         data = dash.customer_payload(self.conn, 30)
-        self.assertNotIn("22", data["mix"][METRIC])
-        age = next(m for m in data["metrics"] if m["key"] == "Age")
-        self.assertEqual(age["bands"], ["25-34"])
+        self.assertEqual([l["name"] for l in data["lenders"]], ["Big"])
+        self.assertNotIn("22", data["trends"])
+        age = next(a for a in data["attrs"] if a["key"] == "Age")
+        self.assertEqual([l["band"] for l in age["levels"]], ["25-34"])
 
     def test_the_page_renders(self):
         html = dash.customer_page(self.conn, 30).decode()
         self.assertNotIn(dash.PLACEHOLDER, html)
         self.assertNotIn(dash.STYLE_PLACEHOLDER, html)
         self.assertIn('"view":"customers"', html)
+
+    def test_employment_status_is_counted_per_tier(self):
+        counts = collector.reduce_quality_bands([
+            {"EmploymentStatus": "Full time", "Result": "Sold"},
+            {"EmploymentStatus": "Centrelink", "Result": "FilterFailed"}])
+        self.assertEqual(counts[("EmploymentStatus", "Full time", 0, "Sold")], 1)
+        self.assertEqual(counts[("EmploymentStatus", "Centrelink", 0, "FilterFailed")], 1)
+
+    def test_days_stored_before_employment_was_counted_are_refetched(self):
+        path = str(Path(self.enterContext(tempfile.TemporaryDirectory())) / "old.db")
+        conn = store.connect(path)
+        store.save_quality_by_tier(conn, "2026-10-01", {(1, METRIC, "<1", 0, "Sold"): 1}, STAMP)
+        store.mark(conn, "2026-10-01", "quality_by_tier", "ok")
+        conn.close()
+        conn = store.connect(path)
+        self.addCleanup(conn.close)
+        self.assertNotIn("2026-10-01", store.collected_days(conn, "quality_by_tier"))
 
     def test_a_steady_mix_is_not_called_a_shift(self):
         days = [{"day": f"d{i}", "s": 30, "S": 100} for i in range(28)]

@@ -354,82 +354,126 @@ def lender_payload(conn, days=30):
 # quality page - and would otherwise sit in every lender's mix.
 NOT_CUSTOMERS = {("Age", "<18")}
 
+# The buyer profile: every measure, in this order, set out at once. The
+# first two are categorical and keep their stored value as the band.
+PROFILE = (
+    ("EmploymentStatus", "Employment", False),
+    ("TimeAtEmployer", "Time at employer", False),
+) + DEMOGRAPHICS
+CATEGORY_ORDER = {
+    "EmploymentStatus": ["Full time", "Part time", "Casual", "Self-employed",
+                         "Centrelink", "Unemployed"],
+    "TimeAtEmployer": ["Less than 3 months", "3 months to 1 year", "More than 1 year"],
+}
+MIN_PROFILE_PURCHASES = 20      # a lender's profile over fewer is noise
+
 
 def customer_payload(conn, days=30):
-    """The customers page: per lender and per measure, the share of its
-    purchases in each band, as a rolling seven-day line, beside the
-    share of the leads it was offered - and whether the mix it buys has
-    shifted, either way.
+    """Buyer profiles, after the US dashboard's: what each lender buys
+    against the pool of every lead received, every measure at once.
 
-    Lines are sent as values on one shared day axis rather than as
-    (day, value) pairs: twelve measures by twenty lenders by six bands
-    is a lot of repeated dates.
+    For each measure and band: the pool share (that band's share of all
+    leads received), and per lender its share of its own purchases, the
+    index (100 = in proportion to the pool, 200 = twice as common, 0 =
+    never) and the share of the band's leads it took. Per lender, each
+    band's share as a rolling seven-day line beside the pool's, with a
+    shift in either direction called beyond chance.
+
+    Lines are values on one shared day axis rather than (day, value)
+    pairs: fourteen measures by twenty lenders by six bands is a lot of
+    repeated dates.
     """
+    cutoff = store.business_cutoff(days)
+    axis = [r[0] for r in conn.execute(
+        "SELECT DISTINCT business_date FROM quality_tier_day WHERE business_date >= ?"
+        " ORDER BY 1", (cutoff,))]
     names = store.lender_names(conn)
+
     money = {}
     for lid, name, _day, _p, _s, accepted, _r, revenue, *_ in store.lender_daily(conn, days):
         m = money.setdefault(lid, {"name": (name or "").strip() or names.get(lid, f"Lender {lid}"),
-                                   "revenue": 0.0, "bought": 0})
+                                   "revenue": 0.0, "accepted": 0})
         m["revenue"] += revenue or 0
-        m["bought"] += accepted or 0
+        m["accepted"] += accepted or 0
+    tiers: dict[int, list] = {}
+    for lid, _tid, tname, _price, _p, _s, accepted, _r, revenue, *_ in store.lender_tier_totals(conn, days):
+        if accepted:
+            tiers.setdefault(lid, []).append({"name": tname, "bought": accepted, "revenue": revenue or 0})
 
-    # One day axis for every measure, so their lines line up.
-    axis = [r[0] for r in conn.execute(
-        "SELECT DISTINCT business_date FROM quality_tier_day WHERE business_date >= ?"
-        " ORDER BY 1", (store.business_cutoff(days),))]
-    metrics, by_metric = [], {}
-    for metric, label, is_money in DEMOGRAPHICS:
+    attrs, trend = [], {}
+    bought_by_lender: dict[int, int] = {}
+    for metric, label, is_money in PROFILE:
+        pool_daily: dict[str, dict] = {}
+        for day_, band, n in conn.execute(
+                "SELECT business_date, band, SUM(n) FROM quality_day WHERE metric=?"
+                " AND business_date >= ? GROUP BY 1, 2", (metric, cutoff)):
+            if (metric, band) not in NOT_CUSTOMERS:
+                pool_daily.setdefault(day_, {})[band] = n or 0
         rows = [r for r in store.lender_demographics_daily(conn, metric, days)
                 if (metric, r[2]) not in NOT_CUSTOMERS]
-        if not rows:
+        if not rows or not pool_daily:
             continue
-        all_days = axis
-        order = {}
-        cells: dict[tuple, list] = {}
-        for day_, lid, band, band_order, offered, sold in rows:
+        sold: dict[int, dict] = {}
+        order: dict[str, int] = {}
+        for day_, lid, band, band_order, _offered, n in rows:
             order[band] = band_order
-            for key in ((lid, band, day_), ("all", band, day_)):
-                slot = cells.setdefault(key, [0, 0])
-                slot[0] += offered or 0
-                slot[1] += sold or 0
-        bands = [b for b, _ in sorted(order.items(), key=lambda bo: (bo[1], bo[0]))]
-        lenders = sorted({k[0] for k in cells}, key=str)
+            cell = sold.setdefault(lid, {}).setdefault(day_, {})
+            cell[band] = cell.get(band, 0) + (n or 0)
+        pool = {}
+        for day_counts in pool_daily.values():
+            for band, n in day_counts.items():
+                pool[band] = pool.get(band, 0) + n
+                order.setdefault(band, 0)
+        pool_total = sum(pool.values())
+        known = CATEGORY_ORDER.get(metric)
+        bands = sorted(order, key=(lambda b: (known.index(b) if b in known else 99, b)) if known
+                       else (lambda b: (order[b], b)))
+        bands = [b for b in bands if b != "unknown"] + (["unknown"] if "unknown" in order else [])
 
-        per_lender = {}
-        for lid in lenders:
-            day_totals = {d_: [0, 0] for d_ in all_days}
+        pool_series = [{"day": d_, "p": 0, "P": sum(pool_daily.get(d_, {}).values())} for d_ in axis]
+        levels = []
+        for band in bands:
+            for i, d_ in enumerate(axis):
+                pool_series[i]["p"] = pool_daily.get(d_, {}).get(band, 0)
+            pool_line = [None if v is None else round(v, 4)
+                         for _, v in trends.rolling(pool_series, "p", "P")]
+            cells = {}
+            for lid, by_day in sold.items():
+                n = sum(c.get(band, 0) for c in by_day.values())
+                total = sum(sum(c.values()) for c in by_day.values())
+                ps = pool.get(band, 0) / pool_total if pool_total else 0
+                share = n / total if total else 0
+                cells[str(lid)] = {"n": n, "share": share,
+                                   "index": (100 * share / ps) if ps else None,
+                                   "take": n / pool[band] if pool.get(band) else None}
+            levels.append({"band": band, "poolShare": pool.get(band, 0) / pool_total if pool_total else 0,
+                           "poolN": pool.get(band, 0), "pool": pool_line, "cells": cells})
+        attrs.append({"key": metric, "label": label, "money": is_money, "levels": levels})
+
+        for lid, by_day in sold.items():
+            total = sum(sum(c.values()) for c in by_day.values())
+            bought_by_lender[lid] = max(bought_by_lender.get(lid, 0), total)
+            series_total = [sum(by_day.get(d_, {}).values()) for d_ in axis]
             for band in bands:
-                for d_ in all_days:
-                    o, s_ = cells.get((lid, band, d_), (0, 0))
-                    day_totals[d_][0] += o
-                    day_totals[d_][1] += s_
-            bought_total = sum(v[1] for v in day_totals.values())
-            out_bands = {}
-            for band in bands:
-                series = [{"day": d_,
-                           "o": cells.get((lid, band, d_), (0, 0))[0],
-                           "s": cells.get((lid, band, d_), (0, 0))[1],
-                           "O": day_totals[d_][0], "S": day_totals[d_][1]} for d_ in all_days]
-                bought = trends.rolling(series, "s", "S")
-                offered = trends.rolling(series, "o", "O")
+                series = [{"day": d_, "s": by_day.get(d_, {}).get(band, 0), "S": series_total[i]}
+                          for i, d_ in enumerate(axis)]
                 shift = trends.assess_shift(series, "s", "S")
-                out_bands[band] = {
-                    "bought": [None if v is None else round(v, 4) for _, v in bought],
-                    "offered": [None if v is None else round(v, 4) for _, v in offered],
-                    "sold": sum(p["s"] for p in series),
+                trend.setdefault(str(lid), {}).setdefault(metric, {})[band] = {
+                    "share": [None if v is None else round(v, 4)
+                              for _, v in trends.rolling(series, "s", "S")],
                     "current": shift["current"], "baseline": shift["baseline"],
                     "change": shift["change"], "shift": shift["shift"]}
-            per_lender[str(lid)] = {
-                "bought": bought_total,
-                # A mix taken over a handful of sales is noise drawn as signal.
-                "enoughToTrend": bought_total >= store.MIN_SCORED_LEADS,
-                "bands": out_bands}
-        metrics.append({"key": metric, "label": label, "money": is_money, "bands": bands})
-        by_metric[metric] = per_lender
 
-    lenders = [{"id": lid, "name": m["name"], "revenue": m["revenue"], "bought": m["bought"]}
-               for lid, m in money.items() if m["bought"] or m["revenue"]]
+    lenders = []
+    for lid, bought in bought_by_lender.items():
+        if bought < MIN_PROFILE_PURCHASES:
+            continue
+        m = money.get(lid, {"name": names.get(lid, f"Lender {lid}"), "revenue": 0.0, "accepted": 0})
+        lenders.append({"id": lid, "name": m["name"], "revenue": m["revenue"], "bought": bought,
+                        "avgPrice": (m["revenue"] / m["accepted"]) if m["accepted"] else 0,
+                        "tiers": sorted(tiers.get(lid, []), key=lambda t: -t["revenue"])})
     lenders.sort(key=lambda r: (-r["revenue"], -r["bought"]))
+    shown = {str(l["id"]) for l in lenders}
     return {
         "view": "customers",
         "generatedUtc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
@@ -438,8 +482,8 @@ def customer_payload(conn, days=30):
         # rolling points start a window in
         "axis": axis[trends.WINDOW - 1:],
         "lenders": lenders,
-        "metrics": metrics,
-        "mix": by_metric,
+        "attrs": attrs,
+        "trends": {k: v for k, v in trend.items() if k in shown},
     }
 
 

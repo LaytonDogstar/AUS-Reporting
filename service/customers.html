@@ -9,20 +9,43 @@
   /* customers page additions; the rest is the dashboard's own */
   .card-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
   .card-head h2 { margin-right: auto; }
-  .smalls { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px 20px; }
-  .smalls figure { margin: 0; min-width: 0; }
-  .smalls figcaption { display: flex; gap: 8px; align-items: baseline; font-size: 13px; margin-bottom: 2px; }
-  .smalls figcaption b { font-weight: 620; }
-  .smalls figcaption .v { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--ink-2); }
-  .shift { font-size: 12px; font-weight: 640; color: var(--ink); white-space: nowrap; }
+  .scroll { overflow-x: auto; }
   .legend i.line { height: 2px; width: 14px; border-radius: 1px; vertical-align: 3px; }
-  #mixTable td.band { white-space: nowrap; }
-  #mixTable td.band .cell { display: flex; align-items: center; gap: 6px; justify-content: flex-end; }
-  #mixTable td.band svg { width: 64px; height: 24px; display: block; flex: none; }
-  #mixTable td.band .val { font-variant-numeric: tabular-nums; min-width: 44px; text-align: right; }
-  #mixTable td:first-child { min-width: 150px; }
-  #mixTable th, #mixTable td { padding-left: 7px; padding-right: 7px; }
-  #mixTable tbody tr { cursor: pointer; }
+  .legend i.swatch { width: 14px; height: 11px; }
+
+  /* the grid: measures and bands down, lenders across */
+  #grid { font-size: 12.5px; }
+  #grid th, #grid td { padding: 5px 8px; text-align: center; white-space: nowrap; }
+  #grid th:first-child, #grid td:first-child {
+    text-align: left; position: sticky; left: 0; background: var(--surface); z-index: 1;
+  }
+  #grid thead th { vertical-align: bottom; }
+  #grid th.lender { cursor: pointer; text-transform: none; letter-spacing: 0; font-size: 12px; color: var(--ink); }
+  #grid th.lender .n { display: block; font-weight: 400; color: var(--muted); font-size: 11px; }
+  #grid th.lender:hover, #grid th.lender:focus-visible { color: var(--series-1); outline: none; }
+  #grid th.lender.sel { box-shadow: inset 0 -2px 0 var(--series-1); }
+  #grid tr.grp td { font-weight: 620; color: var(--ink); background: var(--page); text-align: left;
+                    position: static; padding-top: 9px; }
+  #grid tr.grp td:first-child { position: sticky; background: var(--page); }
+  #grid td.band { padding-left: 16px; color: var(--ink-2); }
+  #grid td.pool { color: var(--muted); font-variant-numeric: tabular-nums; }
+  #grid td.cell { font-variant-numeric: tabular-nums; }
+  #grid tbody tr:hover td { filter: brightness(0.97); }
+
+  /* the profile */
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 14px; }
+  .chip { border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; font-size: 12px;
+          background: var(--page); }
+  .chip b { font-weight: 620; }
+  .profile { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 26px; align-items: start; }
+  @media (max-width: 900px) { .profile { grid-template-columns: 1fr; } }
+  .profile table { font-size: 12.5px; margin-bottom: 14px; }
+  .profile th, .profile td { padding: 5px 7px; }
+  .profile td.trend { text-align: left; }
+  .profile td.trend .cell { display: flex; align-items: center; gap: 6px; }
+  .profile td.trend svg { width: 72px; height: 24px; display: block; flex: none; }
+  .idx { border-radius: 4px; padding: 1px 6px; font-variant-numeric: tabular-nums; }
+  .shift { font-size: 12px; font-weight: 640; color: var(--ink); white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -41,44 +64,46 @@
       <a class="seglink" href="/lenders">Lenders</a>
       <a class="seglink" href="/customers" aria-current="page">Customers</a>
     </nav>
-    <label class="lbl" for="lenderSel">Lender</label>
-    <select id="lenderSel"><option value="all">All lenders</option></select>
-    <label class="lbl" for="metricSel">Customers by</label>
-    <select id="metricSel"></select>
+    <label class="lbl" for="showSel">Show</label>
+    <select id="showSel">
+      <option value="share">Share of its purchases</option>
+      <option value="times">Times as common as the pool</option>
+      <option value="take">Share of the group it bought</option>
+    </select>
+    <label class="lbl" for="lenderSel">Profile</label>
+    <select id="lenderSel"><option value="">Pick a lender…</option></select>
     <span class="spacer"></span>
   </div>
 
-  <section class="card" id="mixCard">
-    <h2 id="mixTitle">Who lenders buy, over time</h2>
-    <p class="sub" id="mixSub"></p>
+  <section class="card" id="gridCard">
+    <h2>Buyer profiles</h2>
+    <p class="sub" id="gridSub"></p>
     <div class="legend">
-      <span><i class="line" style="background:var(--series-1)"></i>Share of leads bought</span>
-      <span><i class="line" style="background:var(--baseline)"></i>Share of leads offered</span>
+      <span><i class="swatch" style="background:color-mix(in srgb, var(--series-1) 40%, transparent)"></i>Buys more of this group than the pool</span>
+      <span><i class="swatch" style="background:color-mix(in srgb, var(--series-2) 40%, transparent)"></i>Buys less</span>
     </div>
-    <div class="smalls" id="smalls"></div>
-    <p class="note">
-      One chart per band, each a rolling seven days. The blue line is the share of this lender&rsquo;s
-      purchases in that band; the grey line is the band&rsquo;s share of the leads it was offered. Blue
-      above grey is a customer the lender favours; blue below grey is one it avoids. <b>&#9650;</b> or
-      <b>&#9660;</b> marks a shift in what it buys: the latest week at least 10% higher or lower than the
-      weeks before, beyond what chance would produce, judged only where the latest week had 50 or more
-      purchases.
-    </p>
+    <p class="note" id="gridExplain"></p>
+    <div class="scroll"><table id="grid"><thead></thead><tbody></tbody></table></div>
   </section>
 
-  <section class="card" id="tableCard">
-    <h2>Shifts across lenders</h2>
-    <p class="sub" id="tableSub"></p>
-    <div class="scroll">
-    <table id="mixTable" class="trend-table">
-      <thead><tr></tr></thead>
-      <tbody></tbody>
-    </table>
+  <section class="card hidden" id="profileCard">
+    <div class="card-head">
+      <h2 id="profileTitle"></h2>
+      <button class="ghost" id="profileClose" type="button">Close</button>
     </div>
+    <p class="sub" id="profileSub"></p>
+    <div class="chips" id="tierChips"></div>
+    <div class="legend">
+      <span><i class="line" style="background:var(--series-1)"></i>Share of its purchases</span>
+      <span><i class="line" style="background:var(--baseline)"></i>Share of all leads received (pool)</span>
+    </div>
+    <div class="profile" id="profile"></div>
     <p class="note">
-      Each cell is that band&rsquo;s share of the lender&rsquo;s purchases: the line is the rolling seven
-      days, the figure the latest week. Select a column heading to sort, a sparkline to open it, or a row
-      to chart that lender above.
+      <b>Index</b> is the band&rsquo;s share of this lender&rsquo;s purchases over its share of every
+      lead received: 100 buys it in proportion, 200 twice as often, 0 never. <b>Trend</b> is the
+      band&rsquo;s share of its purchases, a rolling seven days; select it for the chart against the
+      pool. <b>&#9650;</b> or <b>&#9660;</b> marks a shift in the latest week, at least 10% up or down
+      and beyond what chance would produce, judged only where it made 50 or more purchases that week.
     </p>
   </section>
 
@@ -110,23 +135,31 @@ const DATA = /*__DASHBOARD_DATA__*/null;
   const esc = (v) => String(v).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
   const lenders = DATA.lenders || [];
-  const lenderName = new Map(lenders.map((l) => [String(l.id), l.name]));
-  const metrics = DATA.metrics || [];
+  const attrs = DATA.attrs || [];
   const axis = DATA.axis || [];
-  let lender = "all";
-  let metric = metrics.length ? metrics[0].key : null;
-  const info = () => metrics.find((m) => m.key === metric);
-  const who = () => (lender === "all" ? "all lenders" : lenderName.get(lender) || "this lender");
+  const byId = new Map(lenders.map((l) => [String(l.id), l]));
+  let show = "share", picked = "";
   const pts = (values) => axis.map((d, i) => [d, values[i] == null ? null : values[i]]);
 
   function bandLabel(band, isMoney) {
     if (band === "unknown") return "Not known";
     if (!isMoney) return band;
-    if (band.startsWith("<")) return "under $" + Number(band.slice(1)).toLocaleString("en-AU");
+    if (band.startsWith("<")) return "Under $" + Number(band.slice(1)).toLocaleString("en-AU");
     if (band.endsWith("+")) return "$" + Number(band.slice(0, -1)).toLocaleString("en-AU") + "+";
     return band.split("-").map((v) => "$" + Number(v).toLocaleString("en-AU")).join("–");
   }
   const arrow = (shift) => (shift > 0 ? "▲" : shift < 0 ? "▼" : "");
+
+  // Index as a background: blue where the lender over-buys a group,
+  // orange where it under-buys, stronger the further from 100. Text
+  // stays in the ink colours on top.
+  function idxBg(index) {
+    if (index == null) return "transparent";
+    const r = Math.max(-2, Math.min(2, Math.log2(Math.max(index, 1) / 100)));
+    const strength = Math.round(Math.abs(r) / 2 * 46);
+    if (strength < 4) return "transparent";
+    return `color-mix(in srgb, var(${r > 0 ? "--series-1" : "--series-2"}) ${strength}%, transparent)`;
+  }
 
   // ---- tooltip -----------------------------------------------------
   const tip = $("tip");
@@ -142,9 +175,9 @@ const DATA = /*__DASHBOARD_DATA__*/null;
   const hideTip = () => { tip.style.opacity = "0"; };
 
   const SVGNS = "http://www.w3.org/2000/svg";
-  function el(name, attrs, parent) {
+  function el(name, attrs_, parent) {
     const n = document.createElementNS(SVGNS, name);
-    for (const k in attrs) n.setAttribute(k, attrs[k]);
+    for (const k in attrs_) n.setAttribute(k, attrs_[k]);
     if (parent) parent.appendChild(n);
     return n;
   }
@@ -160,7 +193,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
   // colour: a change in who a lender buys is neither good nor bad.
   function sparkline(points, flagged, expand) {
     if (!expand || !expand.title) throw new Error("sparkline needs an expand description");
-    const W = 64, H = 24, pad = 3;
+    const W = 72, H = 24, pad = 3;
     const vals = points.map((p) => p[1]).filter((v) => v != null);
     const svg = document.createElementNS(SVGNS, "svg");
     svg.setAttribute("width", W); svg.setAttribute("height", H);
@@ -189,25 +222,20 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     return svg;
   }
 
-  // ---- one band: bought against offered -----------------------------
-  // Two lines on one axis - the same measure, a share, for two
-  // populations - with the bought line in the accent and the offered
-  // line recessive. H is the drawing height.
-  function drawBand(svg, b, H, label) {
+  // ---- the full chart: its share against the pool -------------------
+  function drawVsPool(svg, share, pool, H, label) {
     svg.innerHTML = "";
-    const W = svg.clientWidth || 280;
+    const W = svg.clientWidth || 600;
     svg.setAttribute("height", H);
-    const m = { t: 8, r: 10, b: 20, l: 42 };
+    const m = { t: 10, r: 12, b: 22, l: 48 };
     const iw = W - m.l - m.r, ih = H - m.t - m.b;
-    const bought = pts(b.bought), offered = pts(b.offered);
-    const vals = [...b.bought, ...b.offered].filter((v) => v != null);
+    const vals = [...share, ...pool].filter((v) => v != null);
     if (!vals.length || axis.length < 2) return;
     const top = niceTop(Math.max(...vals) * 1.08);
     const x = (i) => m.l + (i / (axis.length - 1)) * iw;
     const y = (v) => m.t + ih - (v / top) * ih;
-    const ticks = H > 200 ? 4 : 2;
-    for (let i = 0; i <= ticks; i++) {
-      const v = (top / ticks) * i, yy = y(v);
+    for (let i = 0; i <= 4; i++) {
+      const v = (top / 4) * i, yy = y(v);
       el("line", { x1: m.l, x2: m.l + iw, y1: yy, y2: yy, class: "gridline" }, svg);
       const t = el("text", { x: m.l - 6, y: yy + 4, class: "tick num", "text-anchor": "end" }, svg);
       t.textContent = (100 * v).toFixed(top < 0.1 ? 1 : 0) + "%";
@@ -218,18 +246,14 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     });
     const path = (series) => {
       let d = "";
-      series.forEach(([, v], i) => { if (v != null) d += (d ? "L" : "M") + x(i) + "," + y(v); });
+      series.forEach((v, i) => { if (v != null) d += (d ? "L" : "M") + x(i) + "," + y(v); });
       return d;
     };
-    el("path", { d: path(offered), fill: "none", stroke: "var(--baseline)", "stroke-width": 2,
+    el("path", { d: path(pool), fill: "none", stroke: "var(--baseline)", "stroke-width": 2,
                  "stroke-linejoin": "round", "stroke-linecap": "round" }, svg);
-    el("path", { d: path(bought), fill: "none", stroke: "var(--series-1)", "stroke-width": 2,
+    el("path", { d: path(share), fill: "none", stroke: "var(--series-1)", "stroke-width": 2,
                  "stroke-linejoin": "round", "stroke-linecap": "round" }, svg);
     const last = axis.length - 1;
-    if (b.bought[last] != null)
-      el("circle", { cx: x(last), cy: y(b.bought[last]), r: 4,
-                     fill: b.shift ? "var(--series-2)" : "var(--series-1)",
-                     stroke: "var(--surface)", "stroke-width": 2 }, svg);
     const cross = el("line", { y1: m.t, y2: m.t + ih, stroke: "var(--baseline)", "stroke-width": 1, opacity: 0 }, svg);
     const dot = el("circle", { r: 4, fill: "var(--series-1)", stroke: "var(--surface)", "stroke-width": 2, opacity: 0 }, svg);
     const hit = el("rect", { x: m.l, y: m.t, width: iw, height: ih, fill: "transparent" }, svg);
@@ -237,170 +261,173 @@ const DATA = /*__DASHBOARD_DATA__*/null;
       const box = svg.getBoundingClientRect();
       const i = Math.max(0, Math.min(last, Math.round(((evt.clientX - box.left - m.l) / iw) * last)));
       cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("opacity", 1);
-      if (b.bought[i] != null) {
-        dot.setAttribute("cx", x(i)); dot.setAttribute("cy", y(b.bought[i])); dot.setAttribute("opacity", 1);
-      }
+      if (share[i] != null) { dot.setAttribute("cx", x(i)); dot.setAttribute("cy", y(share[i])); dot.setAttribute("opacity", 1); }
+      const ix = share[i] != null && pool[i] ? Math.round(100 * share[i] / pool[i]) : null;
       showTip(evt, `<b>${esc(label)} · seven days to ${axis[i]}</b>
-        <div class="row"><span>Share bought</span><span>${pct(b.bought[i])}</span></div>
-        <div class="row"><span>Share offered</span><span>${pct(b.offered[i])}</span></div>`);
+        <div class="row"><span>Share of its purchases</span><span>${pct(share[i])}</span></div>
+        <div class="row"><span>Share of all leads</span><span>${pct(pool[i])}</span></div>
+        <div class="row"><span>Index</span><span>${ix == null ? "—" : ix}</span></div>`);
     });
     hit.addEventListener("mouseleave", () => { cross.setAttribute("opacity", 0); dot.setAttribute("opacity", 0); hideTip(); });
   }
 
   // ---- pop-up ------------------------------------------------------
   const pop = $("chartPop");
-  let popBand = null;
-  function drawPop() { if (popBand) drawBand($("popChart"), popBand.b, 360, popBand.label); }
+  let popOpen = null;
+  function drawPop() { if (popOpen) drawVsPool($("popChart"), popOpen.share, popOpen.pool, 360, popOpen.label); }
   function openChart(e) {
-    popBand = e;
+    popOpen = e;
     $("popTitle").textContent = e.title;
-    const b = e.b;
-    const chg = b.change == null ? "" : ` (${b.change > 0 ? "+" : ""}${Math.round(100 * b.change)}%)`;
-    $("popSub").textContent = `Share of purchases, rolling seven days. Latest week ${pct(b.current)}, ` +
-      `earlier weeks ${pct(b.baseline)}${chg}.` + (b.shift ? " Flagged as a shift." : "") +
-      " Grey is the band's share of the leads offered.";
+    const t = e.t;
+    const chg = t.change == null ? "" : ` (${t.change > 0 ? "+" : ""}${Math.round(100 * t.change)}%)`;
+    $("popSub").textContent = `Share of its purchases, rolling seven days: latest week ${pct(t.current)}, ` +
+      `earlier weeks ${pct(t.baseline)}${chg}.` + (t.shift ? " Flagged as a shift." : "") +
+      " Grey is the band's share of every lead received.";
     pop.appendChild(tip);               // the pop-up sits above the page, so its tooltip must too
     pop.showModal();
     drawPop();
   }
-  pop.addEventListener("close", () => { popBand = null; hideTip(); document.body.appendChild(tip); });
+  pop.addEventListener("close", () => { popOpen = null; hideTip(); document.body.appendChild(tip); });
   pop.addEventListener("click", (evt) => { if (evt.target === pop) pop.close(); });
   $("popClose").addEventListener("click", () => pop.close());
 
-  // ---- small multiples for the selected lender ----------------------
-  function drawSmalls() {
-    const m = info(), grid = $("smalls");
-    grid.innerHTML = "";
-    const mix = m && (DATA.mix[metric] || {})[lender];
-    $("mixTitle").textContent = `Who ${who()} buys, over time`;
-    if (!m || !mix) {
-      $("mixSub").textContent = metrics.length
-        ? `Nothing collected for ${who()} by this measure yet.`
-        : "Still being collected — this fills in as each day's lead quality comes in.";
-      return;
+  // ---- the grid ----------------------------------------------------
+  const EXPLAIN = {
+    share: "Each cell is the <b>share of that lender's purchases</b> in the group. Compare it with <b>Pool</b>, the group's share of every lead received.",
+    times: "Each cell is <b>how many times as common</b> the group is in the lender's purchases as in every lead received: 1.0× in proportion, 2.0× twice as common, 0 never.",
+    take: "Each cell is the <b>share of all leads in that group that the lender bought</b>. Read along a row to see who buys a group.",
+  };
+  function cellText(c, l) {
+    if (!c) return "—";
+    if (show === "times") {
+      if (c.index == null) return "—";
+      if (!c.n) return "0";
+      const x = c.index / 100;
+      return (x >= 10 ? Math.round(x) : x >= 0.1 ? x.toFixed(1) : x.toFixed(2)) + "×";
     }
-    $("mixSub").textContent = `${m.label}: ${fmt(mix.bought)} purchases over ${DATA.windowDays} days.` +
-      (mix.enoughToTrend ? "" : " Too few to read a trend from; treat the lines as indicative.");
-    for (const band of m.bands) {
-      const b = mix.bands[band];
-      if (!b) continue;
-      const label = bandLabel(band, m.money);
-      const fig = document.createElement("figure");
-      const cap = document.createElement("figcaption");
-      cap.innerHTML = `<b>${esc(label)}</b>` +
-        (b.shift ? `<span class="shift">${arrow(b.shift)} ${b.change > 0 ? "+" : ""}${Math.round(100 * b.change)}%</span>` : "") +
-        `<span class="v">${pct(b.current)} bought</span>`;
-      const svg = document.createElementNS(SVGNS, "svg");
-      svg.setAttribute("role", "img");
-      svg.setAttribute("aria-label", `${label}: share bought against share offered`);
-      fig.append(cap, svg);
-      grid.appendChild(fig);
-      drawBand(svg, b, 150, label);
+    const v = show === "take" ? c.take : c.share;
+    if (v == null) return "—";
+    if (!c.n) return "0";
+    const p = 100 * v;
+    return (p >= 10 ? p.toFixed(0) : p >= 1 ? p.toFixed(1) : p.toFixed(2)) + "%";
+  }
+  function drawGrid() {
+    $("gridExplain").innerHTML = EXPLAIN[show] +
+      " Hover a cell for the full breakdown; select a lender's name for its profile and trends.";
+    $("gridSub").textContent = lenders.length
+      ? `What each lender buys against every lead received, over ${DATA.windowDays} days. Lenders by revenue; ` +
+        `those with fewer than 20 purchases are left out.`
+      : "Lead quality per lender is still being collected.";
+    const head = $("grid").querySelector("thead"), body = $("grid").querySelector("tbody");
+    head.innerHTML = `<tr><th>Group</th><th title="Share of every lead received">Pool</th>${lenders.map((l) =>
+      `<th class="lender${String(l.id) === picked ? " sel" : ""}" data-id="${l.id}" tabindex="0"
+        title="${esc(l.name)}: ${fmt(l.bought)} purchases, ${money(l.revenue)}. Select for its profile.">${esc(l.name)}<span class="n">${fmt(l.bought)}</span></th>`).join("")}</tr>`;
+    let h = "";
+    for (const a of attrs) {
+      h += `<tr class="grp"><td>${esc(a.label)}</td><td colspan="${lenders.length + 1}"></td></tr>`;
+      for (const l of a.levels) {
+        // near-empty groups add rows, not information
+        if (l.poolShare < 0.005 && !lenders.some((b) => ((l.cells[b.id] || {}).share || 0) >= 0.01)) continue;
+        const label = bandLabel(l.band, a.money);
+        h += `<tr><td class="band">${esc(label)}</td><td class="pool">${pct(l.poolShare)}</td>`;
+        for (const b of lenders) {
+          const c = l.cells[b.id];
+          h += `<td class="cell" data-a="${esc(a.key)}" data-b="${esc(l.band)}" data-l="${b.id}"
+            style="background:${idxBg(c && c.index)}">${cellText(c, l)}</td>`;
+        }
+        h += "</tr>";
+      }
     }
-  }
-
-  // ---- the table across lenders --------------------------------------
-  let sortKey = "revenue", sortDir = -1;
-  function rowValue(l, key, mixes) {
-    if (key === "name") return l.name.toLowerCase();
-    if (key === "revenue") return l.revenue;
-    const mix = mixes[String(l.id)];
-    if (!mix || !mix.enoughToTrend) return null;
-    const b = mix.bands[key.slice(5)];
-    return b ? b.current : null;
-  }
-  function drawTable() {
-    const m = info(), table = $("mixTable");
-    const head = table.querySelector("thead tr"), body = table.querySelector("tbody");
-    head.innerHTML = ""; body.innerHTML = "";
-    if (!m) { $("tableSub").textContent = "Still being collected."; return; }
-    const mixes = DATA.mix[metric] || {};
-    $("tableSub").textContent = `${m.label}: each band's share of what each lender bought.`;
-    const cols = [["name", "Lender"], ["revenue", "Revenue"],
-                  ...m.bands.map((b) => ["band:" + b, bandLabel(b, m.money)])];
-    for (const [key, text] of cols) {
-      const th = document.createElement("th");
-      th.dataset.sort = key; th.textContent = text; th.tabIndex = 0;
-      if (key === sortKey) th.setAttribute("aria-sort", sortDir < 0 ? "descending" : "ascending");
-      const pick = () => {
-        if (key === sortKey) sortDir = -sortDir;
-        else { sortKey = key; sortDir = key === "name" ? 1 : -1; }
-        drawTable();
-      };
+    body.innerHTML = h;
+    head.querySelectorAll("th.lender").forEach((th) => {
+      const pick = () => openProfile(picked === th.dataset.id ? "" : th.dataset.id);
       th.addEventListener("click", pick);
       th.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
-      head.appendChild(th);
-    }
-    if (!cols.some(([k]) => k === sortKey)) { sortKey = "revenue"; sortDir = -1; }
-    const rows = lenders.filter((l) => mixes[String(l.id)]);
-    rows.sort((a, b) => {
-      const va = rowValue(a, sortKey, mixes), vb = rowValue(b, sortKey, mixes);
-      if (va == null && vb == null) return b.revenue - a.revenue;
-      if (va == null) return 1;
-      if (vb == null) return -1;
-      if (va < vb) return -sortDir;
-      if (va > vb) return sortDir;
-      return b.revenue - a.revenue;
     });
-    for (const l of rows) {
-      const mix = mixes[String(l.id)];
-      const tr = document.createElement("tr");
-      if (String(l.id) === lender) tr.style.background = "var(--page)";
-      tr.innerHTML = `<td><span class="watch-name">${esc(l.name)}</span>` +
-        `<span class="watch-journey">${fmt(mix.bought)} purchases</span></td>` +
-        `<td class="num">${money(l.revenue)}</td>`;
-      if (!mix.enoughToTrend) {
-        const td = document.createElement("td");
-        td.colSpan = m.bands.length; td.className = "na";
-        td.innerHTML = '<span class="watch-na">Too few purchases to trend</span>';
-        tr.appendChild(td);
-      } else {
-        for (const band of m.bands) {
-          const b = mix.bands[band];
-          const td = document.createElement("td");
-          td.className = "band num";
-          if (!b) { td.textContent = "—"; tr.appendChild(td); continue; }
-          const label = bandLabel(band, m.money);
-          const cell = document.createElement("div");
-          cell.className = "cell";
-          cell.appendChild(sparkline(pts(b.bought), !!b.shift, {
-            title: `${l.name} · ${m.label} · ${label}`, b, label }));
-          const val = document.createElement("span");
-          val.className = "val";
-          val.innerHTML = (b.shift ? `<span class="shift">${arrow(b.shift)}</span> ` : "") + pct(b.current);
-          cell.appendChild(val);
-          td.appendChild(cell);
-          td.addEventListener("mousemove", (e) => showTip(e, `<b>${esc(l.name)} · ${esc(label)}</b>
-            <div class="row"><span>Latest week</span><span>${pct(b.current)}</span></div>
-            <div class="row"><span>Before</span><span>${pct(b.baseline)}</span></div>` +
-            (b.shift ? `<div class="row"><span>Shift</span><span>${arrow(b.shift)} ${Math.round(100 * b.change)}%</span></div>` : "")));
-          td.addEventListener("mouseleave", hideTip);
-          tr.appendChild(td);
-        }
-      }
-      tr.addEventListener("click", () => {
-        lender = String(l.id); $("lenderSel").value = lender; render();
-        $("mixCard").scrollIntoView({ behavior: "smooth", block: "start" });
+    body.querySelectorAll("td.cell").forEach((td) => {
+      td.addEventListener("mousemove", (evt) => {
+        const a = attrs.find((x) => x.key === td.dataset.a);
+        const l = a.levels.find((x) => x.band === td.dataset.b);
+        const b = byId.get(td.dataset.l), c = l.cells[td.dataset.l] || { n: 0 };
+        const x = c.index == null ? null : c.index / 100;
+        showTip(evt, `<b>${esc(b.name)} · ${esc(a.label)}: ${esc(bandLabel(l.band, a.money))}</b>
+          <div class="row"><span>Its purchases in this group</span><span>${fmt(c.n)} · ${pct(c.share)}</span></div>
+          <div class="row"><span>All leads in this group</span><span>${pct(l.poolShare)}</span></div>
+          <div class="row"><span>Compared with the pool</span><span>${x == null ? "—" : !c.n ? "never bought" :
+            x >= 1 ? x.toFixed(2) + "× as common" : (1 / Math.max(x, 0.001)).toFixed(1) + "× less common"}</span></div>
+          <div class="row"><span>Share of the group it bought</span><span>${pct(c.take)}</span></div>`);
       });
-      body.appendChild(tr);
-    }
+      td.addEventListener("mouseleave", hideTip);
+    });
   }
 
-  function render() { drawSmalls(); drawTable(); }
+  // ---- the profile -------------------------------------------------
+  function openProfile(id) {
+    picked = id;
+    $("lenderSel").value = id;
+    drawGrid();
+    drawProfile();
+    if (id) $("profileCard").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  function drawProfile() {
+    const card = $("profileCard"), b = byId.get(picked);
+    if (!b) { card.classList.add("hidden"); return; }
+    card.classList.remove("hidden");
+    $("profileTitle").textContent = `${b.name} · buyer profile`;
+    $("profileSub").textContent = `${fmt(b.bought)} purchases · ${money(b.revenue)} revenue · ` +
+      `${b.avgPrice ? "$" + b.avgPrice.toFixed(2) + " average" : "no revenue"} over ${DATA.windowDays} days.`;
+    $("tierChips").innerHTML = b.tiers.slice(0, 10).map((t) =>
+      `<span class="chip"><b>${esc(t.name)}</b> · ${fmt(t.bought)} bought · ${money(t.revenue)}</span>`).join("");
+    const grid = $("profile");
+    grid.innerHTML = "";
+    const mine = (DATA.trends || {})[picked] || {};
+    for (const a of attrs) {
+      const table = document.createElement("table");
+      table.innerHTML = `<thead><tr><th>${esc(a.label)}</th><th>Its purchases</th><th>Pool</th><th>Index</th>
+        <th style="text-align:left">Trend</th></tr></thead><tbody></tbody>`;
+      const body = table.querySelector("tbody");
+      for (const l of a.levels) {
+        const c = l.cells[picked] || { n: 0, share: 0, index: 0 };
+        if (l.poolShare < 0.01 && (c.share || 0) < 0.01) continue;
+        const label = bandLabel(l.band, a.money);
+        const t = (mine[a.key] || {})[l.band];
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${esc(label)}</td><td class="num">${pct(c.share)}</td>
+          <td class="num" style="color:var(--muted)">${pct(l.poolShare)}</td>
+          <td class="num"><span class="idx" style="background:${idxBg(c.index)}">${c.index == null ? "—" : Math.round(c.index)}</span></td>`;
+        const td = document.createElement("td");
+        td.className = "trend";
+        if (t && t.share.filter((v) => v != null).length >= 2) {
+          const cell = document.createElement("div");
+          cell.className = "cell";
+          cell.appendChild(sparkline(pts(t.share), !!t.shift, {
+            title: `${b.name} · ${a.label}: ${label}`, label, t, share: t.share, pool: l.pool }));
+          if (t.shift) {
+            const s = document.createElement("span");
+            s.className = "shift";
+            s.textContent = `${arrow(t.shift)} ${t.change > 0 ? "+" : ""}${Math.round(100 * t.change)}%`;
+            cell.appendChild(s);
+          }
+          td.appendChild(cell);
+        } else {
+          td.innerHTML = '<span class="watch-na">—</span>';
+        }
+        tr.appendChild(td);
+        body.appendChild(tr);
+      }
+      if (body.children.length) grid.appendChild(table);
+    }
+  }
+  $("profileClose").addEventListener("click", () => openProfile(""));
 
   // ---- controls ----------------------------------------------------
   const sel = $("lenderSel");
-  [...lenders].sort((a, b) => a.name.localeCompare(b.name)).forEach((l) => {
+  for (const l of lenders) {
     const o = document.createElement("option");
     o.value = String(l.id); o.textContent = l.name; sel.appendChild(o);
-  });
-  sel.addEventListener("change", () => { lender = sel.value; render(); });
-  const msel = $("metricSel");
-  for (const m of metrics) {
-    const o = document.createElement("option");
-    o.value = m.key; o.textContent = m.label; msel.appendChild(o);
   }
-  msel.addEventListener("change", () => { metric = msel.value; render(); });
+  sel.addEventListener("change", () => openProfile(sel.value));
+  $("showSel").addEventListener("change", (e) => { show = e.target.value; drawGrid(); });
 
   const themeBtn = $("themeBtn");
   const isDark = () =>
@@ -410,21 +437,22 @@ const DATA = /*__DASHBOARD_DATA__*/null;
   const syncThemeLabel = () => { themeBtn.textContent = isDark() ? "Light mode" : "Dark mode"; };
   themeBtn.addEventListener("click", () => {
     document.documentElement.setAttribute("data-theme", isDark() ? "light" : "dark");
-    syncThemeLabel(); render(); drawPop();
+    syncThemeLabel(); drawGrid(); drawProfile(); drawPop();
   });
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", syncThemeLabel);
   syncThemeLabel();
-  addEventListener("resize", () => { render(); drawPop(); });
+  addEventListener("resize", () => drawPop());
 
   const gen = new Date(DATA.generatedUtc);
   $("asof").textContent = "Data as at " + gen.toISOString().slice(0, 16).replace("T", " ") +
     " UTC · " + DATA.windowDays + " days loaded · All sources";
   $("foot").innerHTML =
-    "From the lead quality report, per lender tier: every lead a lender's tiers were offered and what they bought. " +
+    "Pool is every lead received, from the lead quality report; purchases are from the same report filtered per lender tier. " +
     "Counts only — no applicant is stored. Reporting days are Sydney local time; the newest day is yesterday.<br>" +
     "The Dummy test lender and DCS, an offline lender, are left out. Under-18 applicants are test data and are left out of age.";
 
-  render();
+  drawGrid();
+  drawProfile();
 })();
 </script>
 </body>

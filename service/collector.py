@@ -333,6 +333,15 @@ def reduce_affiliate_lender_results(items):
     return {k: (pings, round(cost, 2)) for k, (pings, cost) in counts.items()}
 
 
+# Categorical fields counted per affiliate and per tier as well. The
+# two that describe the customer for every lead: employment status is
+# 98% populated, time at employer 99%. HasPrimaryIncomeSource and
+# IsAustralianResident are left to the population view - each is only
+# filled for some journeys, so a split by buyer would mostly measure
+# which journeys a buyer is offered.
+BAND_CATEGORICAL = ("EmploymentStatus", "TimeAtEmployer")
+
+
 def reduce_quality_bands(items):
     """Bands and the lender result, without the cardinality guards the
     population reduction needs. Rows in, counts out.
@@ -340,8 +349,19 @@ def reduce_quality_bands(items):
     The result is kept so a band's sold rate can be taken within one
     population: scoring an external source against figures that include
     internal traffic marks it down for the company it keeps.
+
+    The categorical fields keep their value, as in the population
+    reduction, under the same cap: past MAX_CARDINALITY distinct values
+    a field is free text, not a category, and is not kept.
     """
     counts: dict[tuple[str, str, int, str], int] = {}
+    values: dict[str, set] = {m: set() for m in BAND_CATEGORICAL}
+    for it in items:
+        for metric in BAND_CATEGORICAL:
+            field = field_for(it, metric)
+            if field:
+                values[metric].add(it.get(field))
+    keep = [m for m in BAND_CATEGORICAL if len(values[m]) <= MAX_CARDINALITY]
     for it in items:
         result = str(it.get(RESULT_FIELD) or "unknown")
         for metric in NUMERIC:
@@ -349,6 +369,12 @@ def reduce_quality_bands(items):
             if field:
                 band, order = band_of(metric, it.get(field))
                 key = (metric, band, order, result)
+                counts[key] = counts.get(key, 0) + 1
+        for metric in keep:
+            field = field_for(it, metric)
+            if field:
+                raw = it.get(field)
+                key = (metric, "unknown" if raw is None else str(raw), 0, result)
                 counts[key] = counts.get(key, 0) + 1
     return counts
 

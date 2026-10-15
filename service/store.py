@@ -339,6 +339,7 @@ def connect(path: str) -> sqlite3.Connection:
     conn.executescript(SCHEMA)
     if pairs_new:
         _recollect_ping_log(conn)
+    _recollect_tier_quality(conn)
     _migrate_metric_names(conn)
     _migrate_affiliate_id(conn)
     return conn
@@ -356,6 +357,22 @@ def _recollect_ping_log(conn):
     and nothing else, because collection skips what is already done."""
     with conn:
         conn.execute("DELETE FROM collection WHERE kind='lender_results'")
+
+
+def _recollect_tier_quality(conn):
+    """Employment status and time at employer joined the per-tier counts
+    on 15 Oct 2026. Days stored before then have neither, so they are
+    marked uncollected and fetched again. Checked once per connect: a
+    database that has the new rows, or none at all, is left alone."""
+    stored = conn.execute("SELECT 1 FROM quality_tier_day LIMIT 1").fetchone()
+    if not stored:
+        return
+    has = conn.execute("SELECT 1 FROM quality_tier_day WHERE metric='EmploymentStatus'"
+                       " LIMIT 1").fetchone()
+    if has:
+        return
+    with conn:
+        conn.execute("DELETE FROM collection WHERE kind='quality_by_tier'")
 
 
 def _migrate_affiliate_id(conn):

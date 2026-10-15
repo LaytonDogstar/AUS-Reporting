@@ -35,13 +35,17 @@ Lenders are not split by source: the lender report covers every source
 together. The Dummy test lender and DCS, an offline lender, are left
 out.
 
-`/customers` turns the lead quality per lender into trends in the type
-of customer each lender buys. Pick a lender and a measure — income,
-wages, loan amount, age, Centrelink share, gambling, dishonours, SACC
-loans — and each band gets its own small chart: the band's share of the
-lender's purchases over time, against its share of the leads the lender
-was offered. A table beneath sets every lender side by side, one
-sparkline per band, and marks a shift either way that is beyond chance.
+`/customers` is buyer profiles, laid out as on the US dashboard: every
+measure at once — employment, time at employer, income, wages, loan
+amount, age, Centrelink share, gambling, payday spending, dishonours,
+SACC loans — down the side, the lenders across by revenue, and a Pool
+column for each band's share of every lead received. Cells show a
+lender's share of its purchases, how many times as common the band is
+there as in the pool, or the share of the band it bought, shaded blue
+where it over-buys and orange where it under-buys. Selecting a lender
+opens its profile: every band with share, pool, index and a trend line
+of its share over time, which opens against the pool, with a shift
+either way called beyond chance.
 
 The other pages are reached from the links under the tiles:
 `/scorecard` ranks affiliates on profit per lead, `/quality` is the
