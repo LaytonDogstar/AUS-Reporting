@@ -174,6 +174,7 @@ CREATE TABLE IF NOT EXISTS affiliate_day (
     profit REAL, final_profit REAL, volume_comparison_pct REAL,
     affiliate_id INTEGER,
     collected_at TEXT NOT NULL,
+    adword_spent REAL,
     PRIMARY KEY (business_date, source, affiliate_name)
 );
 CREATE INDEX IF NOT EXISTS ad_date ON affiliate_day(business_date);
@@ -187,6 +188,7 @@ CREATE TABLE IF NOT EXISTS affiliate_totals_day (
     revenue REAL, commission REAL, bs_cost REAL, final_commission REAL,
     profit REAL, final_profit REAL,
     collected_at TEXT NOT NULL,
+    adword_spent REAL,
     PRIMARY KEY (business_date, source)
 );
 
@@ -316,6 +318,59 @@ CREATE TABLE IF NOT EXISTS lender_tier (
     collected_at TEXT NOT NULL
 );
 
+-- The ping log by the hour, for the Today and Yesterday pages. Hours
+-- are Sydney hours: DateCreated is local time, the same clock the
+-- reports date their days by. Leads are counted once, in the hour of
+-- their first ping, against the affiliate that sent them; no lead
+-- identifier is kept. `sold_leads` is how many of them sold at least
+-- once: a lead can be bought by more than one lender, so sales can
+-- outnumber leads and are no denominator for a buy-rate.
+CREATE TABLE IF NOT EXISTS hour_leads (
+    business_date TEXT NOT NULL,
+    hour INTEGER NOT NULL,
+    affiliate_id INTEGER NOT NULL,
+    leads INTEGER NOT NULL,
+    sold_leads INTEGER NOT NULL,
+    PRIMARY KEY (business_date, hour, affiliate_id)
+);
+
+-- What reached a lender and what it bought, per hour, affiliate and
+-- tier: enough to show one population at a time and every lender in
+-- it. Only pings that reached a lender (Sold, Decline, Error) are kept;
+-- the filtered and ignored 95% say nothing an hour-by-hour page needs.
+CREATE TABLE IF NOT EXISTS hour_sales (
+    business_date TEXT NOT NULL,
+    hour INTEGER NOT NULL,
+    affiliate_id INTEGER NOT NULL,
+    lender_id INTEGER NOT NULL,
+    lender_tier_id INTEGER NOT NULL,
+    reached INTEGER NOT NULL,
+    sold INTEGER NOT NULL,
+    value REAL NOT NULL,
+    PRIMARY KEY (business_date, hour, affiliate_id, lender_id, lender_tier_id)
+);
+CREATE INDEX IF NOT EXISTS hs_date ON hour_sales(business_date);
+
+-- When a day's hours were read and how far they reach. `complete` is 1
+-- once the finished day has been collected; until then the rows are the
+-- latest live read, and `as_of` is the newest ping in it.
+CREATE TABLE IF NOT EXISTS hour_meta (
+    business_date TEXT PRIMARY KEY,
+    as_of TEXT,
+    complete INTEGER NOT NULL,
+    collected_at TEXT NOT NULL
+);
+
+-- Today's FF figures from the internal affiliate report, read live with
+-- the ping log, so the Today page can put Google Ads spend beside what
+-- it bought. Finished days take theirs from affiliate_day instead.
+CREATE TABLE IF NOT EXISTS live_internal (
+    business_date TEXT PRIMARY KEY,
+    received INTEGER, sold INTEGER,
+    revenue REAL, bs_cost REAL, adword_spent REAL, profit REAL,
+    collected_at TEXT NOT NULL
+);
+
 -- Why a day is missing, so a gap is explained rather than silent.
 CREATE TABLE IF NOT EXISTS collection (
     business_date TEXT NOT NULL,
@@ -336,12 +391,16 @@ def connect(path: str) -> sqlite3.Connection:
     _migrate_affiliate_source(conn)
     _migrate_quality_affiliate_result(conn)
     pairs_new = not _has_table(conn, "affiliate_lender_day")
+    hours_new = _has_table(conn, "lender_result_day") and not _has_table(conn, "hour_sales")
     conn.executescript(SCHEMA)
     if pairs_new:
         _recollect_ping_log(conn)
     _recollect_tier_quality(conn)
     _migrate_metric_names(conn)
     _migrate_affiliate_id(conn)
+    _migrate_adword_spent(conn)
+    if hours_new:
+        _recollect_ping_log(conn)
     return conn
 
 
@@ -398,6 +457,20 @@ def _migrate_affiliate_id(conn):
             conn.executemany(
                 "UPDATE affiliate_day SET affiliate_id=? WHERE affiliate_name=?"
                 " AND affiliate_id IS NULL", filled)
+
+
+def _migrate_adword_spent(conn):
+    """Add adword_spent to both affiliate tables. The internal report
+    always carried it and nothing read it, so days stored before are
+    marked uncollected for that report alone, and refetch in about
+    fifteen seconds each."""
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(affiliate_day)")}
+    if "adword_spent" in columns:
+        return
+    with conn:
+        conn.execute("ALTER TABLE affiliate_day ADD COLUMN adword_spent REAL")
+        conn.execute("ALTER TABLE affiliate_totals_day ADD COLUMN adword_spent REAL")
+        conn.execute("DELETE FROM collection WHERE kind='internal_affiliates'")
 
 
 def _migrate_affiliate_source(conn):
@@ -513,15 +586,17 @@ def save_affiliates(conn, business_date, source, rows, totals, collected_at):
                      (business_date, source))
         conn.executemany(
             "INSERT INTO affiliate_day (business_date, source, affiliate_name, received, accepted_tc, bs_refreshed, duplicate, bs_extracted, submitted, sold, decline, redirect, funded, revenue, commission, bs_cost, final_commission, profit, final_profit,"
-            " volume_comparison_pct, affiliate_id, collected_at)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " volume_comparison_pct, affiliate_id, collected_at, adword_spent)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             [(business_date, source, r["name"], r["received"], r["accepted_tc"], r["bs_refreshed"], r["duplicate"], r["bs_extracted"], r["submitted"], r["sold"], r["decline"], r["redirect"], r["funded"], r["revenue"], r["commission"], r["bs_cost"], r["final_commission"], r["profit"], r["final_profit"],
-              r["volume_comparison_pct"], r.get("affiliate_id"), collected_at) for r in rows])
+              r["volume_comparison_pct"], r.get("affiliate_id"), collected_at,
+              r.get("adword_spent")) for r in rows])
         if totals:
             conn.execute(
                 "INSERT OR REPLACE INTO affiliate_totals_day (business_date, source, received, accepted_tc, bs_refreshed, duplicate, bs_extracted, submitted, sold, decline, redirect, funded, revenue, commission, bs_cost, final_commission, profit, final_profit,"
-                " collected_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (business_date, source, totals["received"], totals["accepted_tc"], totals["bs_refreshed"], totals["duplicate"], totals["bs_extracted"], totals["submitted"], totals["sold"], totals["decline"], totals["redirect"], totals["funded"], totals["revenue"], totals["commission"], totals["bs_cost"], totals["final_commission"], totals["profit"], totals["final_profit"], collected_at))
+                " collected_at, adword_spent) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (business_date, source, totals["received"], totals["accepted_tc"], totals["bs_refreshed"], totals["duplicate"], totals["bs_extracted"], totals["submitted"], totals["sold"], totals["decline"], totals["redirect"], totals["funded"], totals["revenue"], totals["commission"], totals["bs_cost"], totals["final_commission"], totals["profit"], totals["final_profit"], collected_at,
+                 totals.get("adword_spent")))
 
 
 def save_quality_by_affiliate(conn, business_date, counts, collected_at):
@@ -659,6 +734,139 @@ def save_affiliate_results(conn, business_date, counts, collected_at):
             " pings, applications, cost, collected_at) VALUES (?,?,?,?,?,?,?)",
             [(business_date, affiliate, status, pings, apps, cost, collected_at)
              for (affiliate, status), (pings, apps, cost) in sorted(counts.items())])
+
+
+def save_hours(conn, business_date, leads, sales, as_of, complete, collected_at):
+    """One day of the ping log by the hour, replaced whole.
+
+    leads: {(hour, affiliate_id): (leads, sold_leads)}
+    sales: {(hour, affiliate_id, lender_id, tier_id): (reached, sold, value)}
+
+    A live read of today is replaced by the next one; a finished day,
+    `complete`, by nothing - a live read never overwrites it.
+    """
+    with conn:
+        done = conn.execute("SELECT complete FROM hour_meta WHERE business_date=?",
+                            (business_date,)).fetchone()
+        if done and done[0] and not complete:
+            return False
+        conn.execute("DELETE FROM hour_leads WHERE business_date=?", (business_date,))
+        conn.execute("DELETE FROM hour_sales WHERE business_date=?", (business_date,))
+        conn.executemany(
+            "INSERT INTO hour_leads (business_date, hour, affiliate_id, leads, sold_leads)"
+            " VALUES (?,?,?,?,?)",
+            [(business_date, h, a, n, sold) for (h, a), (n, sold) in sorted(leads.items())])
+        conn.executemany(
+            "INSERT INTO hour_sales (business_date, hour, affiliate_id, lender_id,"
+            " lender_tier_id, reached, sold, value) VALUES (?,?,?,?,?,?,?,?)",
+            [(business_date, h, a, l, t, r, s_, round(v, 2))
+             for (h, a, l, t), (r, s_, v) in sorted(sales.items())])
+        conn.execute(
+            "INSERT OR REPLACE INTO hour_meta (business_date, as_of, complete, collected_at)"
+            " VALUES (?,?,?,?)", (business_date, as_of, 1 if complete else 0, collected_at))
+    return True
+
+
+def save_live_internal(conn, business_date, totals, collected_at):
+    """Today's FF figures, from the internal report read live."""
+    with conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO live_internal (business_date, received, sold, revenue,"
+            " bs_cost, adword_spent, profit, collected_at) VALUES (?,?,?,?,?,?,?,?)",
+            (business_date, totals["received"], totals["sold"], totals["revenue"],
+             totals["bs_cost"], totals["adword_spent"], totals["profit"], collected_at))
+
+
+def is_internal_map(conn):
+    """affiliate id -> True for an internal (FF) source."""
+    return {r[0]: bool(r[1]) for r in conn.execute(
+        "SELECT affiliate_id, is_internal FROM affiliate")}
+
+
+def _in_source(conn, source):
+    """SQL keeping one population's affiliates, test traffic left out.
+    An affiliate missing from a loaded lookup counts as external: every
+    internal source is in it, because the lookup is where 'internal'
+    comes from. With no lookup at all, nothing is kept."""
+    known = is_internal_map(conn)
+    if not known:
+        # Without the lookup nothing says which sources are FF, and
+        # calling them all external would add the two populations
+        # together. Show nothing until it is in.
+        return " AND 0"
+    internal = [a for a, i in known.items() if i]
+    ids = ",".join(str(i) for i in internal) or "NULL"
+    test = ",".join(str(i) for i in TEST_AFFILIATE_IDS)
+    op = "IN" if source == "internal" else "NOT IN"
+    return f" AND affiliate_id {op} ({ids}) AND affiliate_id NOT IN ({test})"
+
+
+def hour_days(conn, before, limit=60):
+    """Finished days with hours stored, newest first, before `before`."""
+    return [r[0] for r in conn.execute(
+        "SELECT business_date FROM hour_meta WHERE complete=1 AND business_date < ?"
+        " ORDER BY business_date DESC LIMIT ?", (before, limit))]
+
+
+def hour_meta(conn, business_date):
+    r = conn.execute("SELECT as_of, complete, collected_at FROM hour_meta"
+                     " WHERE business_date=?", (business_date,)).fetchone()
+    return {"as_of": r[0], "complete": bool(r[1]), "collected_at": r[2]} if r else None
+
+
+def hour_rows(conn, dates, source):
+    """(leads rows, sales rows) for the given days and one population.
+
+    leads: (date, hour, affiliate_id, leads, sold_leads)
+    sales: (date, hour, affiliate_id, lender_id, tier_id, reached, sold, value)
+    """
+    if not dates:
+        return [], []
+    marks = ",".join("?" * len(dates))
+    where = _in_source(conn, source)
+    leads = conn.execute(
+        f"SELECT business_date, hour, affiliate_id, leads, sold_leads FROM hour_leads"
+        f" WHERE business_date IN ({marks})" + where, dates).fetchall()
+    sales = conn.execute(
+        f"SELECT business_date, hour, affiliate_id, lender_id, lender_tier_id, reached,"
+        f" sold, value FROM hour_sales WHERE business_date IN ({marks})" + where +
+        _not_excluded_lender(), dates).fetchall()
+    return leads, sales
+
+
+def ff_money(conn, business_date):
+    """FF revenue, BS cost, Ads spend and profit for one day: the stored
+    internal report for a finished day, the live read for today.
+
+    The report's own totals block carries 0 for Ads spend on finished
+    days while its rows carry the real figure - all of it on one source -
+    so the rows are summed rather than the totals read.
+    """
+    r = conn.execute(
+        "SELECT SUM(received), SUM(sold), SUM(revenue), SUM(bs_cost), SUM(adword_spent),"
+        " SUM(profit), MAX(collected_at), COUNT(*) FROM affiliate_day"
+        " WHERE business_date=? AND source='internal'", (business_date,)).fetchone()
+    if r and r[7]:
+        return {"received": r[0], "sold": r[1], "revenue": r[2], "bs_cost": r[3],
+                "adword_spent": r[4], "profit": r[5], "collected_at": r[6], "live": False}
+    r = conn.execute(
+        "SELECT received, sold, revenue, bs_cost, adword_spent, profit, collected_at"
+        " FROM live_internal WHERE business_date=?", (business_date,)).fetchone()
+    if r:
+        return {"received": r[0], "sold": r[1], "revenue": r[2], "bs_cost": r[3],
+                "adword_spent": r[4], "profit": r[5], "collected_at": r[6], "live": True}
+    return None
+
+
+def ff_money_daily(conn, days=30):
+    """Per day: FF revenue, BS cost, Ads spend and profit, from the
+    internal report's rows."""
+    return conn.execute(
+        "SELECT business_date, SUM(revenue), SUM(bs_cost), SUM(COALESCE(adword_spent, 0)),"
+        " SUM(profit), SUM(received), SUM(sold) FROM affiliate_day"
+        " WHERE business_date >= ? AND source='internal'"
+        " GROUP BY business_date ORDER BY business_date",
+        (business_cutoff(days),)).fetchall()
 
 
 # The metric the quality score is taken over. Monotonic across every

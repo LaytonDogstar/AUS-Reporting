@@ -205,6 +205,8 @@
       <a class="seglink" href="/" aria-current="page">Affiliates</a>
       <a class="seglink" href="/lenders">Lenders</a>
       <a class="seglink" href="/customers">Customers</a>
+      <a class="seglink" href="/today">Today</a>
+      <a class="seglink" href="/yesterday">Yesterday</a>
     </nav>
     <div class="seg" id="rangeSeg" role="group" aria-label="Date range">
       <button type="button" data-days="7">7 days</button>
@@ -219,6 +221,12 @@
   </div>
 
   <div class="tiles" id="tiles"></div>
+
+  <section class="card hidden" id="paidCard">
+    <h2>Google Ads · FF as a whole</h2>
+    <p class="sub" id="paidSub"></p>
+    <div class="tiles" id="paidTiles" style="margin-bottom:8px"></div>
+  </section>
 
   <p class="sub" id="pagesNav"></p>
 
@@ -1029,6 +1037,43 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     });
   });
 
+  // ---- Google Ads ----------------------------------------------------
+  // Only the internal report carries Ads spend, and all of it is booked
+  // to one source, so the card is FF's as a whole and has no
+  // per-affiliate view. Each tile is a rolling seven days.
+  function drawPaid() {
+    const p = DATA.paid, card = $("paidCard");
+    if (!p) { card.classList.add("hidden"); return; }
+    card.classList.remove("hidden");
+    const roas = (v) => (v == null ? "—" : v.toFixed(2) + "×");
+    const box = $("paidTiles");
+    box.innerHTML = "";
+    const specs = [
+      ["spend", "Ads spend a day", money],
+      ["revenue", "FF revenue a day", money],
+      ["roas", "Return on ad spend", roas],
+      ["profit", "Profit after Ads a day", money],
+    ];
+    for (const [key, label, show] of specs) {
+      const m = p[key];
+      const div = document.createElement("div");
+      div.className = "tile";
+      const chg = m.change == null ? "" : ` · ${m.flag ? "▼ " : ""}${m.change > 0 ? "+" : ""}${Math.round(100 * m.change)}%`;
+      div.innerHTML = `<div class="k">${label}</div>
+        <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:8px">
+          <div class="v">${show(m.current)}</div><span class="sp"></span></div>
+        <div class="s">latest week · earlier ${show(m.baseline)}<span class="${m.flag ? "watch-drop" : ""}">${chg}</span></div>`;
+      div.querySelector(".sp").appendChild(sparkline(m.points, m.flag, {
+        title: "FF · " + label, points: m.points, baseline: m.baseline,
+        current: m.current, change: m.change, flagged: m.flag, show }));
+      box.appendChild(div);
+    }
+    const t = p.totals;
+    $("paidSub").innerHTML = `Over ${p.days} days: ${money(t.spend)} on Ads, ${money(t.revenue)} revenue, ` +
+      `${money(t.profit)} profit after statements and Ads` + (t.spend ? ` — ${roas(t.revenue / t.spend)} return.` : ".") +
+      " <b>All Ads spend is booked to one source, Friendly Finance Min Loan</b>, so that source alone looks loss-making and the others look free; read FF as a whole.";
+  }
+
   // ---- render ------------------------------------------------------
   function render() {
     const series = dailySeries();
@@ -1067,6 +1112,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
       note.classList.add("hidden");
     }
 
+    drawPaid();
     drawTrend(series);
     drawFunnel(counts);
     drawQuality();

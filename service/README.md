@@ -26,7 +26,8 @@ which it is showing; the switch beside the affiliate filter moves
 between them.
 
 `/lenders` is the same look turned to the buying side, reached by the
-Affiliates | Lenders switch at the top of either page. Per lender it
+Affiliates | Lenders | Customers | Today | Yesterday switch at the top
+of every page. Per lender it
 shows the three rates to keep from falling — how many offered leads
 pass its filters, how many of those it buys, how many sales reach its
 own page — as rolling seven-day lines, with its tiers beneath, and
@@ -46,6 +47,25 @@ where it over-buys and orange where it under-buys. Selecting a lender
 opens its profile: every band with share, pool, index and a trend line
 of its share over time, which opens against the pool, with a shift
 either way called beyond chance.
+
+`/today` and `/yesterday` are the US dashboard's Today and Yesterday
+views, fitted to Overflow. The day hour by hour against the norm -
+the same weekday over the last eight weeks once there are three of
+them, otherwise the last 28 days: a verdict on pace with a projection
+to the end of the day, tiles for leads pinged, sales, buy-rate,
+earnings per sale and revenue, the top affiliates, the lenders buying
+harder or pulling back against what their usual share of the day's
+leads would have bought, why earnings per sale moved (mix against
+price, lender by lender, adding up to the gap), the cumulative pace
+against the typical path, every lender, and the top tiers' pace. One
+population at a time, by the same switch as the Affiliates page; the
+FF view adds Google Ads spend, return on it and profit after it.
+Today is read live every ten minutes (`LIVE_SECONDS`), and
+`/today?refresh=1` reads it now; yesterday is the finished day once
+collected, and the last live read until then.
+
+The Affiliates page in its FF view carries the same Google Ads figures
+over the window, as rolling seven-day trends.
 
 The other pages are reached from the links under the tiles:
 `/scorecard` ranks affiliates on profit per lead, `/quality` is the
@@ -164,6 +184,27 @@ passed their filters and what they bought, with trend lines; picking a
 lender shows the same for each affiliate whose leads it was offered.
 About 600 rows a day. Added 15 Oct 2026; a database collected before
 then marks its ping-log days uncollected so they are fetched again.
+
+**The ping log by the hour.** The same rows counted per Sydney hour,
+for the Today and Yesterday pages: leads by the hour of their first
+ping and affiliate, with how many sold at least once (a lead can sell
+to more than one lender, so sales can outnumber leads), and per hour,
+affiliate and tier what reached a lender, what it bought and what it
+paid. The lead identifier finds the hour of the first ping and is
+dropped with the rows. `DateCreated` is Sydney local time - the day's
+first ping on 15 Oct 2026 was at 00:00:56. Today is read live and
+replaced on each read; a finished day replaces it and is never
+overwritten by a live read. The ping log for a whole day came back in
+under seven seconds on 15 Oct 2026, so reading today every ten minutes
+is cheap.
+
+**Google Ads spend.** `InternalAffiliateLeadCountReport` carries
+`TotalAdwordSpent` per affiliate, which nothing read before 15 Oct
+2026. Its totals block reads 0 on finished days while the rows hold
+the spend, and all of it sits on one source, Friendly Finance Min
+Loan, so the pages sum the rows and show it for FF as a whole. The
+report's profit is already net of it. Today's is read live with the
+ping log.
 
 **Per affiliate, from the ping log.** The same rows counted a second
 way, by affiliate and status, so what lenders did with a source's leads

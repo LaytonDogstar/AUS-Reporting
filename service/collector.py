@@ -333,6 +333,63 @@ def reduce_affiliate_lender_results(items):
     return {k: (pings, round(cost, 2)) for k, (pings, cost) in counts.items()}
 
 
+def reduce_hours(items):
+    """The ping log by the hour, for the Today and Yesterday pages.
+
+    Returns (leads, sales, as_of):
+      leads {(hour, affiliate_id): (leads first pinged in that hour,
+                                    how many of them sold at least once)}
+      sales {(hour, affiliate_id, lender_id, tier_id): (reached, sold, value)}
+      as_of  the newest DateCreated seen, to the minute
+
+    DateCreated is Sydney local time - measured 15 Oct 2026, the day's
+    first ping is at 00:00:56 - so its hour is the hour on the page. A
+    lead is counted once, in the hour of its first ping; its identifier
+    is used to find that hour and then dropped with the rows. Only pings
+    that reached a lender go into sales: value is the tier price on the
+    sold ones, which is what the lender pays.
+    """
+    first: dict = {}
+    sold_leads: set = set()
+    sales: dict[tuple[int, int, int, int], list] = {}
+    as_of = ""
+    for it in items:
+        created = str(it.get("DateCreated") or "")
+        if len(created) < 13:
+            continue
+        hour = int(created[11:13])
+        if created > as_of:
+            as_of = created
+        affiliate = int(_num(it, "AffiliateId"))
+        lead = it.get("LeadId")
+        if lead is not None:
+            seen = first.get(lead)
+            if seen is None or created < seen[0]:
+                first[lead] = (created, affiliate)
+        status = int(_num(it, "StatusId"))
+        if status not in (1, 2, 3):
+            continue
+        key = (hour, affiliate, int(_num(it, "LenderId")), int(_num(it, "LenderTierId")))
+        row = sales.get(key)
+        if row is None:
+            row = sales[key] = [0, 0, 0.0]
+        row[0] += 1
+        if status == 1:
+            row[1] += 1
+            row[2] += float(_num(it, "Cost") or 0)
+            if lead is not None:
+                sold_leads.add(lead)
+    leads: dict[tuple[int, int], list] = {}
+    for lead, (created, affiliate) in first.items():
+        k = (int(created[11:13]), affiliate)
+        row = leads.setdefault(k, [0, 0])
+        row[0] += 1
+        row[1] += lead in sold_leads
+    del first, sold_leads
+    leads = {k: tuple(v) for k, v in leads.items()}
+    return leads, {k: tuple(v) for k, v in sales.items()}, as_of[:16]
+
+
 # Categorical fields counted per affiliate and per tier as well. The
 # two that describe the customer for every lead: employment status is
 # 98% populated, time at employer 99%. HasPrimaryIncomeSource and
@@ -476,6 +533,11 @@ def reduce_affiliates(payload):
             "profit": _num(src, "TotalProfit"),
             "final_profit": _num(src, "TotalFinalProfit"),
             "volume_comparison_pct": _num(src, "VolumeComparisonPercentage"),
+            # Google Ads spend. Only the internal report carries it, and
+            # measured 15 Oct 2026 its totals block reads 0 on finished
+            # days while the rows hold the spend - all of it on one FF
+            # source - so readers sum the rows.
+            "adword_spent": _num(src, "TotalAdwordSpent"),
         }
     items = payload.get("Items") or []
     rows = []
@@ -534,8 +596,10 @@ def _store_lender_results(conn, iso, payload, ms, stamp):
     items = data if isinstance(data, list) else (data.get("Items") or [])
     by_affiliate = reduce_affiliate_results(items)
     pairs = reduce_affiliate_lender_results(items)
+    leads, sales, as_of = reduce_hours(items)
     del data, items                             # rows do not outlive this call
     store.save_lender_results(conn, iso, counts, meta, stamp)
+    store.save_hours(conn, iso, leads, sales, as_of, True, stamp)
     store.save_affiliate_results(conn, iso, by_affiliate, stamp)
     store.save_affiliate_lender_results(conn, iso, pairs, stamp)
     return (f"{meta['pings']:,} ping(s) -> {len(counts)} count(s), "
@@ -822,7 +886,8 @@ def reset(conn):
                       "quality_day_meta", "affiliate_day", "affiliate_totals_day",
                       "lender_result_day", "lender_result_day_meta",
                       "affiliate_result_day", "quality_affiliate_day",
-                      "quality_tier_day", "affiliate_lender_day", "collection"):
+                      "quality_tier_day", "affiliate_lender_day", "hour_leads",
+                      "hour_sales", "hour_meta", "live_internal", "collection"):
             conn.execute(f"DELETE FROM {table}")
 
 
@@ -881,6 +946,104 @@ def scheduler(db_path):
         time.sleep(WAKE_SECONDS)
 
 
+# ------------------------------------------------------------------ live
+
+# How often today is read again. The ping log for a whole day is about
+# 22 MB and came back in under seven seconds on 15 Oct 2026, and the
+# internal report in about fifteen, so ten minutes is cheap.
+LIVE_SECONDS = int(os.environ.get("LIVE_SECONDS", "600"))
+_live_lock = threading.Lock()
+
+
+def collect_live(conn, day: date | None = None):
+    """Read today so far: the ping log by the hour, and the FF report
+    for Google Ads spend. Nothing here touches the finished-day tables -
+    a partial day in them would read as a bad day on every other page."""
+    day = day or store.business_today()
+    iso, stamp, out = day.isoformat(), now(), {}
+    # The lookups name the lenders and say which sources are FF. On a
+    # fresh database the live read can come before the first day's
+    # collection has fetched them, so it fetches them itself.
+    for kind, url, handler in (
+            ("affiliate_lookup", f"{API_BASE}/api/PublicReports/Affiliates", _store_affiliate_lookup),
+            ("lender_lookup", f"{API_BASE}/api/PublicReports/LenderTiers", _store_lender_lookup)):
+        table = "affiliate" if kind == "affiliate_lookup" else "lender_tier"
+        if conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone():
+            continue
+        try:
+            out[kind] = handler(conn, iso, fetch_retrying(url), 0, stamp)
+        except Exception as exc:                # noqa: BLE001
+            out[kind] = f"{type(exc).__name__}: {exc}"
+    # Retried: the proxy in front of this service resets about one call
+    # in twenty, and a dropped live read would leave the page ten
+    # minutes stale.
+    try:
+        payload = fetch_retrying(
+            f"{API_BASE}/api/PublicReports/LenderApplicationResults?{window(day)}")
+    except RuntimeError as exc:
+        payload = None
+        out["hours"] = str(exc)
+    if payload is not None:
+        data = json.loads(payload.decode("utf-8", "replace"))
+        items = data if isinstance(data, list) else (data.get("Items") or [])
+        leads, sales, as_of = reduce_hours(items)
+        del data, items, payload
+        store.save_hours(conn, iso, leads, sales, as_of, False, stamp)
+        out["hours"] = f"as of {as_of[11:16]}"
+
+    prev = day - timedelta(days=1)
+    body = {"StartDate": f"{iso}T00:00:00", "EndDate": f"{iso}T00:00:00",
+            "CompareStartDate": f"{prev.isoformat()}T00:00:00",
+            "CompareEndDate": f"{prev.isoformat()}T00:00:00",
+            "IsAllActiveOnly": False, "ExcludeInternalSources": False}
+    status, payload, ms, error = fetch(
+        f"{API_BASE}/api/PublicReports/InternalAffiliateLeadCountReport", "POST", body)
+    if error or status != 200:
+        out["internal"] = error or f"HTTP {status}"
+    else:
+        rows, _ = reduce_affiliates(json.loads(payload.decode("utf-8", "replace")))
+        totals = {k: sum(r[k] or 0 for r in rows) for k in
+                  ("received", "sold", "revenue", "bs_cost", "adword_spent", "profit")}
+        store.save_live_internal(conn, iso, totals, stamp)
+        out["internal"] = "ok"
+    return out
+
+
+def live_now(db_path):
+    """One live read, unless one is already running. True if started."""
+    if not _live_lock.acquire(blocking=False):
+        return False
+    try:
+        conn = store.connect(db_path)
+        try:
+            collect_live(conn)
+        finally:
+            conn.close()
+    except Exception as exc:                        # noqa: BLE001
+        print(f"live error: {type(exc).__name__}: {exc}", flush=True)
+    finally:
+        _live_lock.release()
+    return True
+
+
+def live_in_background(db_path):
+    if _live_lock.locked():
+        return False
+    threading.Thread(target=live_now, args=(db_path,), daemon=True, name="live-now").start()
+    return True
+
+
+def live_loop(db_path):
+    """Today, every LIVE_SECONDS. Its own thread, so the Today page
+    works from the first minutes after a deploy while the history is
+    still rebuilding underneath it."""
+    while True:
+        live_now(db_path)
+        time.sleep(LIVE_SECONDS)
+
+
 def start(db_path):
     threading.Thread(target=scheduler, args=(db_path,), daemon=True,
                      name="collector").start()
+    threading.Thread(target=live_loop, args=(db_path,), daemon=True,
+                     name="live").start()

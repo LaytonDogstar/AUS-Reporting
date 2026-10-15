@@ -13,8 +13,12 @@ by Railway from the `claude/code-review-tsyca6` branch; see
   throws without an `expand` description, and `tests/test_sparklines.py`
   fails on any call site that does not pass one. (Layton, 15 Oct 2026.)
 - Pages: Affiliates (`/`, `template.html`), Lenders (`/lenders`), Customers
-  (`/customers`) share one stylesheet and the Affiliates | Lenders | Customers
-  switch.
+  (`/customers`), Today (`/today`) and Yesterday (`/yesterday`, both
+  `today.html`) share one stylesheet and the Affiliates | Lenders | Customers
+  | Today | Yesterday switch. Today and Yesterday are the US dashboard's views
+  of the same name, fitted to Overflow; today is read live every ten minutes.
+- Google Ads spend is summed from the internal report's rows (its totals block
+  reads 0) and shown for FF as a whole: all of it is booked to one source.
 - Trend tables label each measure's columns (Trend, Latest, Change), sort on
   every column, and open sorted by revenue, highest first.
 - Lenders: Tippla stays in all reporting, with revenue shown as $0 (its tier

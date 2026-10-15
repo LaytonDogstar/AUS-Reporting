@@ -1,0 +1,738 @@
+<!DOCTYPE html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AUS Lead Reporting · Today</title>
+<style>
+/*__SHARED_STYLE__*/
+  /* today page additions; the rest is the dashboard's own */
+  :root { --s3: #1f9e5a; --s4: #8b5cf6; --s5: #0e9aa7; --s6: #d0459b; --s7: #8a8a1f; --s8: #9a6036; }
+  :root[data-theme="dark"] { --s3: #34b86f; --s4: #a07cf8; --s5: #22b5c2; --s6: #e062ad; --s7: #a8a838; --s8: #b97b4c; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --s3: #34b86f; --s4: #a07cf8; --s5: #22b5c2; --s6: #e062ad; --s7: #a8a838; --s8: #b97b4c; }
+  }
+  .verdict { font-size: 15px; padding: 12px 16px; border-radius: 11px; margin-bottom: 14px;
+             background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow); }
+  .up { color: var(--good); font-weight: 620; }
+  .down { color: var(--critical); font-weight: 620; }
+  .flat { color: var(--ink-2); }
+  .tile .row { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; }
+  .tile svg.spark { width: 72px; height: 26px; flex: none; }
+  .fine { font-size: 12.5px; color: var(--muted); margin: -10px 0 20px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+  .mini { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; background: var(--page); }
+  .mini .top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+  .mini .nm { font-weight: 600; font-size: 13.5px; }
+  .mini .big { font-size: 22px; font-weight: 640; letter-spacing: -0.02em; }
+  .mini .s { font-size: 12.5px; color: var(--ink-2); }
+  .mini svg.spark { width: 72px; height: 26px; flex: none; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+  @media (max-width: 860px) { .cols { grid-template-columns: 1fr; } }
+  .mover { display: grid; grid-template-columns: 1fr auto 56px; gap: 10px; align-items: center;
+           padding: 8px 0; border-bottom: 1px solid var(--border); }
+  .mover .nm { font-weight: 600; font-size: 13.5px; }
+  .mover .s { font-size: 12.5px; color: var(--ink-2); }
+  .mover .gap { text-align: right; font-variant-numeric: tabular-nums; font-weight: 640; }
+  .mover .gap small { display: block; font-size: 11px; font-weight: 400; }
+  .mover svg.spark { width: 72px; height: 26px; }
+  .colhead { font-size: 13px; font-weight: 620; margin: 4px 0 2px; }
+  .chart-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  .chart-head h2 { margin-right: auto; }
+  .legend button { background: none; border: 1px solid var(--border); border-radius: 6px; color: var(--ink-2);
+                   font: inherit; font-size: 12px; padding: 2px 8px; cursor: pointer; }
+  .legend button[aria-pressed="false"] { opacity: .45; }
+  .legend button i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; margin-right: 5px; vertical-align: -1px; }
+  .seg + .seg { margin-left: 4px; }
+  .split { display: grid; grid-template-columns: 1fr; gap: 0; }
+  .neg { color: var(--critical); }
+  .pos { color: var(--good); }
+  a.btnlink { font-size: 13px; color: var(--ink-2); border: 1px solid var(--border); border-radius: 7px;
+              padding: 5px 11px; text-decoration: none; background: var(--surface); }
+  a.btnlink:hover { color: var(--ink); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>AUS Lead Reporting</h1>
+    <span class="asof" id="asof"></span>
+    <span class="spacer"></span>
+    <a class="btnlink hidden" id="refreshLink" href="#">Refresh live</a>
+    <button class="ghost" id="themeBtn" type="button">Dark mode</button>
+  </header>
+
+  <div class="filters">
+    <nav class="seg" aria-label="Page">
+      <a class="seglink" href="/">Affiliates</a>
+      <a class="seglink" href="/lenders">Lenders</a>
+      <a class="seglink" href="/customers">Customers</a>
+      <a class="seglink" id="navToday" href="/today">Today</a>
+      <a class="seglink" id="navYesterday" href="/yesterday">Yesterday</a>
+    </nav>
+    <nav class="seg" aria-label="Population">
+      <a class="seglink" id="srcExternal" href="?source=external">External affiliates</a>
+      <a class="seglink" id="srcInternal" href="?source=internal">FF (internal)</a>
+    </nav>
+    <span class="spacer"></span>
+  </div>
+
+  <div class="verdict" id="verdict"></div>
+  <div class="tiles" id="tiles"></div>
+  <p class="fine" id="tileNote"></p>
+
+  <section class="card hidden" id="ffCard">
+    <h2>Google Ads</h2>
+    <p class="sub" id="ffSub"></p>
+    <div class="tiles" id="ffTiles" style="margin-bottom:8px"></div>
+  </section>
+
+  <section class="card">
+    <h2 id="affTitle">By affiliate</h2>
+    <p class="sub" id="affSub"></p>
+    <div class="cards" id="affCards"></div>
+  </section>
+
+  <section class="card">
+    <div class="chart-head"><h2>Lenders off their usual appetite</h2><span class="sub" id="moverCount"></span></div>
+    <p class="sub" id="moverSub"></p>
+    <div class="cols">
+      <div><div class="colhead neg">▼ Pulling back or quiet</div><div id="moversDown"></div></div>
+      <div><div class="colhead pos">▲ Buying harder</div><div id="moversUp"></div></div>
+    </div>
+  </section>
+
+  <section class="card" id="eplCard">
+    <div class="chart-head"><h2>Why earnings per sale are where they are</h2><span class="sub" id="eplHead"></span></div>
+    <p class="sub" id="eplSub"></p>
+    <div class="scroll">
+    <table id="eplTable">
+      <thead><tr>
+        <th>Lender</th><th>Share of sales<br><small>day · typical</small></th>
+        <th>Earnings per sale<br><small>day · typical</small></th>
+        <th>Mix</th><th>Price</th><th>Effect on EPL</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+    </div>
+    <p class="fine" style="margin:10px 0 4px">EPL is revenue ÷ sales. <b>Mix</b> is a lender taking a bigger or smaller share of the sales than usual, valued at its usual price. <b>Price</b> is a lender paying more or less per sale than usual. Mix plus price is each lender's effect, and the effects add up to the whole gap.</p>
+  </section>
+
+  <div class="split">
+    <section class="card">
+      <div class="chart-head">
+        <h2>Pace through the day</h2>
+        <select id="paceMetric" aria-label="Measure">
+          <option value="sold">Sales</option>
+          <option value="leads">Leads in</option>
+          <option value="value">Revenue</option>
+          <option value="epl">Earnings per sale</option>
+        </select>
+      </div>
+      <div class="legend"><span><i style="background:var(--series-1)"></i><span id="paceDayLbl">Today</span></span><span><i style="background:var(--muted)"></i>Typical (dashed)</span></div>
+      <svg id="paceChart" role="img" aria-label="Cumulative through the day against the typical path"></svg>
+      <p class="fine" style="margin:8px 0 0" id="paceNote"></p>
+    </section>
+
+    <section class="card">
+      <h2>Lenders</h2>
+      <p class="sub" id="buyerSub"></p>
+      <div class="scroll">
+      <table id="buyerTable" class="trend-table">
+        <thead>
+          <tr>
+            <th rowspan="2" data-sort="name">Lender</th>
+            <th class="grp" colspan="3">Sales</th>
+            <th class="grp" colspan="2">Buy-rate</th>
+            <th rowspan="2" data-sort="accept" title="Bought, of the leads that reached it">Accept %</th>
+            <th rowspan="2" data-sort="epl">Per sale</th>
+            <th rowspan="2" data-sort="revenue">Revenue</th>
+          </tr>
+          <tr>
+            <th class="sub line" data-sort="sold">Trend</th>
+            <th class="sub" data-sort="sold">Latest</th>
+            <th class="sub" data-sort="change" title="Against the typical path by this time">Change</th>
+            <th class="sub" data-sort="rate">Latest</th>
+            <th class="sub" data-sort="rateNorm">Typical</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      </div>
+    </section>
+  </div>
+
+  <section class="card">
+    <div class="chart-head">
+      <h2>Tier pace</h2>
+      <select id="tierMetric" aria-label="Measure">
+        <option value="sold">Sales</option>
+        <option value="value">Revenue</option>
+      </select>
+    </div>
+    <p class="sub">The top tiers by sales. Solid is the day so far, dashed the typical path in the same colour; above its dashed line a tier is ahead of its usual pace. Select a tier to show it alone, and again to show all.</p>
+    <div class="legend" id="tierLegend"></div>
+    <svg id="tierChart" role="img" aria-label="Cumulative sales per tier through the day"></svg>
+  </section>
+
+  <footer id="foot"></footer>
+</div>
+
+<dialog id="chartPop" aria-labelledby="popTitle">
+  <div class="pop-head">
+    <h2 id="popTitle"></h2>
+    <button class="ghost" id="popClose" type="button">Close</button>
+  </div>
+  <p id="popSub"></p>
+  <svg id="popChart" role="img" aria-label="Expanded chart"></svg>
+</dialog>
+
+<div id="tip" role="status" aria-live="polite"></div>
+
+<script>
+const DATA = /*__DASHBOARD_DATA__*/null;
+
+(function () {
+  "use strict";
+  if (!DATA) { document.body.innerHTML = "<p style='padding:2rem'>No data was built into this page.</p>"; return; }
+
+  const $ = (id) => document.getElementById(id);
+  const fmt = (n) => (n == null ? "—" : Math.round(n).toLocaleString("en-AU"));
+  const pct = (n) => (n == null || !isFinite(n) ? "—" : n.toFixed(1) + "%");
+  const rate = (v) => (v == null || !isFinite(v) ? "—" : pct(100 * v));
+  const money = (n) => (n == null || !isFinite(n) ? "—" : (n < 0 ? "-$" : "$") + Math.round(Math.abs(n)).toLocaleString("en-AU"));
+  const money2 = (n) => (n == null || !isFinite(n) ? "—" : (n < 0 ? "-$" : "$") + Math.abs(n).toFixed(2));
+  const signed2 = (n) => (n == null ? "—" : (n < 0 ? "-$" : "+$") + Math.abs(n).toFixed(2));
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const HOURS = [...Array(24).keys()];
+  const hourLabel = (h) => (h % 12 === 0 ? 12 : h % 12) + (h < 12 ? "am" : "pm");
+
+  const isToday = DATA.page === "today";
+  const meta = DATA.meta;
+  const hasNorm = DATA.normDays && DATA.normDays.length > 0;
+  const dayWord = isToday ? "today" : "yesterday";
+  const DayWord = isToday ? "Today" : "Yesterday";
+
+  // How far through the day the data reaches, in hours. A finished day
+  // reaches 24; a live one, the minute of its newest ping.
+  let hNow = 24;
+  if (meta && !meta.complete && meta.as_of) {
+    hNow = Number(meta.as_of.slice(11, 13)) + Number(meta.as_of.slice(14, 16)) / 60;
+  }
+  const lastHour = Math.min(23, Math.floor(hNow - 1e-9));
+  const asOfText = meta && meta.as_of ? meta.as_of.slice(11, 16) : null;
+
+  const sum = (a) => a.reduce((s, v) => s + v, 0);
+  const cum = (a) => { let s = 0; return a.map((v) => (s += v)); };
+  // Cumulative at a fractional hour: whole hours, then the share of the
+  // current one already gone.
+  const cumAt = (a, t) => {
+    if (t >= 24) return sum(a);
+    const h = Math.floor(t);
+    return sum(a.slice(0, h)) + (t - h) * (a[h] || 0);
+  };
+  // The day's cumulative path, cut at the last hour it has reached.
+  const dayPath = (a) => cum(a).map((v, i) => (i <= lastHour ? v : null));
+  const ratioPath = (num, den, cut) => {
+    const n = cum(num), d = cum(den);
+    return n.map((v, i) => (cut && i > lastHour) || !d[i] ? null : v / d[i]);
+  };
+
+  // ---- tooltip -----------------------------------------------------
+  const tip = $("tip");
+  function showTip(evt, html) {
+    tip.innerHTML = html;
+    tip.style.opacity = "1";
+    const pad = 14, r = tip.getBoundingClientRect();
+    let x = evt.clientX + pad, y = evt.clientY + pad;
+    if (x + r.width > innerWidth - 8) x = evt.clientX - r.width - pad;
+    if (y + r.height > innerHeight - 8) y = evt.clientY - r.height - pad;
+    tip.style.left = x + "px"; tip.style.top = y + "px";
+  }
+  const hideTip = () => { tip.style.opacity = "0"; };
+
+  const SVGNS = "http://www.w3.org/2000/svg";
+  function el(name, attrs, parent) {
+    const n = document.createElementNS(SVGNS, name);
+    for (const k in attrs) n.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(n);
+    return n;
+  }
+
+  // ---- sparkline -----------------------------------------------------
+  // Every sparkline takes an `expand` description and opens into the
+  // pop-up with the full chart: axis, the typical path, values on hover.
+  // Required, so a new sparkline cannot be added without one.
+  function sparkline(points, flagged, expand) {
+    if (!expand || !expand.title) throw new Error("sparkline needs an expand description");
+    const W = 72, H = 26, pad = 3;
+    const vals = points.map((p) => p[1]).filter((v) => v != null);
+    const svg = document.createElementNS(SVGNS, "svg");
+    svg.setAttribute("width", W); svg.setAttribute("height", H);
+    const lo = Math.min(0, ...vals), hi = Math.max(...vals, 0), span = hi - lo || 1;
+    const x = (i) => pad + (i / (points.length - 1)) * (W - 2 * pad);
+    const y = (v) => H - pad - ((v - lo) / span) * (H - 2 * pad);
+    let d = "";
+    points.forEach(([, v], i) => { if (v != null) d += (d ? "L" : "M") + x(i) + "," + y(v); });
+    if (d) el("path", { d, fill: "none", stroke: "var(--muted)", "stroke-width": 2,
+                        "stroke-linejoin": "round", "stroke-linecap": "round" }, svg);
+    let li = points.length - 1;
+    while (li >= 0 && points[li][1] == null) li--;
+    if (li >= 0) el("circle", { cx: x(li), cy: y(points[li][1]), r: 3.5,
+                                fill: flagged ? "var(--critical)" : "var(--series-1)" }, svg);
+    svg.classList.add("spark");
+    svg.setAttribute("role", "button");
+    svg.setAttribute("tabindex", "0");
+    svg.setAttribute("aria-label", "Expand " + expand.title);
+    const open = (evt) => { evt.stopPropagation(); hideTip(); openChart(expand); };
+    svg.addEventListener("click", open);
+    svg.addEventListener("keydown", (evt) => {
+      if (evt.key === "Enter" || evt.key === " ") { evt.preventDefault(); open(evt); }
+    });
+    return svg;
+  }
+  const hourPoints = (path) => path.map((v, i) => [hourLabel(i), v]);
+
+  // ---- hour chart: the day against the typical path -------------------
+  // series: [{name, values (24, null where not reached), color, dashed}]
+  function drawHourChart(svg, series, show, H = 260) {
+    svg.innerHTML = "";
+    const W = svg.clientWidth || 600;
+    svg.setAttribute("height", H);
+    const m = { t: 12, r: 14, b: 26, l: 58 };
+    const iw = W - m.l - m.r, ih = H - m.t - m.b;
+    const vals = series.flatMap((s) => s.values).filter((v) => v != null && isFinite(v));
+    if (!vals.length) {
+      const t = el("text", { x: m.l, y: m.t + 20, class: "tick" }, svg);
+      t.textContent = "Nothing to draw yet.";
+      return;
+    }
+    const top = Math.max(...vals) * 1.06 || 1;
+    const raw = top / 4, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    const step = [1, 2, 2.5, 5, 10].map((f) => f * mag).find((v) => v >= raw);
+    const max = step * 4;
+    const x = (i) => m.l + (i / 23) * iw;
+    const y = (v) => m.t + ih - (v / max) * ih;
+    for (let i = 0; i <= 4; i++) {
+      const v = (max / 4) * i, yy = y(v);
+      el("line", { x1: m.l, x2: m.l + iw, y1: yy, y2: yy, class: "gridline" }, svg);
+      const t = el("text", { x: m.l - 6, y: yy + 4, class: "tick num", "text-anchor": "end" }, svg);
+      t.textContent = show(v);
+    }
+    for (let h = 0; h < 24; h += (W < 520 ? 6 : 3)) {
+      const t = el("text", { x: x(h), y: H - 6, class: "tick", "text-anchor": h ? "middle" : "start" }, svg);
+      t.textContent = hourLabel(h);
+    }
+    if (isToday && hNow < 24) {
+      const xx = m.l + (Math.min(hNow, 23) / 23) * iw;
+      el("line", { x1: xx, x2: xx, y1: m.t, y2: m.t + ih, stroke: "var(--baseline)", "stroke-dasharray": "2 3" }, svg);
+    }
+    for (const s of series) {
+      if (s.hidden) continue;
+      let d = "";
+      s.values.forEach((v, i) => { if (v != null && isFinite(v)) d += (d ? "L" : "M") + x(i) + "," + y(v); });
+      if (!d) continue;
+      el("path", { d, fill: "none", stroke: s.color, "stroke-width": s.dashed ? 1.6 : 2.2,
+                   "stroke-dasharray": s.dashed ? "5 4" : "none", opacity: s.dashed ? 0.85 : 1,
+                   "stroke-linejoin": "round", "stroke-linecap": "round" }, svg);
+      if (!s.dashed) {
+        let li = s.values.length - 1;
+        while (li >= 0 && s.values[li] == null) li--;
+        if (li >= 0) el("circle", { cx: x(li), cy: y(s.values[li]), r: 3.5, fill: s.color,
+                                    stroke: "var(--surface)", "stroke-width": 1.5 }, svg);
+      }
+    }
+    const cross = el("line", { y1: m.t, y2: m.t + ih, stroke: "var(--baseline)", "stroke-width": 1, opacity: 0 }, svg);
+    const hit = el("rect", { x: m.l, y: m.t, width: iw, height: ih, fill: "transparent" }, svg);
+    hit.addEventListener("mousemove", (e) => {
+      const box = svg.getBoundingClientRect();
+      const i = Math.max(0, Math.min(23, Math.round(((e.clientX - box.left - m.l) / iw) * 23)));
+      cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("opacity", 1);
+      const rows = series.filter((s) => !s.hidden).map((s) =>
+        `<div class="row"><span>${esc(s.name)}</span><span>${s.values[i] == null ? "—" : show(s.values[i])}</span></div>`).join("");
+      showTip(e, `<b>By the end of ${hourLabel(i)}</b>${rows}`);
+    });
+    hit.addEventListener("mouseleave", () => { cross.setAttribute("opacity", 0); hideTip(); });
+  }
+
+  // ---- pop-up ------------------------------------------------------------
+  const pop = $("chartPop");
+  let popChart = null;
+  function drawPop() {
+    if (popChart) drawHourChart($("popChart"), popChart.series, popChart.show, 360);
+  }
+  function openChart(e) {
+    popChart = e;
+    $("popTitle").textContent = e.title;
+    $("popSub").textContent = e.sub || "";
+    pop.appendChild(tip);               // the pop-up sits above the page, so its tooltip must too
+    pop.showModal();
+    drawPop();
+  }
+  pop.addEventListener("close", () => { popChart = null; hideTip(); document.body.appendChild(tip); });
+  pop.addEventListener("click", (evt) => { if (evt.target === pop) pop.close(); });
+  $("popClose").addEventListener("click", () => pop.close());
+
+  // An entity's day against its typical path, for a sparkline's pop-up.
+  function pathExpand({ title, day, norm, show, sub }) {
+    const series = [{ name: DayWord, values: day, color: "var(--series-1)" }];
+    if (hasNorm) series.push({ name: "Typical", values: norm, color: "var(--muted)", dashed: true });
+    return { title, series, show, sub };
+  }
+  const normNote = hasNorm
+    ? `Dashed is ${DATA.normLabel}: the average of ${DATA.normDays.length} finished day${DATA.normDays.length > 1 ? "s" : ""} (${DATA.normDays.slice(-1)[0]} to ${DATA.normDays[0]}). Hours are Sydney time.`
+    : "No finished days are stored yet to set a typical path against. Hours are Sydney time.";
+
+  // ---- the day's numbers ---------------------------------------------------
+  const T = DATA.total;
+  const totals = (side) => ({ leads: sum(side.leads), soldLeads: sum(side.soldLeads), sold: sum(side.sold),
+                               value: sum(side.value), reached: sum(side.reached) });
+  const D = totals(T.day), N = totals(T.norm);
+  const byNow = (k) => cumAt(T.norm[k], hNow);
+  // The day's own figure so far: everything read, whatever the minute.
+  const soFar = (k) => (isToday && hNow < 24 ? D[k] : cumAt(T.day[k], 24));
+  const vsPct = (a, b) => (b ? (a / b - 1) * 100 : null);
+  function arrow(p, tol = 3) {
+    if (p == null) return '<span class="flat">—</span>';
+    if (Math.abs(p) < tol) return `<span class="flat">≈ ${p > 0 ? "+" : ""}${p.toFixed(0)}%</span>`;
+    return `<span class="${p > 0 ? "up" : "down"}">${p > 0 ? "▲" : "▼"} ${p > 0 ? "+" : ""}${p.toFixed(0)}%</span>`;
+  }
+
+  // ---- header, switches -------------------------------------------------
+  $(isToday ? "navToday" : "navYesterday").setAttribute("aria-current", "page");
+  $(DATA.source === "internal" ? "srcInternal" : "srcExternal").setAttribute("aria-current", "page");
+  if (isToday) {
+    const r = $("refreshLink");
+    r.classList.remove("hidden");
+    r.href = "/today?refresh=1&source=" + DATA.source;
+  }
+  const when = isToday
+    ? (asOfText ? `Today ${DATA.weekday} ${DATA.date} · live, as of ${asOfText} Sydney` : `Today ${DATA.date} · not read yet`)
+    : `${DATA.weekday} ${DATA.date} · ` + (meta && meta.complete ? "finished day" : (asOfText ? `from the last live read, to ${asOfText}; the finished day is collected within the half hour` : "not collected yet"));
+  $("asof").textContent = when + " · " + DATA.sourceLabel;
+
+  // ---- verdict ------------------------------------------------------------
+  (function verdict() {
+    const v = $("verdict");
+    if (!meta) {
+      v.innerHTML = isToday
+        ? "Today has not been read yet. The first live read runs as the service starts and every ten minutes after; this page fills in on the next load."
+        : "Yesterday is not collected yet. It is read within the half hour after midnight, Sydney time.";
+      return;
+    }
+    if (!hasNorm) {
+      v.innerHTML = `${fmt(D.sold)} sales and ${money(D.value)} ${isToday ? "so far" : "for the day"}. No finished days are stored yet to call that ahead or behind.`;
+      return;
+    }
+    const expect = byNow("sold");
+    const p = vsPct(D.sold, expect);
+    const word = p == null ? "" : Math.abs(p) < 3 ? "in line with" : p > 0 ? `${Math.abs(p).toFixed(0)}% ahead of` : `${Math.abs(p).toFixed(0)}% behind`;
+    const cls = p == null || Math.abs(p) < 3 ? "flat" : p > 0 ? "up" : "down";
+    const mark = cls === "up" ? "▲ " : cls === "down" ? "▼ " : "";
+    if (isToday && hNow < 24) {
+      const projSold = expect ? D.sold * N.sold / expect : null;
+      const projVal = byNow("value") ? D.value * N.value / byNow("value") : null;
+      v.innerHTML = `<span class="${cls}">${mark}${word}</span> ${esc(DATA.normLabel)} by ${asOfText}` +
+        (projSold ? ` — on pace for <b>~${fmt(projSold)} sales</b> · <b>~${money(projVal)}</b> by the end of the day if it holds this shape.` : ".");
+    } else {
+      v.innerHTML = `<span class="${cls}">${mark}Ended ${word}</span> ${esc(DATA.normLabel)} — finished with <b>${fmt(D.sold)} sales</b> · <b>${money(D.value)}</b>, against ${fmt(N.sold)} and ${money(N.value)} typical.`;
+    }
+  })();
+
+  // ---- tiles ------------------------------------------------------------
+  function tile(k, v, s, spark) {
+    const div = document.createElement("div");
+    div.className = "tile";
+    div.innerHTML = `<div class="k">${k}</div><div class="row"><div class="v">${v}</div></div><div class="s">${s}</div>`;
+    if (spark) div.querySelector(".row").appendChild(spark);
+    return div;
+  }
+  (function tiles() {
+    const box = $("tiles");
+    box.innerHTML = "";
+    if (!meta) return;
+    const cut = isToday && hNow < 24;
+    const sub = (k, show) => !hasNorm ? "" :
+      `≈ ${show(N[k])}/day typical · ${arrow(vsPct(D[k], byNow(k)))} ${cut ? "vs typical by now" : ""}`;
+    const countTile = (k, label, show) => {
+      const path = dayPath(T.day[k]), norm = cum(T.norm[k]);
+      return tile(label, show(D[k]), sub(k, show),
+        sparkline(hourPoints(path), false, pathExpand({ title: `${label}, ${dayWord}`, day: path, norm: norm, show: show,
+          sub: `Cumulative through the day. ${normNote}` })));
+    };
+    const ratioTile = (label, num, den, show, normVal, dayVal) => {
+      const path = ratioPath(T.day[num], T.day[den], true), norm = ratioPath(T.norm[num], T.norm[den], false);
+      const p = vsPct(dayVal, normVal);
+      return tile(label, show(dayVal), hasNorm ? `≈ ${show(normVal)} typical · ${arrow(p)}` : "",
+        sparkline(hourPoints(path), p != null && p <= -10, pathExpand({ title: `${label}, ${dayWord}`, day: path, norm: norm, show: show,
+          sub: `The running figure through the day. A ratio does not depend on the time of day, so it reads fairly against the typical one even mid-day. ${normNote}` })));
+    };
+    box.append(
+      countTile("leads", "Leads pinged", fmt),
+      countTile("sold", "Sales", fmt),
+      ratioTile("Buy-rate", "soldLeads", "leads", rate, N.leads ? N.soldLeads / N.leads : null, D.leads ? D.soldLeads / D.leads : null),
+      ratioTile("Earnings per sale", "value", "sold", money2, N.sold ? N.value / N.sold : null, D.sold ? D.value / D.sold : null),
+      countTile("value", "Revenue", money));
+    $("tileNote").textContent = "Typical is " + (DATA.normLabel || "not set yet") +
+      ". Leads pinged are leads that reached the ping tree, so fewer than the affiliate report's received. " +
+      "Sales and revenue are what lenders bought, at the tier's price; a lead can sell to more than one lender, so buy-rate is the share of leads pinged that sold at least once. " +
+      "Counts are compared with the typical day by the same time; the two ratios do not depend on the time of day, so they read fairly mid-day.";
+  })();
+
+  // ---- FF: Google Ads -------------------------------------------------------
+  (function ff() {
+    if (!DATA.ff) return;
+    const card = $("ffCard");
+    card.classList.remove("hidden");
+    const d = DATA.ff.day, n = DATA.ff.norm;
+    const box = $("ffTiles");
+    if (!d) { $("ffSub").textContent = "The internal affiliate report has not been read for this day yet."; return; }
+    const roas = d.adword_spent ? d.revenue / d.adword_spent : null;
+    const roasN = n && n.adword_spent ? n.revenue / n.adword_spent : null;
+    const t = (k, v, s) => { const div = document.createElement("div"); div.className = "tile";
+      div.innerHTML = `<div class="k">${k}</div><div class="v">${v}</div><div class="s">${s}</div>`; return div; };
+    box.append(
+      t("Ads spend", money(d.adword_spent), n ? `≈ ${money(n.adword_spent)}/day typical` : ""),
+      t("FF revenue", money(d.revenue), n ? `≈ ${money(n.revenue)}/day typical` : ""),
+      t("Return on ad spend", roas == null ? "—" : roas.toFixed(2) + "×", roasN ? `≈ ${roasN.toFixed(2)}× typical` : "revenue ÷ Ads spend"),
+      t("Profit after Ads", money(d.profit), (n ? `≈ ${money(n.profit)}/day typical · ` : "") + `statements ${money(d.bs_cost)}`));
+    const at = d.collected_at ? d.collected_at.slice(11, 16) + " UTC" : "";
+    $("ffSub").innerHTML = (d.live ? `From the internal affiliate report, read live at ${at}. ` : "From the internal affiliate report for the finished day. ") +
+      "Profit is the report's own: revenue less statement cost and Ads spend. " +
+      "<b>All Ads spend is booked to one source, Friendly Finance Min Loan</b>, so read FF as a whole: that source alone looks loss-making and the others look free.";
+  })();
+
+  // ---- by affiliate -------------------------------------------------------
+  (function affiliates() {
+    const list = (DATA.affiliates || []).filter((a) => a.sum.day.leads || a.sum.day.sold).slice(0, 6);
+    $("affTitle").textContent = `${DayWord} by affiliate · ${DATA.sourceLabel}`;
+    $("affSub").textContent = list.length
+      ? `The top ${list.length} by revenue ${dayWord}. Buy-rate is the share of its leads pinged that sold at least once, set against the affiliate's own typical rate.`
+      : "No leads from this population yet.";
+    const box = $("affCards");
+    box.innerHTML = "";
+    for (const a of list) {
+      const s = a.sum.day, n = a.sum.norm;
+      const br = s.leads ? s.soldLeads / s.leads : null, brN = n.leads ? n.soldLeads / n.leads : null;
+      const p = vsPct(br, brN);
+      const div = document.createElement("div");
+      div.className = "mini";
+      div.innerHTML = `<div class="top"><div><div class="nm">${esc(a.name)}</div>
+          <div><span class="big">${fmt(s.sold)}</span> <span class="s">sales · ${fmt(s.leads)} leads pinged</span></div></div></div>
+        <div class="s">${D.sold ? rate(s.sold / D.sold) : "—"} of ${dayWord}'s sales · ${money(s.value)} · ${money2(s.sold ? s.value / s.sold : null)}/sale</div>
+        <div class="s">buy-rate <b>${rate(br)}</b> ${hasNorm ? arrow(p, 5) + " vs " + rate(brN) + " typical" : ""}</div>`;
+      const path = dayPath(a.day.sold), norm = cum(a.norm.sold);
+      div.querySelector(".top").appendChild(sparkline(hourPoints(path), p != null && p <= -15,
+        pathExpand({ title: `${a.name} · sales, ${dayWord}`, day: path, norm: norm, show: fmt,
+          sub: `Cumulative sales through the day. ${normNote}` })));
+      box.appendChild(div);
+    }
+  })();
+
+  // ---- movers ------------------------------------------------------------
+  const lenderById = new Map((DATA.lenders || []).map((l) => [l.id, l]));
+  (function moversCard() {
+    const ms = DATA.movers || [];
+    const down = ms.filter((m) => m.gap < 0).slice(0, DATA.moversShown);
+    const up = ms.filter((m) => m.gap > 0).sort((a, b) => b.gap - a.gap).slice(0, DATA.moversShown);
+    $("moverCount").textContent = hasNorm ? `${ms.length} lender${ms.length === 1 ? "" : "s"} moving against their norm` : "";
+    $("moverSub").textContent = hasNorm
+      ? `Each lender's sales against what its typical share of leads would have bought from the ${fmt(D.leads)} leads pinged ${isToday ? "so far" : "that day"}. Scaled to supply, not the clock: a lender buying its usual share of fewer leads is not pulling back.`
+      : "Needs at least one finished day stored to compare against.";
+    const row = (m) => {
+      const l = lenderById.get(m.id);
+      const div = document.createElement("div");
+      div.className = "mover";
+      const quiet = m.sold === 0;
+      div.innerHTML = `<div><div class="nm">${esc(m.name)}</div>
+        <div class="s">${fmt(m.sold)} sold vs ~${fmt(m.expected)} expected · buy-rate ${rate(m.rate)} vs ${rate(m.rateNorm)} typical</div></div>
+        <div class="sp"></div>
+        <div class="gap ${m.gap < 0 ? "neg" : "pos"}">${m.gap > 0 ? "+" : ""}${Math.round(m.gap)}<small>${quiet ? "no buys" : m.gap < 0 ? "behind" : "ahead"}</small></div>`;
+      if (l) {
+        const path = dayPath(l.day.sold), norm = cum(l.norm.sold);
+        div.querySelector(".sp").appendChild(sparkline(hourPoints(path), m.gap < 0,
+          pathExpand({ title: `${m.name} · sales, ${dayWord}`, day: path, norm: norm, show: fmt,
+          sub: `Cumulative sales through the day; ${fmt(m.expected)} expected from the leads in. The dashed typical path is not scaled to the day's supply. ${normNote}` })));
+      }
+      return div;
+    };
+    $("moversDown").replaceChildren(...(down.length ? down.map(row) : [Object.assign(document.createElement("p"), { className: "sub", textContent: "Nobody notably behind." })]));
+    $("moversUp").replaceChildren(...(up.length ? up.map(row) : [Object.assign(document.createElement("p"), { className: "sub", textContent: "Nobody notably ahead." })]));
+  })();
+
+  // ---- why EPL --------------------------------------------------------------
+  (function eplCard() {
+    const e = DATA.epl;
+    const body = $("eplTable").querySelector("tbody");
+    if (!e || !hasNorm) {
+      $("eplSub").textContent = "Needs sales on the day and at least one finished day to compare against.";
+      body.innerHTML = "";
+      return;
+    }
+    const gp = vsPct(e.eplDay, e.eplNorm);
+    $("eplHead").innerHTML = `EPL <b class="${e.gap < 0 ? "neg" : "pos"}">${money2(e.eplDay)}</b> vs ${money2(e.eplNorm)} typical (${gp > 0 ? "+" : ""}${gp.toFixed(0)}%)`;
+    const driver = e.rows.filter((r) => r.id != null)[0];
+    const what = Math.abs(e.mix) >= Math.abs(e.price) ? "a shift in who is buying" : "lenders paying a different price per sale";
+    $("eplSub").innerHTML = `Earnings per sale are ${e.gap < 0 ? "down" : "up"} <b>${money2(Math.abs(e.gap))}</b> against ${esc(DATA.normLabel)} — mostly ${what}. ` +
+      (driver ? `Biggest single effect: <b>${esc(driver.name)}</b> (${signed2(driver.impact)} a sale). ` : "") +
+      `Split: mix ${signed2(e.mix)} · price ${signed2(e.price)}, which add up to the gap.`;
+    const cell = (v) => `<td class="num ${v < -0.005 ? "neg" : v > 0.005 ? "pos" : ""}">${signed2(v)}</td>`;
+    body.innerHTML = e.rows.map((r) => `<tr><td>${esc(r.name)}</td>
+      <td class="num">${rate(r.shareDay)} · ${rate(r.shareNorm)}</td>
+      <td class="num">${money2(r.priceDay)} · ${money2(r.priceNorm)}</td>
+      ${cell(r.mix)}${cell(r.price)}${cell(r.impact)}</tr>`).join("");
+  })();
+
+  // ---- pace chart -----------------------------------------------------------
+  const METRIC_SHOW = { sold: fmt, leads: fmt, value: money, epl: money2 };
+  const METRIC_NAME = { sold: "Sales", leads: "Leads in", value: "Revenue", epl: "Earnings per sale" };
+  function paceSeries(k) {
+    if (k === "epl") return [ratioPath(T.day.value, T.day.sold, true), ratioPath(T.norm.value, T.norm.sold, false)];
+    return [dayPath(T.day[k]), cum(T.norm[k])];
+  }
+  function drawPace() {
+    const k = $("paceMetric").value;
+    const [day, norm] = paceSeries(k);
+    const series = [{ name: DayWord, values: day, color: "var(--series-1)" }];
+    if (hasNorm) series.push({ name: "Typical", values: norm, color: "var(--muted)", dashed: true });
+    drawHourChart($("paceChart"), series, METRIC_SHOW[k]);
+    $("paceDayLbl").textContent = DayWord;
+    let note = normNote;
+    if (hasNorm && k !== "epl") {
+      const a = soFar(k), b = byNow(k), p = vsPct(a, b);
+      note = `${METRIC_NAME[k]}: ${METRIC_SHOW[k](a)} ${isToday && hNow < 24 ? "by " + asOfText : "for the day"}, against ${METRIC_SHOW[k](b)} typical by then` +
+        (p == null ? ". " : ` (${p > 0 ? "+" : ""}${p.toFixed(0)}%). `) + normNote;
+    }
+    $("paceNote").textContent = note;
+  }
+  $("paceMetric").addEventListener("change", drawPace);
+
+  // ---- lenders table ----------------------------------------------------------
+  // Sorts on every column; revenue, highest first, until another is picked.
+  let buyerSort = "revenue", buyerDir = -1;
+  const buyerRows = (DATA.lenders || []).filter((l) => l.sum.day.sold || l.sum.day.reached).map((l) => {
+    const s = l.sum.day, n = l.sum.norm;
+    const expectNow = hasNorm ? cumAt(l.norm.sold, hNow) : null;
+    return { l, name: l.name, sold: s.sold, revenue: s.value,
+             change: expectNow ? vsPct(s.sold, expectNow) : null,
+             rate: D.leads ? s.sold / D.leads : null, rateNorm: N.leads ? n.sold / N.leads : null,
+             accept: s.reached ? s.sold / s.reached : null, epl: s.sold ? s.value / s.sold : null };
+  });
+  function drawBuyers() {
+    const rows = [...buyerRows].sort((a, b) => {
+      const va = buyerSort === "name" ? a.name.toLowerCase() : a[buyerSort];
+      const vb = buyerSort === "name" ? b.name.toLowerCase() : b[buyerSort];
+      if (va == null && vb == null) return b.revenue - a.revenue;
+      if (va == null) return 1;
+      if (vb == null) return -1;
+      if (va < vb) return -buyerDir;
+      if (va > vb) return buyerDir;
+      return b.revenue - a.revenue;
+    });
+    $("buyerTable").querySelectorAll("th[data-sort]").forEach((th) => {
+      const on = th.dataset.sort === buyerSort && !th.classList.contains("line");
+      if (on) th.setAttribute("aria-sort", buyerDir < 0 ? "descending" : "ascending");
+      else th.removeAttribute("aria-sort");
+    });
+    $("buyerSub").textContent = rows.length
+      ? `Every lender that bought or was sent a lead ${dayWord}, from ${DATA.sourceLabel.toLowerCase()}. Change is sales against the lender's typical path by the same time. Select a heading to sort.`
+      : "No lender has been sent a lead from this population yet.";
+    const body = $("buyerTable").querySelector("tbody");
+    body.innerHTML = "";
+    for (const r of rows) {
+      const tr = document.createElement("tr");
+      const name = document.createElement("td");
+      name.innerHTML = `<span class="watch-name">${esc(r.name)}</span>`;
+      const line = document.createElement("td");
+      line.className = "line";
+      const path = dayPath(r.l.day.sold), norm = cum(r.l.norm.sold);
+      const flagged = r.change != null && r.change <= -25 && cumAt(r.l.norm.sold, hNow) >= 4;
+      line.appendChild(sparkline(hourPoints(path), flagged,
+        pathExpand({ title: `${r.name} · sales, ${dayWord}`, day: path, norm: norm, show: fmt,
+          sub: `Cumulative sales through the day. ${normNote}` })));
+      const chg = r.change == null ? "" : (flagged ? "▼ " : "") + (r.change > 0 ? "+" : "") + Math.round(r.change) + "%";
+      tr.append(name, line);
+      const cells = [[fmt(r.sold), "num watch-val"], [chg, "num " + (flagged ? "watch-drop" : "watch-chg")],
+                     [rate(r.rate), "num"], [rate(r.rateNorm), "num watch-chg"],
+                     [rate(r.accept), "num"], [money2(r.epl), "num"], [money(r.revenue), "num"]];
+      for (const [v, cls] of cells) {
+        const td = document.createElement("td");
+        td.className = cls; td.textContent = v;
+        tr.appendChild(td);
+      }
+      body.appendChild(tr);
+    }
+  }
+  $("buyerTable").querySelectorAll("th[data-sort]").forEach((th) => {
+    th.tabIndex = 0;
+    const pick = () => {
+      const key = th.dataset.sort;
+      if (key === buyerSort) buyerDir = -buyerDir;
+      else { buyerSort = key; buyerDir = key === "name" ? 1 : -1; }
+      drawBuyers();
+    };
+    th.addEventListener("click", pick);
+    th.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); }
+    });
+  });
+
+  // ---- tier pace --------------------------------------------------------------
+  const COLORS = ["var(--series-1)", "var(--series-2)", "var(--s3)", "var(--s4)", "var(--s5)", "var(--s6)", "var(--s7)", "var(--s8)"];
+  const tiers = (DATA.tiers || []).filter((t) => t.sum.day.sold).slice(0, DATA.topTiers);
+  let only = null;
+  function drawTiers() {
+    const k = $("tierMetric").value;
+    const series = [];
+    tiers.forEach((t, i) => {
+      const hidden = only != null && only !== i;
+      const label = t.lender && t.lender !== t.name ? `${t.lender} · ${t.name}` : t.name;
+      series.push({ name: label, values: dayPath(t.day[k]), color: COLORS[i], hidden });
+      if (hasNorm) series.push({ name: label + " (typical)", values: cum(t.norm[k]), color: COLORS[i], dashed: true, hidden });
+    });
+    drawHourChart($("tierChart"), series, k === "value" ? money : fmt, 300);
+    const lg = $("tierLegend");
+    lg.innerHTML = "";
+    if (!tiers.length) { lg.innerHTML = '<span class="sub">No tier has bought from this population yet.</span>'; return; }
+    tiers.forEach((t, i) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.setAttribute("aria-pressed", only == null || only === i ? "true" : "false");
+      b.innerHTML = `<i style="background:${COLORS[i]}"></i>${esc(t.lender && t.lender !== t.name ? t.lender + " · " + t.name : t.name)}`;
+      b.addEventListener("click", () => { only = only === i ? null : i; drawTiers(); });
+      lg.appendChild(b);
+    });
+  }
+  $("tierMetric").addEventListener("change", drawTiers);
+
+  // ---- theme, footer ---------------------------------------------------------
+  const themeBtn = $("themeBtn");
+  const isDark = () =>
+    document.documentElement.getAttribute("data-theme") === "dark"
+    || (!document.documentElement.hasAttribute("data-theme")
+        && matchMedia("(prefers-color-scheme: dark)").matches);
+  const syncThemeLabel = () => { themeBtn.textContent = isDark() ? "Light mode" : "Dark mode"; };
+  themeBtn.addEventListener("click", () => {
+    document.documentElement.setAttribute("data-theme", isDark() ? "light" : "dark");
+    syncThemeLabel();
+    drawAll();
+  });
+  syncThemeLabel();
+
+  $("foot").innerHTML =
+    "One population at a time: FF and external affiliate counts are never added together. " +
+    "Hours and days are Sydney time, as the API dates them. Today is read live from the ping log every ten minutes; " +
+    "yesterday is the finished day once collected. Sales and revenue exclude the Dummy test lender and DCS; test affiliates are left out of leads. " +
+    "The ping log carries each lead's identifier, used only to find the hour of its first ping and never stored.";
+
+  function drawAll() { drawPace(); drawBuyers(); drawTiers(); drawPop(); }
+  drawAll();
+  let resizeTimer = null;
+  addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(drawAll, 120); });
+  // A live page keeps itself current: reload after the next read.
+  if (isToday) setTimeout(() => location.reload(), 10 * 60 * 1000);
+})();
+</script>
+</body>
+</html>

@@ -150,6 +150,17 @@ def lenders_page(days=30):
     return dash.render(data, dash.LENDER_TEMPLATE).encode("utf-8")
 
 
+def today_page(which="today", source="external"):
+    """The day hour by hour against the norm, one population at a time:
+    today read live, or yesterday."""
+    conn = store.connect(DB_PATH)
+    try:
+        data = dash.today_payload(conn, which, source)
+    finally:
+        conn.close()
+    return dash.render(data, dash.TODAY_TEMPLATE).encode("utf-8")
+
+
 def customers_page(days=30):
     """Buyer profiles: what each lender buys against every lead
     received, every measure at once, and how its mix is moving."""
@@ -849,6 +860,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, dashboard_page(days, source))
             if path == "/lenders":
                 return self._send(200, lenders_page(days))
+            if path in ("/today", "/yesterday"):
+                source = params.get("source", "external")
+                if source not in ("external", "internal"):
+                    source = "external"
+                if path == "/today" and params.get("refresh") == "1":
+                    collector.live_in_background(DB_PATH)
+                    return self._send(303, b"", "text/plain",
+                                      {"Location": f"/today?source={source}"})
+                return self._send(200, today_page(path[1:], source))
             if path == "/customers":
                 return self._send(200, customers_page(days))
             if path == "/collection":

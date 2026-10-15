@@ -124,6 +124,8 @@ def payload(conn, days=30, source="external"):
                        "profit": r["profit"]} for r in scored],
         "trends": trend_rows,
         "trendWindow": trends.WINDOW,
+        # Google Ads, which only the internal report carries.
+        "paid": paid_acquisition(conn, days) if source == "internal" else None,
         # Which lenders bought each affiliate's leads, for its drill-down.
         "lendersByAffiliate": {aid: rows for aid, rows in
                                pair_drilldown(conn, days, "affiliate").items()
@@ -142,6 +144,56 @@ def payload(conn, days=30, source="external"):
         "accepts": accepts,
         "stage_counts": stage_counts,
     }
+
+
+# A paid-acquisition measure is flagged when the latest week is at least
+# this much below the weeks before it.
+PAID_DROP = 0.15
+
+
+def paid_acquisition(conn, days=30):
+    """FF's Google Ads: spend, what it brought in, and what is left.
+
+    From the internal report's rows. Revenue and profit are FF's own
+    across every internal source; profit is the report's, net of
+    statement cost and Ads spend. All the spend is booked to one source,
+    so this is read for FF as a whole and never per source.
+
+    Each measure is a rolling seven days with the latest week set against
+    the weeks before, as the trend tables are.
+    """
+    rows = store.ff_money_daily(conn, days)
+    if not rows or not any(r[3] for r in rows):
+        return None
+    series = [{"day": d, "revenue": rev or 0, "bs_cost": bs or 0, "spend": ads or 0,
+               "profit": prof or 0, "received": rec or 0, "sold": sold or 0}
+              for d, rev, bs, ads, prof, rec, sold in rows]
+
+    def split(field):
+        recent, before = series[-trends.WINDOW:], series[:-trends.WINDOW]
+        cur = sum(d[field] for d in recent) / len(recent) if recent else None
+        base = sum(d[field] for d in before) / len(before) if before else None
+        return cur, base
+
+    def measure(points, cur, base):
+        change = (cur - base) / abs(base) if cur is not None and base else None
+        return {"points": points, "current": cur, "baseline": base, "change": change,
+                "flag": change is not None and change <= -PAID_DROP}
+
+    out = {}
+    for field in ("spend", "revenue", "profit"):
+        cur, base = split(field)
+        out[field] = measure(trends.rolling_mean(series, field), cur, base)
+    recent, before = series[-trends.WINDOW:], series[:-trends.WINDOW]
+    r_cur = (sum(d["revenue"] for d in recent) / sum(d["spend"] for d in recent)
+             if sum(d["spend"] for d in recent) else None)
+    r_base = (sum(d["revenue"] for d in before) / sum(d["spend"] for d in before)
+              if sum(d["spend"] for d in before) else None)
+    out["roas"] = measure(trends.rolling(series, "revenue", "spend"), r_cur, r_base)
+    out["totals"] = {k: sum(d[k] for d in series) for k in
+                     ("spend", "revenue", "profit", "bs_cost", "received", "sold")}
+    out["days"] = len(series)
+    return out
 
 
 def affiliate_trends(conn, days, source):
@@ -530,3 +582,224 @@ def customer_page(conn, days=30) -> bytes:
 
 def lender_page(conn, days=30) -> bytes:
     return render(lender_payload(conn, days), LENDER_TEMPLATE).encode("utf-8")
+
+
+# ------------------------------------------------------------------ today
+
+TODAY_TEMPLATE = Path(__file__).with_name("today.html")
+
+# The norm a day is set against: the same weekday over the last eight
+# weeks when there are at least three of them, otherwise the last 28
+# finished days. Lending has a weekly shape - Saturday is not a slow
+# Monday - so a like-for-like weekday is the better yardstick once the
+# history has it. A fresh deploy rebuilds newest first, so for the first
+# hour or so the norm is the few days already back.
+NORM_WEEKDAY_MIN = 3
+NORM_WEEKDAYS = 4
+NORM_DAYS = 28
+
+# A lender is called off its usual appetite only when the gap is at
+# least this many sales and at least one standard deviation of a count
+# that size: two sales against an expected one is not news.
+MOVER_MIN = 2
+MOVERS_SHOWN = 6
+TOP_TIERS = 8
+EPL_ROWS = 8
+
+
+def _norm_days(conn, day: dt.date):
+    before = store.hour_days(conn, day.isoformat(), 120)
+    same = [d for d in before if dt.date.fromisoformat(d).weekday() == day.weekday()
+            and (day - dt.date.fromisoformat(d)).days <= 56][:NORM_WEEKDAYS]
+    if len(same) >= NORM_WEEKDAY_MIN:
+        return same, "a typical " + day.strftime("%A")
+    recent = [d for d in before if (day - dt.date.fromisoformat(d)).days <= NORM_DAYS]
+    return recent, ("a typical day" if recent else None)
+
+
+def _hours():
+    return [0] * 24
+
+
+def movers(lenders, leads_so_far, norm_leads):
+    """Lenders off their usual appetite: sold against what their norm
+    buy-rate would have bought from the leads in so far.
+
+    Expectation is scaled to the day's supply, not its clock: a lender
+    buying its usual share of fewer leads is not pulling back.
+    """
+    out = []
+    if not leads_so_far or not norm_leads:
+        return out
+    for r in lenders:
+        n_sold = r["sum"]["norm"]["sold"]
+        rate_norm = n_sold / norm_leads
+        expected = rate_norm * leads_so_far
+        sold = r["sum"]["day"]["sold"]
+        gap = sold - expected
+        if abs(gap) < MOVER_MIN or abs(gap) < max(expected, 1) ** 0.5:
+            continue
+        out.append({"id": r["id"], "name": r["name"], "sold": sold,
+                    "expected": round(expected, 1), "gap": round(gap, 1),
+                    "rate": sold / leads_so_far, "rateNorm": rate_norm})
+    out.sort(key=lambda m: m["gap"])
+    return out
+
+
+def epl_breakdown(lenders):
+    """Why earnings per sale differ from the norm, lender by lender.
+
+    EPL is the share-weighted average of each lender's price, so the gap
+    splits exactly into mix - a lender taking a bigger or smaller share
+    of the sales, valued at its usual price - and price - a lender paying
+    more or less per sale than usual, at today's share:
+
+        mix   = (share_today - share_norm) * price_norm
+        price = share_today * (price_today - price_norm)
+
+    Summed over every lender, mix + price is the whole gap. A lender new
+    to the day is priced at its own price both ways, so it lands in mix.
+    """
+    sold_t = sum(r["sum"]["day"]["sold"] for r in lenders)
+    sold_n = sum(r["sum"]["norm"]["sold"] for r in lenders)
+    if not sold_t or not sold_n:
+        return None
+    rows = []
+    for r in lenders:
+        st, sn = r["sum"]["day"]["sold"], r["sum"]["norm"]["sold"]
+        vt, vn = r["sum"]["day"]["value"], r["sum"]["norm"]["value"]
+        pt = vt / st if st else None
+        pn = vn / sn if sn else pt
+        share_t, share_n = st / sold_t, sn / sold_n
+        mix = (share_t - share_n) * (pn or 0)
+        price = share_t * ((pt or 0) - (pn or 0)) if st else 0.0
+        rows.append({"id": r["id"], "name": r["name"], "shareDay": share_t,
+                     "shareNorm": share_n, "priceDay": pt, "priceNorm": pn if sn else None,
+                     "mix": mix, "price": price, "impact": mix + price})
+    epl_t = sum(r["sum"]["day"]["value"] for r in lenders) / sold_t
+    epl_n = sum(r["sum"]["norm"]["value"] for r in lenders) / sold_n
+    rows.sort(key=lambda r: -abs(r["impact"]))
+    shown, rest = rows[:EPL_ROWS], rows[EPL_ROWS:]
+    if rest:
+        shown.append({"id": None, "name": f"Everyone else ({len(rest)})",
+                      "shareDay": sum(r["shareDay"] for r in rest),
+                      "shareNorm": sum(r["shareNorm"] for r in rest),
+                      "priceDay": None, "priceNorm": None,
+                      "mix": sum(r["mix"] for r in rest), "price": sum(r["price"] for r in rest),
+                      "impact": sum(r["impact"] for r in rest)})
+    return {"eplDay": epl_t, "eplNorm": epl_n, "gap": epl_t - epl_n,
+            "mix": sum(r["mix"] for r in rows), "price": sum(r["price"] for r in rows),
+            "rows": shown}
+
+
+def today_payload(conn, which="today", source="external"):
+    """The Today and Yesterday pages: one day hour by hour against the
+    norm, for one population. The day is `which` - today, still being
+    read live, or yesterday."""
+    today = store.business_today()
+    day = today if which == "today" else today - dt.timedelta(days=1)
+    iso = day.isoformat()
+    meta = store.hour_meta(conn, iso)
+    norm_days, norm_label = _norm_days(conn, day)
+    leads_rows, sales_rows = store.hour_rows(conn, [iso] + norm_days, source)
+
+    tiers = {r[0]: {"tier": r[1], "lender_id": r[2], "lender": r[3]} for r in conn.execute(
+        "SELECT lender_tier_id, lender_tier_name, lender_id, lender_name FROM lender_tier")}
+    affiliates = {r[0]: r[1] for r in conn.execute("SELECT affiliate_id, name FROM affiliate")}
+
+    n_norm = len(norm_days) or 1
+
+    def blank():
+        return {"leads": _hours(), "soldLeads": _hours(), "sold": _hours(), "value": _hours(),
+                "reached": _hours()}
+
+    total = {"day": blank(), "norm": blank()}
+    lenders, tier_rows, affs = {}, {}, {}
+
+    def bucket(table, key, name_fn):
+        b = table.get(key)
+        if b is None:
+            b = table[key] = {"day": blank(), "norm": blank(), "name": name_fn()}
+        return b
+
+    for d, h, aid, n, n_sold in leads_rows:
+        side = "day" if d == iso else "norm"
+        w = 1 if side == "day" else 1 / n_norm
+        for b in (total, bucket(affs, aid, lambda: affiliates.get(aid) or f"Affiliate {aid}")):
+            b[side]["leads"][h] += n * w
+            b[side]["soldLeads"][h] += n_sold * w
+    for d, h, aid, lid, tid, reached, sold, value in sales_rows:
+        side = "day" if d == iso else "norm"
+        w = 1 if side == "day" else 1 / n_norm
+        info = tiers.get(tid, {})
+        lname = (info.get("lender") or "").strip() or info.get("tier") or f"Lender {lid}"
+        for b in (total, bucket(lenders, lid, lambda: lname),
+                  bucket(tier_rows, tid, lambda: (info.get("tier") or f"Tier {tid}")),
+                  bucket(affs, aid, lambda: affiliates.get(aid) or f"Affiliate {aid}")):
+            b[side]["reached"][h] += reached * w
+            b[side]["sold"][h] += sold * w
+            b[side]["value"][h] += value * w
+        tier_rows[tid]["lender"] = lname
+
+    def rounded(b):
+        return {side: {k: [round(v, 3) for v in arr] for k, arr in b[side].items()}
+                for side in ("day", "norm")}
+
+    def summary(b):
+        out = {}
+        for side in ("day", "norm"):
+            out[side] = {k: round(sum(arr), 2) for k, arr in b[side].items()}
+        return out
+
+    def entity_list(table, limit=None, key="value"):
+        rows = []
+        for eid, b in table.items():
+            s = summary(b)
+            if not (s["day"]["sold"] or s["norm"]["sold"] or s["day"]["leads"]):
+                continue
+            rows.append({"id": eid, "name": b["name"], "lender": b.get("lender"),
+                         "sum": s, **rounded(b)})
+        rows.sort(key=lambda r: (-r["sum"]["day"][key], -r["sum"]["norm"][key]))
+        return rows[:limit] if limit else rows
+
+    # FF money: Google Ads spend beside what it bought. The day's own,
+    # and the norm days' pooled, from the internal report.
+    ff = None
+    if source == "internal":
+        cur = store.ff_money(conn, iso)
+        pooled = {"revenue": 0.0, "adword_spent": 0.0, "profit": 0.0, "bs_cost": 0.0}
+        counted = 0
+        for d in norm_days:
+            m = store.ff_money(conn, d)
+            if m and not m["live"]:
+                counted += 1
+                for k in pooled:
+                    pooled[k] += m[k] or 0
+        ff = {"day": cur, "norm": ({k: v / counted for k, v in pooled.items()}
+                                   if counted else None)}
+
+    lender_rows = entity_list(lenders)
+    day_sum, norm_sum = summary(total)["day"], summary(total)["norm"]
+    return {
+        "page": which,
+        "date": iso,
+        "weekday": day.strftime("%A"),
+        "today": today.isoformat(),
+        "meta": meta,
+        "normDays": norm_days,
+        "normLabel": norm_label,
+        "source": source,
+        "sourceLabel": SOURCE_LABELS.get(source, source),
+        "total": rounded(total),
+        "lenders": lender_rows,
+        "movers": movers(lender_rows, day_sum["leads"], norm_sum["leads"]),
+        "epl": epl_breakdown(lender_rows),
+        "tiers": entity_list(tier_rows, TOP_TIERS * 3, key="sold"),
+        "affiliates": entity_list(affs),
+        "ff": ff,
+        "moverMin": MOVER_MIN,
+        "moversShown": MOVERS_SHOWN,
+        "topTiers": TOP_TIERS,
+        "eplRows": EPL_ROWS,
+        "generatedUtc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+    }
