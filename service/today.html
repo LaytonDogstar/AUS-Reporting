@@ -139,7 +139,7 @@
           <option value="epl">Earnings per sale</option>
         </select>
       </div>
-      <div class="legend"><span><i style="background:var(--series-1)"></i><span id="paceDayLbl">Today</span></span><span><i style="background:var(--muted)"></i>Typical (dashed)</span></div>
+      <div class="legend"><span><i style="background:var(--series-1)"></i><span id="paceDayLbl">Today</span> so far</span><span><i style="background:var(--muted)"></i>Typical so far (dashed)</span><span><i style="background:var(--series-2)"></i>Each hour, and typical hour (dashed) — right-hand axis for counts</span></div>
       <svg id="paceChart" role="img" aria-label="Cumulative through the day against the typical path"></svg>
       <p class="fine" style="margin:8px 0 0" id="paceNote"></p>
     </section>
@@ -194,6 +194,7 @@
     <button class="ghost" id="popClose" type="button">Close</button>
   </div>
   <p id="popSub"></p>
+  <div class="legend" id="popLegend"><span><i style="background:var(--series-1)"></i>So far</span><span><i style="background:var(--muted)"></i>Typical so far (dashed)</span><span><i style="background:var(--series-2)"></i>Each hour</span><span><i style="background:var(--series-2);opacity:.5"></i>Typical hour (dashed)</span><span style="color:var(--muted)">Counts per hour read off the right-hand axis</span></div>
   <svg id="popChart" role="img" aria-label="Expanded chart"></svg>
   <div class="pop-grid" id="popGrid"></div>
 </dialog>
@@ -306,29 +307,44 @@ const DATA = /*__DASHBOARD_DATA__*/null;
 
   // ---- hour chart: the day against the typical path -------------------
   // series: [{name, values (24, null where not reached), color, dashed}]
-  function drawHourChart(svg, series, show, H = 260) {
+  // series: [{name, values (24, null where not reached), color, dashed,
+  //           axis: "right" for per-hour counts on their own scale,
+  //           dots: true to mark each hour}]
+  // `show` formats the left axis; `showRight`, the right one.
+  function drawHourChart(svg, series, show, H = 260, showRight = show) {
     svg.innerHTML = "";
     const W = svg.clientWidth || 600;
     svg.setAttribute("height", H);
-    const m = { t: 12, r: 14, b: 26, l: 58 };
+    const hasRight = series.some((s) => s.axis === "right" && !s.hidden);
+    const m = { t: 12, r: hasRight ? 52 : 14, b: 26, l: 58 };
     const iw = W - m.l - m.r, ih = H - m.t - m.b;
-    const vals = series.flatMap((s) => s.values).filter((v) => v != null && isFinite(v));
-    if (!vals.length) {
+    const finite = (list) => list.flatMap((s) => s.values).filter((v) => v != null && isFinite(v));
+    const vals = finite(series.filter((s) => s.axis !== "right" && !s.hidden));
+    const rvals = finite(series.filter((s) => s.axis === "right" && !s.hidden));
+    if (!vals.length && !rvals.length) {
       const t = el("text", { x: m.l, y: m.t + 20, class: "tick" }, svg);
       t.textContent = "Nothing to draw yet.";
       return;
     }
-    const top = Math.max(...vals) * 1.06 || 1;
-    const raw = top / 4, mag = Math.pow(10, Math.floor(Math.log10(raw)));
-    const step = [1, 2, 2.5, 5, 10].map((f) => f * mag).find((v) => v >= raw);
-    const max = step * 4;
+    const niceMax = (list) => {
+      const top = Math.max(0, ...list) * 1.06 || 1;
+      const raw = top / 4, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+      return [1, 2, 2.5, 5, 10].map((f) => f * mag).find((v) => v >= raw) * 4;
+    };
+    const max = niceMax(vals), rmax = hasRight ? niceMax(rvals) : 1;
     const x = (i) => m.l + (i / 23) * iw;
     const y = (v) => m.t + ih - (v / max) * ih;
+    const yr = (v) => m.t + ih - (v / rmax) * ih;
     for (let i = 0; i <= 4; i++) {
-      const v = (max / 4) * i, yy = y(v);
+      const yy = y((max / 4) * i);
       el("line", { x1: m.l, x2: m.l + iw, y1: yy, y2: yy, class: "gridline" }, svg);
       const t = el("text", { x: m.l - 6, y: yy + 4, class: "tick num", "text-anchor": "end" }, svg);
-      t.textContent = show(v);
+      t.textContent = show((max / 4) * i);
+      if (hasRight) {
+        const r = el("text", { x: m.l + iw + 6, y: yy + 4, class: "tick num", "text-anchor": "start",
+                               fill: "var(--series-2)" }, svg);
+        r.textContent = showRight((rmax / 4) * i);
+      }
     }
     for (let h = 0; h < 24; h += (W < 520 ? 6 : 3)) {
       const t = el("text", { x: x(h), y: H - 6, class: "tick", "text-anchor": h ? "middle" : "start" }, svg);
@@ -340,16 +356,21 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     }
     for (const s of series) {
       if (s.hidden) continue;
+      const yy = s.axis === "right" ? yr : y;
       let d = "";
-      s.values.forEach((v, i) => { if (v != null && isFinite(v)) d += (d ? "L" : "M") + x(i) + "," + y(v); });
+      s.values.forEach((v, i) => { if (v != null && isFinite(v)) d += (d ? "L" : "M") + x(i) + "," + yy(v); });
       if (!d) continue;
-      el("path", { d, fill: "none", stroke: s.color, "stroke-width": s.dashed ? 1.6 : 2.2,
-                   "stroke-dasharray": s.dashed ? "5 4" : "none", opacity: s.dashed ? 0.85 : 1,
+      const thin = s.axis === "right" || s.dots;
+      el("path", { d, fill: "none", stroke: s.color, "stroke-width": thin ? 1.5 : s.dashed ? 1.6 : 2.2,
+                   "stroke-dasharray": s.dashed ? "5 4" : "none", opacity: s.dashed ? 0.8 : 1,
                    "stroke-linejoin": "round", "stroke-linecap": "round" }, svg);
-      if (!s.dashed) {
+      if (s.dots && !s.dashed) {
+        s.values.forEach((v, i) => { if (v != null && isFinite(v))
+          el("circle", { cx: x(i), cy: yy(v), r: 2.2, fill: s.color }, svg); });
+      } else if (!s.dashed) {
         let li = s.values.length - 1;
         while (li >= 0 && s.values[li] == null) li--;
-        if (li >= 0) el("circle", { cx: x(li), cy: y(s.values[li]), r: 3.5, fill: s.color,
+        if (li >= 0) el("circle", { cx: x(li), cy: yy(s.values[li]), r: 3.5, fill: s.color,
                                     stroke: "var(--surface)", "stroke-width": 1.5 }, svg);
       }
     }
@@ -359,9 +380,11 @@ const DATA = /*__DASHBOARD_DATA__*/null;
       const box = svg.getBoundingClientRect();
       const i = Math.max(0, Math.min(23, Math.round(((e.clientX - box.left - m.l) / iw) * 23)));
       cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("opacity", 1);
-      const rows = series.filter((s) => !s.hidden).map((s) =>
-        `<div class="row"><span>${esc(s.name)}</span><span>${s.values[i] == null ? "—" : show(s.values[i])}</span></div>`).join("");
-      showTip(e, `<b>By the end of ${hourLabel(i)}</b>${rows}`);
+      const rows = series.filter((s) => !s.hidden).map((s) => {
+        const fmtV = s.axis === "right" ? showRight : show;
+        return `<div class="row"><span>${esc(s.name)}</span><span>${s.values[i] == null ? "—" : fmtV(s.values[i])}</span></div>`;
+      }).join("");
+      showTip(e, `<b>${hourLabel(i)} – ${hourLabel((i + 1) % 24)}</b>${rows}`);
     });
     hit.addEventListener("mouseleave", () => { cross.setAttribute("opacity", 0); hideTip(); });
   }
@@ -373,6 +396,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
   function drawPop() {
     if (!popChart) return;
     const grid = $("popGrid"), one = $("popChart");
+    $("popLegend").classList.toggle("hidden", !popChart.panels);
     if (!popChart.panels) {
       grid.innerHTML = ""; one.classList.remove("hidden");
       drawHourChart(one, popChart.series, popChart.show, 360);
@@ -436,21 +460,34 @@ const DATA = /*__DASHBOARD_DATA__*/null;
         const now = sum(b.day[den]) ? sum(b.day[num]) / sum(b.day[den]) : null;
         const typ = sum(b.norm[den]) ? sum(b.norm[num]) / sum(b.norm[den]) : null;
         return panel(name, ratioPath(b.day[num], b.day[den], true), ratioPath(b.norm[num], b.norm[den], false),
-                     show, now, typ, false);
+                     show, now, typ, false,
+                     hourRatio(b.day[num], b.day[den], true), hourRatio(b.norm[num], b.norm[den], false));
       }
       return panel(name, dayPath(b.day[num]), cum(b.norm[num]), SHOW_FOR[num],
-                   sum(b.day[num]), cumAt(b.norm[num], hNow), true);
+                   sum(b.day[num]), cumAt(b.norm[num], hNow), true,
+                   hourOnly(b.day[num], true), b.norm[num]);
     });
     if (first) out.sort((a, b2) => (b2.name === first) - (a.name === first));
     return out;
   }
-  function panel(name, day, norm, show, now, typ, cumulative) {
-    const series = [{ name: DayWord, values: day, color: "var(--series-1)" }];
-    if (hasNorm) series.push({ name: "Typical", values: norm, color: "var(--muted)", dashed: true });
+  // Each hour on its own, beside the running figure, as the US view has
+  // it: a count per hour, or a ratio taken over that hour alone.
+  const hourOnly = (a, cut) => a.map((v, i) => (cut && i > lastHour ? null : v));
+  const hourRatio = (num, den, cut) => num.map((v, i) => ((cut && i > lastHour) || !den[i] ? null : v / den[i]));
+  function withHours(series, dayHour, normHour, ratio) {
+    const axis = ratio ? undefined : "right";
+    series.push({ name: "This hour", values: dayHour, color: "var(--series-2)", dots: true, axis });
+    if (hasNorm) series.push({ name: "Typical hour", values: normHour, color: "var(--series-2)", dashed: true, axis });
+    return series;
+  }
+  function panel(name, day, norm, show, now, typ, cumulative, dayHour, normHour) {
+    const series = [{ name: cumulative ? "So far" : "Running", values: day, color: "var(--series-1)" }];
+    if (hasNorm) series.push({ name: cumulative ? "Typical so far" : "Typical running", values: norm, color: "var(--muted)", dashed: true });
+    if (dayHour) withHours(series, dayHour, normHour, !cumulative);
     return { name, series, show, now, typ, cumulative,
              change: hasNorm && typ ? (now / typ - 1) * 100 : null };
   }
-  const panelNote = "Counts run cumulative through the day and are compared with the typical day by the same time; ratios run through the day and are compared with the typical whole-day figure. ";
+  const panelNote = "Each chart has the running figure and each hour on its own, both against the typical day. Counts are compared with the typical day by the same time; ratios with the typical whole-day figure." + (isToday ? " The current hour is still filling. " : " ");
   const normNote = hasNorm
     ? `Dashed is ${DATA.normLabel}: the average of ${DATA.normDays.length} finished day${DATA.normDays.length > 1 ? "s" : ""} (${DATA.normDays.slice(-1)[0]} to ${DATA.normDays[0]}). Hours are Sydney time.`
     : "No finished days are stored yet to set a typical path against. Hours are Sydney time.";
@@ -670,9 +707,11 @@ const DATA = /*__DASHBOARD_DATA__*/null;
   function drawPace() {
     const k = $("paceMetric").value;
     const [day, norm] = paceSeries(k);
-    const series = [{ name: DayWord, values: day, color: "var(--series-1)" }];
-    if (hasNorm) series.push({ name: "Typical", values: norm, color: "var(--muted)", dashed: true });
-    drawHourChart($("paceChart"), series, METRIC_SHOW[k]);
+    const series = [{ name: "So far", values: day, color: "var(--series-1)" }];
+    if (hasNorm) series.push({ name: "Typical so far", values: norm, color: "var(--muted)", dashed: true });
+    if (k === "epl") withHours(series, hourRatio(T.day.value, T.day.sold, true), hourRatio(T.norm.value, T.norm.sold, false), true);
+    else withHours(series, hourOnly(T.day[k], true), T.norm[k], false);
+    drawHourChart($("paceChart"), series, METRIC_SHOW[k], 300);
     $("paceDayLbl").textContent = DayWord;
     let note = normNote;
     if (hasNorm && k !== "epl") {
