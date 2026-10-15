@@ -273,6 +273,20 @@ CREATE TABLE IF NOT EXISTS affiliate_result_day (
 );
 CREATE INDEX IF NOT EXISTS ard_date ON affiliate_result_day(business_date);
 
+-- The ping log a third way: per affiliate, lender and status. Which
+-- lenders buy a source's leads, and which sources a lender buys from.
+CREATE TABLE IF NOT EXISTS affiliate_lender_day (
+    business_date TEXT NOT NULL,
+    affiliate_id INTEGER NOT NULL,
+    lender_id INTEGER NOT NULL,
+    status_id INTEGER NOT NULL,
+    pings INTEGER NOT NULL,
+    cost REAL,
+    collected_at TEXT NOT NULL,
+    PRIMARY KEY (business_date, affiliate_id, lender_id, status_id)
+);
+CREATE INDEX IF NOT EXISTS ald_date ON affiliate_lender_day(business_date);
+
 -- The tier lookup, from LenderTiers. A snapshot, replaced whole on each
 -- collection: it is what puts names on the ping log, whose rows carry
 -- ids alone. The endpoint also returns a lender contact email, a logo
@@ -307,10 +321,27 @@ def connect(path: str) -> sqlite3.Connection:
     conn.execute("PRAGMA busy_timeout=30000")
     _migrate_affiliate_source(conn)
     _migrate_quality_affiliate_result(conn)
+    pairs_new = not _has_table(conn, "affiliate_lender_day")
     conn.executescript(SCHEMA)
+    if pairs_new:
+        _recollect_ping_log(conn)
     _migrate_metric_names(conn)
     _migrate_affiliate_id(conn)
     return conn
+
+
+def _has_table(conn, name):
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                        (name,)).fetchone() is not None
+
+
+def _recollect_ping_log(conn):
+    """The affiliate-by-lender counts come from the ping log, so days
+    collected before they existed have none. Marking the ping log
+    uncollected for those days gets them refetched by the next pass -
+    and nothing else, because collection skips what is already done."""
+    with conn:
+        conn.execute("DELETE FROM collection WHERE kind='lender_results'")
 
 
 def _migrate_affiliate_id(conn):
@@ -560,6 +591,18 @@ def save_lender_results(conn, business_date, counts, meta, collected_at):
             "INSERT OR REPLACE INTO lender_result_day_meta (business_date, pings, leads,"
             " applications, collected_at) VALUES (?,?,?,?,?)",
             (business_date, meta["pings"], meta["leads"], meta["applications"], collected_at))
+
+
+def save_affiliate_lender_results(conn, business_date, counts, collected_at):
+    """counts: {(affiliate_id, lender_id, status_id): (pings, cost)}"""
+    with conn:
+        conn.execute("DELETE FROM affiliate_lender_day WHERE business_date=?",
+                     (business_date,))
+        conn.executemany(
+            "INSERT INTO affiliate_lender_day (business_date, affiliate_id, lender_id,"
+            " status_id, pings, cost, collected_at) VALUES (?,?,?,?,?,?,?)",
+            [(business_date, aff, lender, status, pings, cost, collected_at)
+             for (aff, lender, status), (pings, cost) in sorted(counts.items())])
 
 
 def save_affiliate_lookup(conn, rows, collected_at):
@@ -894,3 +937,29 @@ def lender_demographics(conn, metric, days=30):
 def lender_demographic_metrics(conn):
     return [r[0] for r in conn.execute(
         "SELECT DISTINCT metric FROM quality_tier_day ORDER BY metric")]
+
+
+def affiliate_lender_daily(conn, days=30):
+    """[(day, affiliate_id, lender_id, offered, passed, sold, value)].
+
+    Offered is every ping; passed the filters is sold, declined or
+    errored - the lender report's `sent`; value is the list price of
+    what sold, which is what the lender paid. Test affiliates and test
+    lenders are left out.
+    """
+    ids = ",".join(str(i) for i in TEST_LENDER_IDS)
+    return conn.execute(
+        "SELECT business_date, affiliate_id, lender_id, SUM(pings),"
+        " SUM(CASE WHEN status_id IN (1,2,3) THEN pings ELSE 0 END),"
+        " SUM(CASE WHEN status_id=1 THEN pings ELSE 0 END),"
+        " SUM(CASE WHEN status_id=1 THEN cost ELSE 0 END)"
+        " FROM affiliate_lender_day WHERE business_date >= ?" + _not_test() +
+        f" AND lender_id NOT IN ({ids})"
+        " GROUP BY business_date, affiliate_id, lender_id",
+        (business_cutoff(days),)).fetchall()
+
+
+def lender_names(conn):
+    """{lender_id: name} from the tier lookup."""
+    return {r[0]: (r[1] or "").strip() or f"Lender {r[0]}" for r in conn.execute(
+        "SELECT lender_id, MAX(lender_name) FROM lender_tier GROUP BY lender_id")}

@@ -244,3 +244,64 @@ class Page(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WhoBoughtFromWhom(unittest.TestCase):
+    """The ping log counted per affiliate and lender, for the drill-down
+    each way round: which lenders bought an affiliate's leads, and whose
+    leads a lender bought."""
+
+    def setUp(self):
+        self.conn = store.connect(":memory:")
+        self.addCleanup(self.conn.close)
+        store.save_lender_lookup(self.conn, [lookup(1, "Big T1", 10, "Big"),
+                                             lookup(85, "Dummy Buyer", 24, "Dummy")], STAMP)
+        store.save_affiliate_lookup(self.conn, [
+            {"id": 59, "name": "Borrowly", "group_name": "G", "is_internal": False,
+             "is_active": True, "commission_type": None, "commission_value": None},
+            {"id": 194, "name": "FF SEO", "group_name": "FF", "is_internal": True,
+             "is_active": True, "commission_type": None, "commission_value": None}], STAMP)
+
+    def test_the_reduction_keeps_no_lead_identifier(self):
+        pairs = collector.reduce_affiliate_lender_results([
+            {"AffiliateId": 59, "LenderId": 10, "StatusId": 1, "Cost": 50.0,
+             "LeadId": "abc", "LeadApplicationId": "def"},
+            {"AffiliateId": 59, "LenderId": 10, "StatusId": 0, "Cost": 50.0}])
+        self.assertEqual(pairs, {(59, 10, 1): (1, 50.0), (59, 10, 0): (1, 50.0)})
+
+    def test_offered_passed_bought_and_what_sold_was_worth(self):
+        for i in range(1, 15):
+            store.save_affiliate_lender_results(self.conn, day(i), {
+                (59, 10, 0): (80, 4000.0),       # filtered out
+                (59, 10, 2): (15, 750.0),        # declined
+                (59, 10, 1): (5, 250.0),         # sold
+                (194, 10, 1): (2, 100.0),
+                (13, 10, 1): (9, 0.0),           # a test affiliate
+                (59, 24, 1): (9, 0.0),           # the Dummy lender
+            }, STAMP)
+        by_affiliate = dash.pair_drilldown(self.conn, 30, "affiliate")
+        self.assertEqual(set(by_affiliate), {"59", "194"})
+        row = by_affiliate["59"][0]
+        self.assertEqual((row["name"], row["offered"], row["passed"], row["sold"]),
+                         ("Big", 100 * 14, 20 * 14, 5 * 14))
+        self.assertAlmostEqual(row["value"], 250.0 * 14)   # only the sold rows are money
+        self.assertAlmostEqual(row["acceptance"]["current"], 0.25)
+        self.assertAlmostEqual(row["bought"]["points"][-1][1], 5.0)
+
+        by_lender = dash.pair_drilldown(self.conn, 30, "lender")
+        self.assertEqual(set(by_lender), {"10"})
+        names = [(r["name"], r["internal"]) for r in by_lender["10"]]
+        self.assertEqual(names, [("Borrowly", False), ("FF SEO", True)])
+        self.assertAlmostEqual(sum(r["share"] for r in by_lender["10"]), 1.0)
+
+    def test_days_collected_before_the_cross_existed_are_refetched(self):
+        path = str(Path(self.enterContext(tempfile.TemporaryDirectory())) / "old.db")
+        conn = store.connect(path)
+        conn.execute("DROP TABLE affiliate_lender_day")
+        store.mark(conn, "2026-10-01", "lender_results", "ok")
+        store.mark(conn, "2026-10-01", "tiers", "ok")
+        conn.commit(); conn.close()
+        conn = store.connect(path)
+        self.addCleanup(conn.close)
+        self.assertNotIn("2026-10-01", store.collected_days(conn, "lender_results"))
+        self.assertIn("2026-10-01", store.collected_days(conn, "tiers"))

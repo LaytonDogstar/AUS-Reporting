@@ -64,6 +64,20 @@ def rolling(days, num, den, window=WINDOW):
     return out
 
 
+def rolling_mean(days, field, window=WINDOW):
+    """[(day, per-day average)] over the `window` days ending that day -
+    a volume trend that a quiet Sunday does not throw about."""
+    out = []
+    for i in range(window - 1, len(days)):
+        span = days[i - window + 1:i + 1]
+        out.append((days[i]["day"], sum(d[field] or 0 for d in span) / window))
+    return out
+
+
+# What a lender does with one source's leads.
+PAIR_MEASURES = {"acceptance": ("sold", "passed")}
+
+
 def assess(days, measure, window=WINDOW, measures=MEASURES):
     """The latest week against everything before it in the window.
 

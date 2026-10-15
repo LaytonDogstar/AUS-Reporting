@@ -312,6 +312,27 @@ def reduce_affiliate_results(items):
             for k, (pings, cost) in counts.items()}
 
 
+def reduce_affiliate_lender_results(items):
+    """The ping log counted a third way: per affiliate, lender and
+    status. What says which lenders buy a source's leads, and from
+    which sources a lender buys. {(affiliate, lender, status): (pings,
+    cost)} - no distinct counts, because nothing reads them per pair.
+
+    Per lender rather than per tier: tiers would multiply the rows by
+    three for a question asked about lenders.
+    """
+    counts: dict[tuple[int, int, int], list] = {}
+    for it in items:
+        key = (int(_num(it, "AffiliateId")), int(_num(it, "LenderId")),
+               int(_num(it, "StatusId")))
+        row = counts.get(key)
+        if row is None:
+            row = counts[key] = [0, 0.0]
+        row[0] += 1
+        row[1] += float(_num(it, "Cost") or 0)
+    return {k: (pings, round(cost, 2)) for k, (pings, cost) in counts.items()}
+
+
 def reduce_quality_bands(items):
     """Bands and the lender result, without the cardinality guards the
     population reduction needs. Rows in, counts out.
@@ -486,9 +507,11 @@ def _store_lender_results(conn, iso, payload, ms, stamp):
     counts, meta = reduce_lender_results(data)
     items = data if isinstance(data, list) else (data.get("Items") or [])
     by_affiliate = reduce_affiliate_results(items)
+    pairs = reduce_affiliate_lender_results(items)
     del data, items                             # rows do not outlive this call
     store.save_lender_results(conn, iso, counts, meta, stamp)
     store.save_affiliate_results(conn, iso, by_affiliate, stamp)
+    store.save_affiliate_lender_results(conn, iso, pairs, stamp)
     return (f"{meta['pings']:,} ping(s) -> {len(counts)} count(s), "
             f"{meta['applications']:,} application(s)")
 
@@ -773,7 +796,7 @@ def reset(conn):
                       "quality_day_meta", "affiliate_day", "affiliate_totals_day",
                       "lender_result_day", "lender_result_day_meta",
                       "affiliate_result_day", "quality_affiliate_day",
-                      "quality_tier_day", "collection"):
+                      "quality_tier_day", "affiliate_lender_day", "collection"):
             conn.execute(f"DELETE FROM {table}")
 
 

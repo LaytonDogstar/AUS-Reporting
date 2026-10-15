@@ -37,7 +37,7 @@
     <h2>Lender trends</h2>
     <p class="sub" id="watchSub"></p>
     <div class="scroll">
-    <table id="watchTable">
+    <table id="watchTable" class="trend-table">
       <thead>
         <tr>
           <th rowspan="2" data-sort="name">Lender</th>
@@ -96,6 +96,32 @@
         <th>Tier</th><th>List price</th><th>Offered</th><th>Passed filters</th>
         <th>Accepted</th><th>Redirected</th><th>Revenue</th>
       </tr></thead>
+      <tbody></tbody>
+    </table>
+    </div>
+    <h3 style="font-size:13px;margin:22px 0 2px">Affiliates whose leads it bought</h3>
+    <p class="sub" id="pairSub">From the ping log: every affiliate whose leads this lender was offered over the loaded window. FF marks an internal source.</p>
+    <div class="scroll">
+    <table id="pairTable" class="trend-table">
+      <thead>
+        <tr>
+          <th rowspan="2" data-sort="name">Affiliate</th>
+          <th rowspan="2" data-sort="offered">Offered</th>
+          <th rowspan="2" data-sort="passed">Passed filters</th>
+          <th rowspan="2" data-sort="sold">Bought</th>
+          <th rowspan="2" data-sort="share">Share of sales</th>
+          <th rowspan="2" data-sort="value">Revenue</th>
+          <th class="grp" colspan="2">Bought per day</th>
+          <th class="grp" colspan="3">Acceptance</th>
+        </tr>
+        <tr>
+          <th class="sub line" data-sort="bought:current">Trend</th>
+          <th class="sub" data-sort="bought:current" title="Average over the latest seven days">Latest</th>
+          <th class="sub line" data-sort="acceptance:current">Trend</th>
+          <th class="sub" data-sort="acceptance:current" title="The latest seven days">Latest</th>
+          <th class="sub" data-sort="acceptance:change">Change</th>
+        </tr>
+      </thead>
       <tbody></tbody>
     </table>
     </div>
@@ -379,6 +405,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     const card = $("detailCard");
     const r = byId.get(lender);
     if (!r) { card.classList.add("hidden"); return; }
+    drawPairs();
     card.classList.remove("hidden");
     $("detailTitle").textContent = r.name;
     $("detailSub").textContent = `${fmt(r.processed)} offered · ${fmt(r.sent)} passed filters · ` +
@@ -504,7 +531,9 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     const cur = e.current == null ? "—" : e.show(e.current);
     const base = e.baseline == null ? "—" : e.show(e.baseline);
     const chg = e.change == null ? "" : ` (${e.change > 0 ? "+" : ""}${Math.round(100 * e.change)}%)`;
-    $("popSub").textContent = `Rolling seven days. Latest week ${cur}, earlier weeks ${base}${chg}.` +
+    $("popSub").textContent = (e.baseline == null
+      ? `Rolling seven days. Latest week ${cur}.`
+      : `Rolling seven days. Latest week ${cur}, earlier weeks ${base}${chg}.`) +
       (e.flagged ? " Flagged as a drop." : "");
     pop.appendChild(tip);               // the pop-up sits above the page, so its tooltip must too
     pop.showModal();
@@ -513,6 +542,119 @@ const DATA = /*__DASHBOARD_DATA__*/null;
   pop.addEventListener("close", () => { popChart = null; hideTip(); document.body.appendChild(tip); });
   pop.addEventListener("click", (evt) => { if (evt.target === pop) pop.close(); });
   $("popClose").addEventListener("click", () => pop.close());
+
+
+  // ---- drill-down: who bought from whom ------------------------------
+  // From the ping log: per affiliate, what was offered, what passed the
+  // filters, what was bought, and two trend lines - bought per day and
+  // acceptance. Sorts on every column; revenue, highest first, until
+  // another is picked.
+  let pairSort = "value", pairDir = -1;
+  const lastPoint = (pts) => {
+    for (let i = pts.length - 1; i >= 0; i--) if (pts[i][1] != null) return pts[i][1];
+    return null;
+  };
+  const perDay = (v) => (v == null ? "—" : v.toFixed(1));
+  function pairValue(r, key) {
+    if (key === "name") return r.name.toLowerCase();
+    if (!key.includes(":")) return r[key];
+    const [measure, field] = key.split(":");
+    const m = r[measure];
+    if (!m.enoughToTrend) return null;
+    return field === "current" && measure === "bought" ? lastPoint(m.points) : m[field];
+  }
+  function drawPairs() {
+    const owner = byId.get(lender) || null;
+    const rows = owner ? [...((DATA.affiliatesByLender || {})[lender] || [])] : [];
+    rows.sort((a, b) => {
+      const va = pairValue(a, pairSort), vb = pairValue(b, pairSort);
+      if (va == null && vb == null) return b.value - a.value;
+      if (va == null) return 1;
+      if (vb == null) return -1;
+      if (va < vb) return -pairDir;
+      if (va > vb) return pairDir;
+      return b.value - a.value;
+    });
+    $("pairTable").querySelectorAll("th[data-sort]").forEach((th) => {
+      const on = th.dataset.sort === pairSort && !th.classList.contains("line");
+      if (on) th.setAttribute("aria-sort", pairDir < 0 ? "descending" : "ascending");
+      else th.removeAttribute("aria-sort");
+    });
+    const body = $("pairTable").querySelector("tbody");
+    body.innerHTML = "";
+    if (owner && !rows.length) {
+      body.innerHTML = '<tr><td colspan="11" class="na"><span class="watch-na">Nothing in the ping log for this window yet.</span></td></tr>';
+      return;
+    }
+    for (const r of rows) {
+      const tr = document.createElement("tr");
+      const cells = [
+        `<span class="watch-name">${esc(r.name)}</span>` +
+          (r.internal ? ' <span class="watch-journey" style="display:inline">· FF</span>' : ""),
+        fmt(r.offered), fmt(r.passed), fmt(r.sold),
+        r.share == null ? "—" : pct(100 * r.share), money(r.value)];
+      cells.forEach((html, i) => {
+        const td = document.createElement("td");
+        if (i) td.className = "num";
+        td.innerHTML = html;
+        tr.appendChild(td);
+      });
+      const title = owner.name + " → " + r.name;
+      // bought per day: a trend and the latest week
+      if (!r.bought.enoughToTrend) {
+        const td = document.createElement("td");
+        td.colSpan = 2; td.className = "na";
+        td.innerHTML = '<span class="watch-na">' + (r.sold ? "Too few sales" : "No sales") + "</span>";
+        tr.appendChild(td);
+      } else {
+        const line = document.createElement("td");
+        line.className = "line";
+        const cur = lastPoint(r.bought.points);
+        line.appendChild(sparkline(r.bought.points, false, {
+          title: title + " · Bought per day", points: r.bought.points, baseline: null,
+          current: cur, change: null, flagged: false, show: perDay }));
+        const val = document.createElement("td");
+        val.className = "num watch-val"; val.textContent = perDay(cur);
+        tr.append(line, val);
+      }
+      // acceptance: a trend, the latest week, and the change
+      const a = r.acceptance;
+      if (!a.enoughToTrend) {
+        const td = document.createElement("td");
+        td.colSpan = 3; td.className = "na";
+        td.innerHTML = '<span class="watch-na">' + (r.passed ? "Too few to trend" : "Nothing passed its filters") + "</span>";
+        tr.appendChild(td);
+      } else {
+        const line = document.createElement("td");
+        line.className = "line";
+        const showRate = (v) => (v == null ? "—" : pct(100 * v));
+        line.appendChild(sparkline(a.points, a.flag, {
+          title: title + " · Acceptance", points: a.points, baseline: a.baseline,
+          current: a.current, change: a.change, flagged: a.flag, show: showRate }));
+        const val = document.createElement("td");
+        val.className = "num watch-val"; val.textContent = showRate(a.current);
+        const chg = document.createElement("td");
+        chg.className = "num " + (a.flag ? "watch-drop" : "watch-chg");
+        chg.textContent = a.change == null ? ""
+          : (a.flag ? "▼ " : "") + (a.change > 0 ? "+" : "") + Math.round(100 * a.change) + "%";
+        tr.append(line, val, chg);
+      }
+      body.appendChild(tr);
+    }
+  }
+  $("pairTable").querySelectorAll("th[data-sort]").forEach((th) => {
+    th.tabIndex = 0;
+    const pick = () => {
+      const key = th.dataset.sort;
+      if (key === pairSort) pairDir = -pairDir;
+      else { pairSort = key; pairDir = key === "name" ? 1 : -1; }
+      drawPairs();
+    };
+    th.addEventListener("click", pick);
+    th.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); }
+    });
+  });
 
   // ---- render ------------------------------------------------------
   function render() {

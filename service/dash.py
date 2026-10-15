@@ -123,6 +123,10 @@ def payload(conn, days=30, source="external"):
                        "profit": r["profit"]} for r in scored],
         "trends": trend_rows,
         "trendWindow": trends.WINDOW,
+        # Which lenders bought each affiliate's leads, for its drill-down.
+        "lendersByAffiliate": {aid: rows for aid, rows in
+                               pair_drilldown(conn, days, "affiliate").items()
+                               if int(aid) in seen},
         "affiliateQuality": {str(aid): {"leads": q["leads"], "expected": q["expected"],
                                         "bands": q["bands"]}
                              for aid, q in quality.items()},
@@ -196,6 +200,57 @@ def affiliate_trends(conn, days, source):
                     "measures": measures})
     out.sort(key=lambda r: (-r["revenue"], -r["leads"]))
     return out
+
+
+def pair_drilldown(conn, days, by):
+    """Affiliate-by-lender, from the ping log, grouped one way round.
+
+    by="affiliate": {affiliate_id: [one row per lender that was offered
+    its leads]}; by="lender": {lender_id: [one row per affiliate]}. Each
+    row carries its counts over the window and two trend lines: what the
+    lender bought per day, as a seven-day average, and its acceptance -
+    bought over passed its filters - with the same drop call as the
+    trends tables.
+    """
+    rows = store.affiliate_lender_daily(conn, days)
+    all_days = sorted({r[0] for r in rows})
+    fields = ("offered", "passed", "sold", "value")
+    pairs: dict[tuple[int, int], dict] = {}
+    for day_, aid, lid, *values in rows:
+        pairs.setdefault((aid, lid), {})[day_] = {"day": day_, **dict(zip(fields, values))}
+
+    affiliates = {r[0]: (r[1], bool(r[2])) for r in conn.execute(
+        "SELECT affiliate_id, name, is_internal FROM affiliate")}
+    lenders = store.lender_names(conn)
+
+    grouped: dict[int, list] = {}
+    for (aid, lid), by_day in pairs.items():
+        series = [by_day.get(d_) or {"day": d_, "offered": 0, "passed": 0, "sold": 0,
+                                     "value": 0.0} for d_ in all_days]
+        sums = {f: sum(p[f] or 0 for p in series) for f in fields}
+        if not sums["offered"]:
+            continue
+        acceptance = trends.assess(series, "acceptance", measures=trends.PAIR_MEASURES)
+        name, internal = affiliates.get(aid, (None, False))
+        row = {**sums,
+               "id": lid if by == "affiliate" else aid,
+               "name": (lenders.get(lid, f"Lender {lid}") if by == "affiliate"
+                        else name or f"Affiliate {aid}"),
+               "internal": internal if by == "lender" else None,
+               "bought": {"points": trends.rolling_mean(series, "sold"),
+                          "enoughToTrend": sums["sold"] >= 10},
+               "acceptance": {"points": trends.rolling(series, "sold", "passed"),
+                              # A line through a handful of leads is noise.
+                              "enoughToTrend": sums["passed"] >= store.MIN_SCORED_LEADS,
+                              **acceptance}}
+        grouped.setdefault(aid if by == "affiliate" else lid, []).append(row)
+
+    for group in grouped.values():
+        bought = sum(r["sold"] for r in group)
+        for r in group:
+            r["share"] = r["sold"] / bought if bought else None
+        group.sort(key=lambda r: (-r["value"], -r["sold"], -r["offered"]))
+    return {str(k): v for k, v in grouped.items()}
 
 
 # The bands each lender's buying is broken down by, in the order offered
@@ -288,6 +343,8 @@ def lender_payload(conn, days=30):
         "trendWindow": trends.WINDOW,
         "days": [totals[d] for d in all_days],
         "lenders": lenders,
+        # Which affiliates' leads each lender bought, for its drill-down.
+        "affiliatesByLender": pair_drilldown(conn, days, "lender"),
         "demographics": demographics,
     }
 

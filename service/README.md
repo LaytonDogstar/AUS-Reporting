@@ -144,6 +144,14 @@ calls a day at five to six seconds each, run four at a time
 (`QUALITY_WORKERS`). The `lenderId` filter is ignored by the API, which
 is why this is per tier.
 
+**Per affiliate and lender, from the ping log.** The same rows counted
+by affiliate, lender and status, for the drill-down each way round:
+picking an affiliate shows the lenders its leads were offered to, what
+passed their filters and what they bought, with trend lines; picking a
+lender shows the same for each affiliate whose leads it was offered.
+About 600 rows a day. Added 15 Oct 2026; a database collected before
+then marks its ping-log days uncollected so they are fetched again.
+
 **Per affiliate, from the ping log.** The same rows counted a second
 way, by affiliate and status, so what lenders did with a source's leads
 can be set against what that source sent. That is what the scorecard
