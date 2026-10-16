@@ -97,8 +97,8 @@ def shape(node, path="$", depth=0, out=None):
 CSS = """
 :root{--bg:#fbfbfa;--fg:#1a1a1a;--muted:#5b6169;--line:#e3e5e8;--card:#fff;--accent:#1f4e79;
 --ok:#1a7f4b;--warn:#9a6700;--bad:#b42318}
-@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#15171a;--fg:#e9eaec;
---muted:#9aa1ab;--line:#2b2f35;--card:#1c1f23;--accent:#7fb2e5;--ok:#4ac98a;--warn:#e3b341;--bad:#ff7b72}}
+:root:not([data-theme=light]){--bg:#15171a;--fg:#e9eaec;
+--muted:#9aa1ab;--line:#2b2f35;--card:#1c1f23;--accent:#7fb2e5;--ok:#4ac98a;--warn:#e3b341;--bad:#ff7b72}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 -apple-system,BlinkMacSystemFont,
 "Segoe UI",Roboto,sans-serif;padding:0 16px}
@@ -141,7 +141,8 @@ padding:5px 11px;font:inherit;font-size:13px;cursor:pointer}
 
 
 def page(title, body):
-    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+    return f"""<!doctype html><html lang="en" data-theme="dark"><head><meta charset="utf-8">
+<script>try{{var t=localStorage.getItem("theme");if(t)document.documentElement.setAttribute("data-theme",t)}}catch(e){{}}</script>
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{html.escape(title)}</title>
 <style>{CSS}</style></head><body><div class="wrap">{body}</div></body></html>""".encode()
 

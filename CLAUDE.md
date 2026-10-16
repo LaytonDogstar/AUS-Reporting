@@ -22,6 +22,9 @@ by Railway from the `claude/code-review-tsyca6` branch; see
   every ten minutes. Day (any finished day, `?date=`) and Days (the range)
   are the same view without the intraday charts (`dash.period_payload`): one
   point a day, each day against its own typical day.
+- Dark mode is the default on every page, whatever the browser's setting;
+  the Light/Dark button's choice is remembered in the browser
+  (`localStorage` "theme") and holds across pages.
 - The range is the US dashboard's: last 7, 14, 28, 30, 56 or 90 days, or
   custom dates. It is chosen once and remembered in a cookie across every
   period page, Days included; Today, Yesterday and Day are one day each and have none. A custom

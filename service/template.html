@@ -1,6 +1,7 @@
 <!DOCTYPE html>
-<html lang="en-AU">
+<html lang="en-AU" data-theme="dark">
 <head>
+<script>/* Dark by default; a theme picked with the button is remembered. */try{document.documentElement.setAttribute("data-theme",localStorage.getItem("theme")||"dark")}catch(e){document.documentElement.setAttribute("data-theme","dark")}</script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AUS Lead Reporting</title>
@@ -1330,6 +1331,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
   };
   themeBtn.addEventListener("click", () => {
     document.documentElement.setAttribute("data-theme", isDark() ? "light" : "dark");
+    try { localStorage.setItem("theme", document.documentElement.getAttribute("data-theme")); } catch (e) {}
     syncThemeLabel();
     render();
   });
