@@ -201,18 +201,7 @@
   </header>
 
   <div class="filters">
-    <nav class="seg" aria-label="Page">
-      <a class="seglink" href="/" aria-current="page">Affiliates</a>
-      <a class="seglink" href="/lenders">Lenders</a>
-      <a class="seglink" href="/customers">Customers</a>
-      <a class="seglink" href="/today">Today</a>
-      <a class="seglink" href="/yesterday">Yesterday</a>
-    </nav>
-    <div class="seg" id="rangeSeg" role="group" aria-label="Date range">
-      <button type="button" data-days="7">7 days</button>
-      <button type="button" data-days="30" aria-pressed="true">30 days</button>
-      <button type="button" data-days="90">90 days</button>
-    </div>
+    <!--__TABS__-->
     <label class="lbl" for="affSel">Affiliate</label>
     <select id="affSel"><option value="all">All affiliates</option></select>
     <span class="seg" id="sourceSeg" role="group" aria-label="Source"></span>
@@ -404,7 +393,8 @@ const DATA = /*__DASHBOARD_DATA__*/null;
   const money = (n) => (n == null ? "—" : "$" + Math.round(n).toLocaleString("en-AU"));
 
   // ---- state -------------------------------------------------------
-  let days = 30;
+  // The window is the server's: the range control reloads with a new one.
+  let days = DATA.windowDays || 30;
   let affiliate = "all";
   let showTables = false;
 
@@ -1086,7 +1076,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     const decline = counts.get(DECLINE) || 0;
 
     $("tiles").innerHTML = [
-      ["Applications", fmt(apps), `${days} days`],
+      ["Applications", fmt(apps), DATA.windowLabel || `${days} days`],
       ["Sold to a lender", fmt(sold), apps ? pct(100 * sold / apps) + " of applications" : "—"],
       ["Declined by lenders", fmt(decline), (counts.get(RECEIVED) ? pct(100 * decline / counts.get(RECEIVED)) + " of received" : "—")],
       ["Reached a lender", fmt(sold + decline),
@@ -1189,13 +1179,6 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     });
   });
 
-  $("rangeSeg").addEventListener("click", (evt) => {
-    const b = evt.target.closest("button"); if (!b) return;
-    days = +b.dataset.days;
-    [...evt.currentTarget.children].forEach((c) =>
-      c.setAttribute("aria-pressed", c === b ? "true" : "false"));
-    render();
-  });
 
   $("tableBtn").addEventListener("click", () => {
     showTables = !showTables;
@@ -1254,7 +1237,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
 
   const gen = new Date(DATA.generatedUtc);
   $("asof").textContent = "Data as at " + gen.toISOString().slice(0, 16).replace("T", " ") +
-    " UTC · " + DATA.windowDays + " days loaded" +
+    " UTC · " + (DATA.windowLabel || DATA.windowDays + " days") +
     (DATA.sourceLabel ? " · " + DATA.sourceLabel : "");
   $("foot").innerHTML =
     "Reporting days are Sydney local time, including daylight saving. " +

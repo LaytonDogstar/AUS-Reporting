@@ -14,7 +14,12 @@ inside the network.
 ## The page
 
 `/` is the dashboard: tiles, a daily trend, the funnel and an affiliate
-table, with a 7/30/90-day range and an affiliate filter. The look is
+table, with an affiliate filter. Every page over a period - Affiliates,
+Lenders, Customers and the diagnostic pages - takes the same range, as
+the US dashboard offers it: the last 7, 14, 28, 30, 56 or 90 days, or
+custom dates. It is picked once and remembered across pages in a
+cookie; a custom range is bounded at both ends in every query, and
+cannot run past yesterday. The look is
 `template.html`, a copy of the one in `dashboard/` — that build queries
 the source database from inside the network, this one renders the same
 page from what the collector stored, so it can live on a public URL.

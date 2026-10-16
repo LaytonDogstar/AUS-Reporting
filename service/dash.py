@@ -74,7 +74,7 @@ def payload(conn, days=30, source="external"):
     rows = conn.execute(
         "SELECT business_date, affiliate_id, affiliate_name, received, accepted_tc,"
         " bs_extracted, submitted, sold, decline FROM affiliate_day"
-        " WHERE business_date >= ? AND source = ? AND affiliate_id IS NOT NULL"
+        " WHERE business_date >= ? AND business_date <= win_end() AND source = ? AND affiliate_id IS NOT NULL"
         " AND received > 0" + store._not_test(), (cutoff, source)).fetchall()
 
     applications, accepts, stage_counts = [], [], []
@@ -215,7 +215,7 @@ def affiliate_trends(conn, days, source):
         "SELECT affiliate_id, MAX(affiliate_name), business_date, SUM(received),"
         " SUM(bs_extracted), SUM(submitted), SUM(sold), SUM(revenue),"
         " SUM(bs_cost), SUM(profit) FROM affiliate_day"
-        " WHERE business_date >= ? AND source = ? AND affiliate_id IS NOT NULL"
+        " WHERE business_date >= ? AND business_date <= win_end() AND source = ? AND affiliate_id IS NOT NULL"
         + store._not_test() + " GROUP BY affiliate_id, business_date",
         (cutoff, source)).fetchall()
     all_days = sorted({r[2] for r in rows})
@@ -443,7 +443,7 @@ def customer_payload(conn, days=30):
     """
     cutoff = store.business_cutoff(days)
     axis = [r[0] for r in conn.execute(
-        "SELECT DISTINCT business_date FROM quality_tier_day WHERE business_date >= ?"
+        "SELECT DISTINCT business_date FROM quality_tier_day WHERE business_date >= ? AND business_date <= win_end()"
         " ORDER BY 1", (cutoff,))]
     names = store.lender_names(conn)
 
@@ -467,7 +467,7 @@ def customer_payload(conn, days=30):
         pool_daily: dict[str, dict] = {}
         for day_, band, n in conn.execute(
                 "SELECT business_date, band, SUM(n) FROM quality_day WHERE metric=?"
-                " AND business_date >= ? GROUP BY 1, 2", (metric, cutoff)):
+                " AND business_date >= ? AND business_date <= win_end() GROUP BY 1, 2", (metric, cutoff)):
             if (metric, band) not in NOT_CUSTOMERS:
                 pool_daily.setdefault(day_, {})[band] = n or 0
         rows = [r for r in store.tier_demographics_daily(conn, metric, days)
@@ -565,6 +565,9 @@ def customer_payload(conn, days=30):
 
 
 def render(data, template: Path = TEMPLATE) -> str:
+    info = store.window_info()
+    if info:
+        data.update({k: v for k, v in info.items() if v is not None})
     html = template.read_text(encoding="utf-8")
     if STYLE_PLACEHOLDER in html:
         shared = TEMPLATE.read_text(encoding="utf-8")

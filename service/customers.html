@@ -72,13 +72,7 @@
   </header>
 
   <div class="filters">
-    <nav class="seg" aria-label="Page">
-      <a class="seglink" href="/">Affiliates</a>
-      <a class="seglink" href="/lenders">Lenders</a>
-      <a class="seglink" href="/customers" aria-current="page">Customers</a>
-      <a class="seglink" href="/today">Today</a>
-      <a class="seglink" href="/yesterday">Yesterday</a>
-    </nav>
+    <!--__TABS__-->
     <label class="lbl" for="showSel">Show</label>
     <select id="showSel">
       <option value="share">Share of its purchases</option>
@@ -336,7 +330,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     $("gridExplain").innerHTML = EXPLAIN[show] +
       " Hover a cell for the full breakdown; select a lender's name for its profile and trends.";
     $("gridSub").textContent = lenders.length
-      ? `What each lender buys against every lead received, over ${DATA.windowDays} days. Lenders by revenue; ` +
+      ? `What each lender buys against every lead received, over ${DATA.windowPhrase || DATA.windowDays + " days"}. Lenders by revenue; ` +
         `those with fewer than 20 purchases are left out.`
       : "Lead quality per lender is still being collected.";
     const head = $("grid").querySelector("thead"), body = $("grid").querySelector("tbody");
@@ -400,7 +394,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     $("profileTitle").textContent = isTier ? `${owner.name} · ${b.name} · buyer profile`
                                            : `${b.name} · buyer profile`;
     $("profileSub").textContent = `${fmt(b.bought)} purchases · ${money(b.revenue)} revenue · ` +
-      `${b.avgPrice ? "$" + b.avgPrice.toFixed(2) + " average" : "no revenue"} over ${DATA.windowDays} days.` +
+      `${b.avgPrice ? "$" + b.avgPrice.toFixed(2) + " average" : "no revenue"} over ${DATA.windowPhrase || DATA.windowDays + " days"}.` +
       (isTier ? " One tier of " + owner.name + "; select All tiers for the lender as a whole." : "");
     // Each tier opens its own profile; tiers with too few purchases to
     // profile are listed but not clickable.
@@ -493,7 +487,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
 
   const gen = new Date(DATA.generatedUtc);
   $("asof").textContent = "Data as at " + gen.toISOString().slice(0, 16).replace("T", " ") +
-    " UTC · " + DATA.windowDays + " days loaded · All sources";
+    " UTC · " + (DATA.windowLabel || DATA.windowDays + " days") + " · All sources";
   $("foot").innerHTML =
     "Pool is every lead received, from the lead quality report; purchases are from the same report filtered per lender tier. " +
     "Counts only — no applicant is stored. Reporting days are Sydney local time; the newest day is yesterday.<br>" +

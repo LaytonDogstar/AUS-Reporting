@@ -14,9 +14,16 @@ by Railway from the `claude/code-review-tsyca6` branch; see
   fails on any call site that does not pass one. (Layton, 15 Oct 2026.)
 - Pages: Affiliates (`/`, `template.html`), Lenders (`/lenders`), Customers
   (`/customers`), Today (`/today`) and Yesterday (`/yesterday`, both
-  `today.html`) share one stylesheet and the Affiliates | Lenders | Customers
-  | Today | Yesterday switch. Today and Yesterday are the US dashboard's views
-  of the same name, fitted to Overflow; today is read live every ten minutes.
+  `today.html`) share one stylesheet and one tab bar, `main.page_tabs()`, put
+  in place of `<!--__TABS__-->`: Affiliates | Lenders | Customers with the
+  range beside them, then Today | Yesterday. Today and Yesterday are the US
+  dashboard's views of the same name, fitted to Overflow; today is read live
+  every ten minutes.
+- The range is the US dashboard's: last 7, 14, 28, 30, 56 or 90 days, or
+  custom dates. It is chosen once and remembered in a cookie across every
+  period page; Today and Yesterday are one day each and have none. A custom
+  range bounds every windowed query through `win_end()`, so a new windowed
+  query needs `AND business_date <= win_end()` beside its `>= ?`.
 - Google Ads spend is summed from the internal report's rows (its totals block
   reads 0) and shown for FF as a whole: all of it is booked to one source.
 - Trend tables label each measure's columns (Trend, Latest, Change), sort on

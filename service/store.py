@@ -29,6 +29,7 @@ Every rolling window is cut on that date rather than on SQLite's UTC
 from __future__ import annotations
 
 import re
+import threading
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
@@ -91,8 +92,38 @@ def business_today():
     return datetime.now(REPORT_TZ).date()
 
 
+# The window a request asked for, when it asked for dates rather than a
+# number of days. Per thread: each request is served on its own, and the
+# collector's threads never set one, so they keep the rolling default.
+_WINDOW = threading.local()
+OPEN_END = "9999-12-31"
+
+
+def set_window(start=None, end=None, label=None, phrase=None, days=None):
+    """Pin this thread's window to [start, end], ISO dates; no arguments
+    clears it back to the rolling `days` window. The label, phrase and
+    day count go on the page, so it says which window it shows."""
+    _WINDOW.start, _WINDOW.end = start, end
+    _WINDOW.info = {"windowLabel": label, "windowPhrase": phrase, "windowDays": days} if label else None
+
+
+def window_info():
+    """What the page should say about its window, or None."""
+    return getattr(_WINDOW, "info", None)
+
+
+def window_end() -> str:
+    """The last day in the window, or no limit. Every windowed query
+    calls it from SQL as win_end(), so a custom range bounds them all."""
+    return getattr(_WINDOW, "end", None) or OPEN_END
+
+
 def business_cutoff(days: int) -> str:
-    """ISO date `days` back from today, for a rolling window."""
+    """The first day in the window: the pinned start of a custom range,
+    else the ISO date `days` back from today."""
+    start = getattr(_WINDOW, "start", None)
+    if start:
+        return start
     return (business_today() - timedelta(days=days)).isoformat()
 
 
@@ -402,6 +433,7 @@ CREATE TABLE IF NOT EXISTS collection (
 
 def connect(path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(path, timeout=30)
+    conn.create_function("win_end", 0, window_end)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=30000")
     _migrate_affiliate_source(conn)
@@ -662,12 +694,12 @@ def band_sold_rates(conn, metric, days=30, source=None):
     if source is None:
         rows = conn.execute(
             "SELECT band, result, SUM(n) FROM quality_day"
-            " WHERE metric=? AND business_date >= ? GROUP BY band, result",
+            " WHERE metric=? AND business_date >= ? AND business_date <= win_end() GROUP BY band, result",
             (metric, cutoff)).fetchall()
     else:
         rows = conn.execute(
             "SELECT q.band, q.result, SUM(q.n) FROM quality_affiliate_day q"
-            " WHERE q.metric=? AND q.business_date >= ?" + _not_test("q.affiliate_id") +
+            " WHERE q.metric=? AND q.business_date >= ? AND q.business_date <= win_end()" + _not_test("q.affiliate_id") +
             " AND q.affiliate_id IN (SELECT DISTINCT affiliate_id FROM affiliate_day"
             "   WHERE source=? AND affiliate_id IS NOT NULL)"
             " GROUP BY q.band, q.result", (metric, cutoff, source)).fetchall()
@@ -693,7 +725,7 @@ def affiliate_quality(conn, metric, days=30, source=None):
     rates = band_sold_rates(conn, metric, days, source)
     rows = conn.execute(
         "SELECT affiliate_id, band, SUM(n) FROM quality_affiliate_day"
-        " WHERE metric=? AND business_date >= ?" + _not_test() +
+        " WHERE metric=? AND business_date >= ? AND business_date <= win_end()" + _not_test() +
         " GROUP BY affiliate_id, band", (metric, cutoff)).fetchall()
     by_affiliate: dict[int, dict[str, int]] = {}
     for aid, band, n in rows:
@@ -911,7 +943,7 @@ def ff_money_daily(conn, days=30):
     return conn.execute(
         "SELECT business_date, SUM(revenue), SUM(bs_cost), SUM(COALESCE(adword_spent, 0)),"
         " SUM(profit), SUM(received), SUM(sold) FROM affiliate_day"
-        " WHERE business_date >= ? AND source='internal'"
+        " WHERE business_date >= ? AND business_date <= win_end() AND source='internal'"
         " GROUP BY business_date ORDER BY business_date",
         (business_cutoff(days),)).fetchall()
 
@@ -946,7 +978,7 @@ def scorecard(conn, days=30, limit=80, metric=QUALITY_METRIC):
         "SELECT MAX(a.affiliate_id), a.affiliate_name, a.source,"
         " SUM(a.received) leads, SUM(a.sold) sold, SUM(a.revenue) revenue,"
         " SUM(a.commission) commission, SUM(a.bs_cost) bs_cost, SUM(a.profit) profit"
-        " FROM affiliate_day a WHERE a.business_date >= ?" + _not_test("a.affiliate_id") +
+        " FROM affiliate_day a WHERE a.business_date >= ? AND a.business_date <= win_end()" + _not_test("a.affiliate_id") +
         " GROUP BY a.affiliate_name, a.source HAVING leads > 0",
         (cutoff,)).fetchall()
     known = {r[0]: r[1] for r in conn.execute("SELECT affiliate_id, name FROM affiliate")}
@@ -957,7 +989,7 @@ def scorecard(conn, days=30, limit=80, metric=QUALITY_METRIC):
         " SUM(CASE WHEN status_id IN (1,2,3) THEN pings ELSE 0 END) reached,"
         " SUM(CASE WHEN status_id=1 THEN pings ELSE 0 END) ping_sold"
         # Per affiliate and lender, so excluded lenders can be left out.
-        " FROM affiliate_lender_day WHERE business_date >= ?" + _not_excluded_lender() +
+        " FROM affiliate_lender_day WHERE business_date >= ? AND business_date <= win_end()" + _not_excluded_lender() +
         " GROUP BY affiliate_id",
         (cutoff,))}
     out = []
@@ -1009,7 +1041,7 @@ def lender_result_status(conn, days=30):
     """Pings and cost per status across the window."""
     return conn.execute(
         "SELECT status_id, SUM(pings), SUM(cost) FROM lender_result_day"
-        " WHERE business_date >= ?" + _not_excluded_lender() + " GROUP BY status_id ORDER BY SUM(pings) DESC",
+        " WHERE business_date >= ? AND business_date <= win_end()" + _not_excluded_lender() + " GROUP BY status_id ORDER BY SUM(pings) DESC",
         (business_cutoff(days),)).fetchall()
 
 
@@ -1038,7 +1070,7 @@ def lender_result_league(conn, days=30, limit=40):
         " SUM(CASE WHEN status_id=1 THEN pings ELSE 0 END) sold,"
         " SUM(CASE WHEN status_id=2 THEN pings ELSE 0 END) declined,"
         " SUM(CASE WHEN status_id=1 THEN cost ELSE 0 END) sold_value"
-        " FROM lender_result_day WHERE business_date >= ?" + _not_excluded_lender() +
+        " FROM lender_result_day WHERE business_date >= ? AND business_date <= win_end()" + _not_excluded_lender() +
         " GROUP BY lender_id, lender_tier_id HAVING reached > 0"
         " ORDER BY reached DESC LIMIT ?", (business_cutoff(days), limit)).fetchall()
 
@@ -1050,7 +1082,7 @@ def lender_result_reach(conn, days=30):
         " SUM(CASE WHEN status_id IN (1,2,3) THEN pings ELSE 0 END),"
         " SUM(CASE WHEN status_id=1 THEN pings ELSE 0 END),"
         " SUM(CASE WHEN status_id=1 THEN cost ELSE 0 END)"
-        " FROM lender_result_day WHERE business_date >= ?" + _not_excluded_lender(),
+        " FROM lender_result_day WHERE business_date >= ? AND business_date <= win_end()" + _not_excluded_lender(),
         (business_cutoff(days),)).fetchone()
 
 
@@ -1063,7 +1095,7 @@ def tier_names(conn, days=30):
     """
     return {r[0]: r[1] for r in conn.execute(
         "SELECT lender_tier_id, lender_tier_name FROM lender_tier_day"
-        " WHERE business_date >= ? AND lender_tier_name IS NOT NULL"
+        " WHERE business_date >= ? AND business_date <= win_end() AND lender_tier_name IS NOT NULL"
         " AND lender_tier_name <> '' GROUP BY lender_tier_id",
         (business_cutoff(days),))}
 
@@ -1072,7 +1104,7 @@ def lender_result_totals(conn, days=30):
     """Day-level distinct counts, which per-status rows cannot give."""
     return conn.execute(
         "SELECT SUM(pings), SUM(leads), SUM(applications) FROM lender_result_day_meta"
-        " WHERE business_date >= ?", (business_cutoff(days),)).fetchone()
+        " WHERE business_date >= ? AND business_date <= win_end()", (business_cutoff(days),)).fetchone()
 
 
 def _not_test(column="affiliate_id"):
@@ -1087,7 +1119,7 @@ def affiliate_league(conn, days=30, source="external"):
         "SELECT affiliate_name, SUM(received) r, SUM(accepted_tc) tc, SUM(bs_extracted) bs,"
         " SUM(submitted) sub, SUM(sold) sold, SUM(decline) dec, SUM(revenue) rev,"
         " SUM(commission) com, SUM(bs_cost) bsc, SUM(profit) p FROM affiliate_day"
-        " WHERE business_date >= ? AND source=?" + _not_test() +
+        " WHERE business_date >= ? AND business_date <= win_end() AND source=?" + _not_test() +
         " GROUP BY affiliate_name HAVING r > 0 ORDER BY p DESC LIMIT 60",
         (business_cutoff(days), source)).fetchall()
 
@@ -1098,7 +1130,7 @@ def affiliate_funnel(conn, days=30, source="external"):
     return conn.execute(
         "SELECT SUM(received), SUM(accepted_tc), SUM(bs_extracted), SUM(submitted),"
         " SUM(sold), SUM(decline), SUM(redirect), SUM(duplicate), SUM(funded)"
-        " FROM affiliate_totals_day WHERE business_date >= ? AND source=?",
+        " FROM affiliate_totals_day WHERE business_date >= ? AND business_date <= win_end() AND source=?",
         (business_cutoff(days), source)).fetchone()
 
 
@@ -1126,14 +1158,14 @@ def tier_league(conn, days=30):
     return conn.execute(
         "SELECT lender_tier_name, SUM(sent) s, SUM(accepted) a, SUM(revenue) rev,"
         " SUM(commission) com, SUM(profit) p FROM lender_tier_day"
-        " WHERE business_date >= ? GROUP BY lender_tier_id, lender_tier_name"
+        " WHERE business_date >= ? AND business_date <= win_end() GROUP BY lender_tier_id, lender_tier_name"
         " HAVING s > 0 ORDER BY p DESC LIMIT 40", (business_cutoff(days),)).fetchall()
 
 
 def quality_distribution(conn, metric, days=30):
     return conn.execute(
         "SELECT band, band_order, result, SUM(n) FROM quality_day"
-        " WHERE metric=? AND business_date >= ?"
+        " WHERE metric=? AND business_date >= ? AND business_date <= win_end()"
         " GROUP BY band, band_order, result ORDER BY band_order, result",
         (metric, business_cutoff(days))).fetchall()
 
@@ -1175,7 +1207,7 @@ def lender_daily(conn, days=30):
         " SUM(d.processed), SUM(d.sent), SUM(d.accepted), SUM(d.redirect),"
         " SUM(d.revenue), SUM(d.commission), SUM(d.profit) FROM lender_tier_day d"
         " LEFT JOIN lender_tier t ON t.lender_tier_id = d.lender_tier_id"
-        " WHERE d.business_date >= ?" + _not_test_lender() +
+        " WHERE d.business_date >= ? AND d.business_date <= win_end()" + _not_test_lender() +
         f" GROUP BY {_LENDER_ID}, d.business_date",
         (business_cutoff(days),)).fetchall()
 
@@ -1187,7 +1219,7 @@ def lender_tier_totals(conn, days=30):
         " SUM(d.processed), SUM(d.sent), SUM(d.accepted), SUM(d.redirect),"
         " SUM(d.revenue), SUM(d.commission), SUM(d.profit) FROM lender_tier_day d"
         " LEFT JOIN lender_tier t ON t.lender_tier_id = d.lender_tier_id"
-        " WHERE d.business_date >= ?" + _not_test_lender() +
+        " WHERE d.business_date >= ? AND d.business_date <= win_end()" + _not_test_lender() +
         f" GROUP BY {_LENDER_ID}, d.lender_tier_id HAVING SUM(d.processed) > 0",
         (business_cutoff(days),)).fetchall()
 
@@ -1210,7 +1242,7 @@ def lender_demographics(conn, metric, days=30):
         " SUM(CASE WHEN q.result='Sold' THEN q.n ELSE 0 END)"
         " FROM quality_tier_day q"
         " LEFT JOIN lender_tier t ON t.lender_tier_id = q.lender_tier_id"
-        " WHERE q.metric=? AND q.business_date >= ?" + _not_test_lender() +
+        " WHERE q.metric=? AND q.business_date >= ? AND q.business_date <= win_end()" + _not_test_lender() +
         " GROUP BY 1, q.band, q.band_order",
         (metric, business_cutoff(days))).fetchall()
     by_lender: dict[int, dict[str, list]] = {}
@@ -1239,7 +1271,7 @@ def affiliate_lender_daily(conn, days=30):
         " SUM(CASE WHEN status_id IN (1,2,3) THEN pings ELSE 0 END),"
         " SUM(CASE WHEN status_id=1 THEN pings ELSE 0 END),"
         " SUM(CASE WHEN status_id=1 THEN cost ELSE 0 END)"
-        " FROM affiliate_lender_day WHERE business_date >= ?" + _not_test() +
+        " FROM affiliate_lender_day WHERE business_date >= ? AND business_date <= win_end()" + _not_test() +
         _not_excluded_lender() +
         " GROUP BY business_date, affiliate_id, lender_id",
         (business_cutoff(days),)).fetchall()
@@ -1259,7 +1291,7 @@ def lender_demographics_daily(conn, metric, days=30):
         " q.band_order, SUM(q.n), SUM(CASE WHEN q.result='Sold' THEN q.n ELSE 0 END)"
         " FROM quality_tier_day q"
         " LEFT JOIN lender_tier t ON t.lender_tier_id = q.lender_tier_id"
-        " WHERE q.metric=? AND q.business_date >= ?" + _not_test_lender() +
+        " WHERE q.metric=? AND q.business_date >= ? AND q.business_date <= win_end()" + _not_test_lender() +
         " GROUP BY 1, 2, q.band, q.band_order",
         (metric, business_cutoff(days))).fetchall()
 
@@ -1273,6 +1305,6 @@ def tier_demographics_daily(conn, metric, days=30):
         " q.band, q.band_order, SUM(q.n), SUM(CASE WHEN q.result='Sold' THEN q.n ELSE 0 END)"
         " FROM quality_tier_day q"
         " LEFT JOIN lender_tier t ON t.lender_tier_id = q.lender_tier_id"
-        " WHERE q.metric=? AND q.business_date >= ?" + _not_test_lender() +
+        " WHERE q.metric=? AND q.business_date >= ? AND q.business_date <= win_end()" + _not_test_lender() +
         " GROUP BY 1, 2, 3, q.band, q.band_order",
         (metric, business_cutoff(days))).fetchall()

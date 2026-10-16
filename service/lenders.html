@@ -22,13 +22,7 @@
   </header>
 
   <div class="filters">
-    <nav class="seg" aria-label="Page">
-      <a class="seglink" href="/">Affiliates</a>
-      <a class="seglink" href="/lenders" aria-current="page">Lenders</a>
-      <a class="seglink" href="/customers">Customers</a>
-      <a class="seglink" href="/today">Today</a>
-      <a class="seglink" href="/yesterday">Yesterday</a>
-    </nav>
+    <!--__TABS__-->
     <label class="lbl" for="lenderSel">Lender</label>
     <select id="lenderSel"><option value="all">All lenders</option></select>
     <span class="spacer"></span>
@@ -412,7 +406,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     card.classList.remove("hidden");
     $("detailTitle").textContent = r.name;
     $("detailSub").textContent = `${fmt(r.processed)} offered · ${fmt(r.sent)} passed filters · ` +
-      `${fmt(r.accepted)} bought · ${money(r.revenue)} revenue over ${DATA.windowDays} days.`;
+      `${fmt(r.accepted)} bought · ${money(r.revenue)} revenue over ${DATA.windowPhrase || DATA.windowDays + " days"}.`;
     for (const [key, svgId, capId] of MEASURES) {
       const m = r.measures[key], svg = $(svgId);
       if (!m.enoughToTrend) {
@@ -669,7 +663,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     const buying = lenders.filter((l) => l.accepted > 0).length;
     const share = (a, b, what) => (b ? rate(a / b) + " " + what : "—");
     $("tiles").innerHTML = [
-      ["Offered", fmt(t.processed), one ? `${DATA.windowDays} days` : `${DATA.windowDays} days, across tiers`],
+      ["Offered", fmt(t.processed), one ? (DATA.windowLabel || `${DATA.windowDays} days`) : `${DATA.windowLabel || DATA.windowDays + " days"}, across tiers`],
       ["Passed filters", fmt(t.sent), share(t.sent, t.processed, "of offered")],
       ["Bought", fmt(t.accepted), share(t.accepted, t.sent, "of passed")],
       ["Redirected", fmt(t.redirect), share(t.redirect, t.accepted, "of bought")],
@@ -728,7 +722,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
 
   const gen = new Date(DATA.generatedUtc);
   $("asof").textContent = "Data as at " + gen.toISOString().slice(0, 16).replace("T", " ") +
-    " UTC · " + DATA.windowDays + " days loaded · All sources";
+    " UTC · " + (DATA.windowLabel || DATA.windowDays + " days") + " · All sources";
   $("foot").innerHTML =
     "Lenders cover every source together: the lender report does not split by affiliate. " +
     "Reporting days are Sydney local time. Collected once a day from the PublicReports API, so the newest day is yesterday.<br>" +

@@ -126,6 +126,15 @@ border-radius:7px;background:var(--card);color:var(--fg)}
 .cred{background:var(--bg);border:1px solid var(--line);border-left:3px solid var(--ok);
 border-radius:8px;padding:10px 12px;margin:10px 0}
 .cred code{font-size:15px;user-select:all}
+.tabs{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:14px 0 6px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+a.seglink{padding:6px 13px;font-size:13px;text-decoration:none;color:var(--muted);
+border-right:1px solid var(--line);background:var(--card)}
+a.seglink:last-child{border-right:0}
+a.seglink[aria-current="page"]{background:var(--accent);color:#fff;font-weight:600}
+.lbl{font-size:13px;color:var(--muted)}
+button.ghost{background:none;border:1px solid var(--line);color:var(--fg);border-radius:7px;
+padding:5px 11px;font:inherit;font-size:13px;cursor:pointer}
 .note{color:var(--muted);font-size:13px}
 .bar{height:7px;background:var(--accent);border-radius:4px;display:inline-block;min-width:2px}
 """
@@ -148,9 +157,15 @@ def nav(active=""):
     items = [(h, t) for h, t in items if role == "admin" or auth.can_view(role, h)]
     if role == "admin":
         items.append(("/admin", "Admin"))
-    return ('<p class="note">' + " &middot; ".join(
+    # The five dashboard pages are the tabs, with the range beside the
+    # period ones, as on the dashboard pages themselves; the rest are
+    # links beneath.
+    tabbed = {h for h, _ in PERIOD_TABS + DAY_TABS}
+    others = [(h, t) for h, t in items if h not in tabbed]
+    tabs = f'<div class="tabs">{page_tabs(getattr(CURRENT, "path", active) or active)}</div>'
+    return tabs + ('<p class="note">' + " &middot; ".join(
         f"<strong>{t}</strong>" if h == active else f'<a href="{h}">{t}</a>'
-        for h, t in items) + "</p>")
+        for h, t in others) + "</p>")
 
 
 def money(v):
@@ -853,6 +868,132 @@ def collect_in_background(days):
     return True
 
 
+# ------------------------------------------------------------------ range
+
+# The windows offered, as the US dashboard offers them, plus Custom.
+RANGE_PRESETS = (7, 14, 28, 30, 56, 90)
+DEFAULT_DAYS = 30
+MAX_RANGE_DAYS = 366
+RANGE_COOKIE = "rng"
+# Pages that show a period, and so take the range. Today and Yesterday
+# are one day each and do not.
+RANGE_PAGES = ("/", "/lenders", "/customers", "/scorecard", "/affiliates", "/quality", "/pings")
+
+
+def resolve_range(params, cookie):
+    """The window a request wants: from its query if it names one, else
+    the one remembered from earlier, else 30 days. Returns
+    {days, start, end, label, key}; start and end are set for a custom
+    range only, which pins the store's window to those dates."""
+    def preset(n):
+        return {"days": n, "start": None, "end": None, "label": f"Last {n} days",
+                "phrase": f"the last {n} days", "key": str(n)}
+
+    def custom(a, b):
+        try:
+            start, end = date.fromisoformat(a), date.fromisoformat(b)
+        except (TypeError, ValueError):
+            return None
+        yesterday = store.business_today() - timedelta(days=1)
+        end = min(end, yesterday)
+        if start > end:
+            start, end = end, start
+        if (end - start).days + 1 > MAX_RANGE_DAYS:
+            start = end - timedelta(days=MAX_RANGE_DAYS - 1)
+        days = (end - start).days + 1
+        label = (f"{start.strftime('%-d %b')} – {end.strftime('%-d %b %Y')}"
+                 if start.year == end.year else
+                 f"{start.strftime('%-d %b %Y')} – {end.strftime('%-d %b %Y')}")
+        return {"days": days, "start": start.isoformat(), "end": end.isoformat(),
+                "label": label, "phrase": label, "key": f"{start.isoformat()}..{end.isoformat()}"}
+
+    def parse_days(v):
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            return None
+        return preset(max(1, min(MAX_RANGE_DAYS, n)))
+
+    if params.get("from") and params.get("to"):
+        r = custom(params["from"], params["to"])
+        if r:
+            return r, True
+    if params.get("days"):
+        r = parse_days(params["days"])
+        if r:
+            return r, True
+    if cookie:
+        if ".." in cookie:
+            r = custom(*cookie.split("..", 1))
+        else:
+            r = parse_days(cookie)
+        if r:
+            return r, False
+    return preset(DEFAULT_DAYS), False
+
+
+def range_control(rng):
+    """The range picker: a list of presets and Custom, with two dates.
+    Choosing reloads the page with the new range in its query, which the
+    server remembers for every other page."""
+    yesterday = (store.business_today() - timedelta(days=1)).isoformat()
+    custom = rng["start"] is not None
+    opts = "".join(f'<option value="{n}"{" selected" if not custom and rng["days"] == n else ""}>'
+                   f'Last {n} days</option>' for n in RANGE_PRESETS)
+    if not custom and rng["days"] not in RANGE_PRESETS:
+        opts += f'<option value="{rng["days"]}" selected>Last {rng["days"]} days</option>'
+    opts += f'<option value="custom"{" selected" if custom else ""}>Custom…</option>'
+    start = rng["start"] or (store.business_today() - timedelta(days=rng["days"])).isoformat()
+    end = rng["end"] or yesterday
+    return f"""<span class="rangectl" style="display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap">
+<label class="lbl" for="rangeSel">Range</label>
+<select id="rangeSel" class="f" aria-label="Date range">{opts}</select>
+<span id="rangeCustom"{"" if custom else " hidden"} style="display:inline-flex;gap:6px;align-items:center">
+<input type="date" id="rangeFrom" class="f" value="{start}" max="{yesterday}" aria-label="From">
+<span class="lbl">→</span>
+<input type="date" id="rangeTo" class="f" value="{end}" max="{yesterday}" aria-label="To">
+<button type="button" id="rangeApply" class="ghost">Apply</button></span>
+<script>(function () {{
+  var sel = document.getElementById("rangeSel"), box = document.getElementById("rangeCustom");
+  function go(q) {{
+    var u = new URL(location.href);
+    ["days", "from", "to"].forEach(function (k) {{ u.searchParams.delete(k); }});
+    Object.keys(q).forEach(function (k) {{ u.searchParams.set(k, q[k]); }});
+    location.href = u.pathname + u.search;
+  }}
+  sel.addEventListener("change", function () {{
+    if (sel.value === "custom") {{ box.hidden = false; box.style.display = "inline-flex"; return; }}
+    go({{ days: sel.value }});
+  }});
+  document.getElementById("rangeApply").addEventListener("click", function () {{
+    var a = document.getElementById("rangeFrom").value, b = document.getElementById("rangeTo").value;
+    if (a && b) go({{ from: a, to: b }});
+  }});
+  if (box.hidden) box.style.display = "none";
+}})();</script></span>"""
+
+
+PERIOD_TABS = (("/", "Affiliates"), ("/lenders", "Lenders"), ("/customers", "Customers"))
+DAY_TABS = (("/today", "Today"), ("/yesterday", "Yesterday"))
+
+
+def page_tabs(active):
+    """The page switch, the same on every dashboard page: the pages over a
+    period, with the range beside them, then the two single days."""
+    rng = getattr(CURRENT, "range", None)
+
+    current = ' aria-current="page"'
+
+    def group(tabs, label):
+        return (f'<nav class="seg" aria-label="{label}">' + "".join(
+            f'<a class="seglink" href="{h}"{current if h == active else ""}>{t}</a>'
+            for h, t in tabs) + "</nav>")
+    out = group(PERIOD_TABS, "Pages over a period")
+    if rng and active in RANGE_PAGES:
+        out += range_control(rng)
+    return out + group(DAY_TABS, "Pages for one day")
+
+
 # ----------------------------------------------------------------- logins
 
 def login_page(next_path="/", error=""):
@@ -1044,6 +1185,13 @@ class Handler(BaseHTTPRequestHandler):
     # ---- responses ----------------------------------------------------
     def _send(self, code, body, ctype="text/html; charset=utf-8", headers=None):
         user = current_user()
+        if b"<!--__TABS__-->" in body:
+            body = body.replace(b"<!--__TABS__-->",
+                                page_tabs(getattr(CURRENT, "path", "")).encode(), 1)
+        cookie = getattr(CURRENT, "range_cookie", None)
+        if cookie:
+            headers = {**(headers or {}), "Set-Cookie": cookie}
+            CURRENT.range_cookie = None
         if user and ctype.startswith("text/html") and b"<body" in body[:20000]:
             body = re.sub(rb"<body([^>]*)>", lambda m: m.group(0) + user_bar(user).encode(),
                           body, count=1)
@@ -1083,9 +1231,18 @@ class Handler(BaseHTTPRequestHandler):
             "&rarr; Variables. A Railway URL is public, so nothing is served without one.</p>"))
 
     # ---- GET ------------------------------------------------------------
+    def _cookie_value(self, name):
+        for part in self.headers.get("Cookie", "").split(";"):
+            k, _, v = part.strip().partition("=")
+            if k == name:
+                return urllib.parse.unquote(v)
+        return None
+
     def do_GET(self):                                # noqa: N802
-        CURRENT.user = None
+        CURRENT.user = CURRENT.range = CURRENT.range_cookie = None
+        store.set_window()
         path, _, query = self.path.partition("?")
+        CURRENT.path = path
         params = {k: v[0] for k, v in urllib.parse.parse_qs(query).items()}
 
         if path == "/healthz":
@@ -1115,10 +1272,16 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:                     # noqa: BLE001
             print(f"activity not recorded: {exc}", flush=True)
 
-        try:
-            days = max(1, min(365, int(params.get("days", "30"))))
-        except ValueError:
-            days = 30
+        # The range is remembered across pages: one picked on Affiliates
+        # holds on Lenders, Customers and the rest until another is picked.
+        days = DEFAULT_DAYS
+        if path in RANGE_PAGES:
+            rng, picked = resolve_range(params, self._cookie_value(RANGE_COOKIE))
+            CURRENT.range, days = rng, rng["days"]
+            store.set_window(rng["start"], rng["end"], rng["label"], rng["phrase"], rng["days"])
+            if picked:
+                CURRENT.range_cookie = (f"{RANGE_COOKIE}={urllib.parse.quote(rng['key'])}; Path=/; "
+                                        "SameSite=Lax; Max-Age=31536000")
         try:
             if path == "/":
                 source = params.get("source", "external")
@@ -1153,7 +1316,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/explore":
                 return self._send(200, explore_page())
             if path == "/verify":
-                return self._send(200, verify_page(min(days, 10)))
+                return self._send(200, verify_page(5))
             if path == "/reset":
                 return self._send(200, page("Reset", confirm_reset()))
             if path == "/admin":

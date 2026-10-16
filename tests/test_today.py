@@ -294,12 +294,14 @@ class Pages(unittest.TestCase):
         html = main.today_page("today", "external").decode()
         self.assertIn('"meta":null', html)
 
-    def test_every_page_links_to_today_and_yesterday(self):
+    def test_every_page_carries_the_shared_tabs(self):
         for name in ("template.html", "lenders.html", "customers.html", "today.html"):
             with self.subTest(page=name):
-                src = (SERVICE / name).read_text()
-                self.assertIn('href="/today"', src)
-                self.assertIn('href="/yesterday"', src)
+                self.assertIn("<!--__TABS__-->", (SERVICE / name).read_text())
+        tabs = main.page_tabs("/lenders")
+        for href in ('href="/"', 'href="/lenders"', 'href="/customers"',
+                     'href="/today"', 'href="/yesterday"'):
+            self.assertIn(href, tabs)
 
 
 if __name__ == "__main__":

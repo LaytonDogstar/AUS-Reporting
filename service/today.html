@@ -72,13 +72,7 @@
   </header>
 
   <div class="filters">
-    <nav class="seg" aria-label="Page">
-      <a class="seglink" href="/">Affiliates</a>
-      <a class="seglink" href="/lenders">Lenders</a>
-      <a class="seglink" href="/customers">Customers</a>
-      <a class="seglink" id="navToday" href="/today">Today</a>
-      <a class="seglink" id="navYesterday" href="/yesterday">Yesterday</a>
-    </nav>
+    <!--__TABS__-->
     <nav class="seg" aria-label="Population">
       <a class="seglink" id="srcAll" href="?source=all">All sources</a>
       <a class="seglink" id="srcExternal" href="?source=external">External affiliates</a>
@@ -98,17 +92,30 @@
   </section>
 
   <section class="card">
-    <h2 id="affTitle">By affiliate</h2>
+    <h2 id="affTitle">Affiliates</h2>
     <p class="sub" id="affSub"></p>
-    <div class="cards" id="affCards"></div>
-  </section>
-
-  <section class="card">
-    <div class="chart-head"><h2>Lenders off their usual appetite</h2><span class="sub" id="moverCount"></span></div>
-    <p class="sub" id="moverSub"></p>
-    <div class="cols">
-      <div><div class="colhead neg">▼ Pulling back or quiet</div><div id="moversDown"></div></div>
-      <div><div class="colhead pos">▲ Buying harder</div><div id="moversUp"></div></div>
+    <div class="scroll">
+    <table id="affTable" class="trend-table">
+      <thead>
+        <tr>
+          <th rowspan="2" data-sort="name">Affiliate</th>
+          <th class="grp" colspan="3">Sales</th>
+          <th rowspan="2" data-sort="leads" title="Leads that reached the ping tree">Leads pinged</th>
+          <th class="grp" colspan="2">Buy-rate</th>
+          <th rowspan="2" data-sort="filterPass" title="Passed lenders' filters, of the pings lenders evaluated">Filter pass</th>
+          <th rowspan="2" data-sort="epl">Per sale</th>
+          <th rowspan="2" data-sort="revenue">Revenue</th>
+        </tr>
+        <tr>
+          <th class="sub line" data-sort="sold">Trend</th>
+          <th class="sub" data-sort="sold">Latest</th>
+          <th class="sub" data-sort="change" title="Against the affiliate's typical path by this time">Change</th>
+          <th class="sub" data-sort="rate">Latest</th>
+          <th class="sub" data-sort="rateNorm">Typical</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
     </div>
   </section>
 
@@ -145,7 +152,13 @@
     </section>
 
     <section class="card">
-      <h2>Lenders</h2>
+      <div class="chart-head">
+        <h2>Lenders</h2>
+        <span class="seg" role="group" aria-label="Which lenders">
+          <button type="button" id="lendAll" aria-pressed="true">All lenders</button>
+          <button type="button" id="lendMovers" aria-pressed="false">Off their usual appetite</button>
+        </span>
+      </div>
       <p class="sub" id="buyerSub"></p>
       <div class="scroll">
       <table id="buyerTable" class="trend-table">
@@ -153,6 +166,7 @@
           <tr>
             <th rowspan="2" data-sort="name">Lender</th>
             <th class="grp" colspan="3">Sales</th>
+            <th class="grp" colspan="2" title="What its typical share of the day's leads would have bought">Against the day's leads</th>
             <th class="grp" colspan="2">Buy-rate</th>
             <th rowspan="2" data-sort="filterPass" title="Passed its filters, of the leads it evaluated">Filter pass</th>
             <th rowspan="2" data-sort="accept" title="Bought, of the leads that reached it">Accept %</th>
@@ -163,6 +177,8 @@
             <th class="sub line" data-sort="sold">Trend</th>
             <th class="sub" data-sort="sold">Latest</th>
             <th class="sub" data-sort="change" title="Against the typical path by this time">Change</th>
+            <th class="sub" data-sort="expected">Expected</th>
+            <th class="sub" data-sort="gap" title="Sales less expected">Gap</th>
             <th class="sub" data-sort="rate">Latest</th>
             <th class="sub" data-sort="rateNorm">Typical</th>
           </tr>
@@ -511,7 +527,6 @@ const DATA = /*__DASHBOARD_DATA__*/null;
   }
 
   // ---- header, switches -------------------------------------------------
-  $(isToday ? "navToday" : "navYesterday").setAttribute("aria-current", "page");
   $({ all: "srcAll", internal: "srcInternal" }[DATA.source] || "srcExternal").setAttribute("aria-current", "page");
   if (isToday) {
     const r = $("refreshLink");
@@ -617,66 +632,102 @@ const DATA = /*__DASHBOARD_DATA__*/null;
       "<b>All Ads spend is booked to one source, Friendly Finance Min Loan</b>, so read FF as a whole: that source alone looks loss-making and the others look free.";
   })();
 
-  // ---- by affiliate -------------------------------------------------------
-  (function affiliates() {
-    const list = (DATA.affiliates || []).filter((a) => a.sum.day.leads || a.sum.day.sold).slice(0, 6);
-    $("affTitle").textContent = `${DayWord} by affiliate · ${DATA.sourceLabel}`;
-    $("affSub").textContent = list.length
-      ? `The top ${list.length} by revenue ${dayWord}. Buy-rate is the share of its leads pinged that sold at least once, set against the affiliate's own typical rate.`
-      : "No leads from this population yet.";
-    const box = $("affCards");
-    box.innerHTML = "";
-    for (const a of list) {
-      const s = a.sum.day, n = a.sum.norm;
-      const br = s.leads ? s.soldLeads / s.leads : null, brN = n.leads ? n.soldLeads / n.leads : null;
-      const p = vsPct(br, brN);
-      const div = document.createElement("div");
-      div.className = "mini";
-      div.innerHTML = `<div class="top"><div><div class="nm">${esc(a.name)}</div>
-          ${DATA.source === "all" && a.internal ? '<div class="s">FF (internal)</div>' : ""}
-          <div><span class="big">${fmt(s.sold)}</span> <span class="s">sales · ${fmt(s.leads)} leads pinged</span></div></div></div>
-        <div class="s">${D.sold ? rate(s.sold / D.sold) : "—"} of ${dayWord}'s sales · ${money(s.value)} · ${money2(s.sold ? s.value / s.sold : null)}/sale</div>
-        <div class="s">buy-rate <b>${rate(br)}</b> ${hasNorm ? arrow(p, 5) + " vs " + rate(brN) + " typical" : ""}</div>`;
-      const path = dayPath(a.day.sold), norm = cum(a.norm.sold);
-      div.querySelector(".top").appendChild(sparkline(hourPoints(path), p != null && p <= -15,
-        pathExpand({ title: `${a.name}, ${dayWord}`, day: path, norm: norm, show: fmt,
-          panels: panelsFor(a, "affiliate"),
-          sub: panelNote + normNote })));
-      box.appendChild(div);
+  // ---- sortable tables --------------------------------------------------------
+  // A change against a typical figure this small is noise drawn as signal:
+  // two sales against a typical 0.03 reads as +6,000%.
+  const MIN_TYPICAL = 5;
+  // Both tables sort on every column; revenue, highest first, until another
+  // is picked. Rows with nothing in the column stay at the bottom.
+  function sortable(table, getRows, drawRow, onDraw) {
+    let key = "revenue", dir = -1;
+    function draw() {
+      const rows = [...getRows()].sort((a, b) => {
+        const va = key === "name" ? a.name.toLowerCase() : a[key];
+        const vb = key === "name" ? b.name.toLowerCase() : b[key];
+        if (va == null && vb == null) return b.revenue - a.revenue;
+        if (va == null) return 1;
+        if (vb == null) return -1;
+        if (va < vb) return -dir;
+        if (va > vb) return dir;
+        return b.revenue - a.revenue;
+      });
+      table.querySelectorAll("th[data-sort]").forEach((th) => {
+        const on = th.dataset.sort === key && !th.classList.contains("line");
+        if (on) th.setAttribute("aria-sort", dir < 0 ? "descending" : "ascending");
+        else th.removeAttribute("aria-sort");
+      });
+      const body = table.querySelector("tbody");
+      body.innerHTML = "";
+      rows.forEach((r) => body.appendChild(drawRow(r)));
+      if (onDraw) onDraw(rows);
     }
-  })();
+    table.querySelectorAll("th[data-sort]").forEach((th) => {
+      th.tabIndex = 0;
+      const pick = () => {
+        const k = th.dataset.sort;
+        if (k === key) dir = -dir;
+        else { key = k; dir = k === "name" ? 1 : -1; }
+        draw();
+      };
+      th.addEventListener("click", pick);
+      th.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); }
+      });
+    });
+    return draw;
+  }
+  function cell(tr, text, cls) {
+    const td = document.createElement("td");
+    td.className = cls || "num"; td.textContent = text;
+    tr.appendChild(td);
+    return td;
+  }
+  const signedPct = (v) => (v == null ? "" : (v > 0 ? "+" : "") + Math.round(v) + "%");
+  // A sales trend, with its change against the typical path by now.
+  function salesCells(tr, r, b, kind) {
+    const line = document.createElement("td");
+    line.className = "line";
+    const path = dayPath(b.day.sold), norm = cum(b.norm.sold);
+    const flagged = r.change != null && r.change <= -25 && cumAt(b.norm.sold, hNow) >= 4;
+    line.appendChild(sparkline(hourPoints(path), flagged,
+      pathExpand({ title: `${r.name}, ${dayWord}`, day: path, norm: norm, show: fmt,
+        panels: panelsFor(b, kind),
+        sub: panelNote + normNote })));
+    tr.appendChild(line);
+    cell(tr, fmt(r.sold), "num watch-val");
+    cell(tr, (flagged ? "▼ " : "") + signedPct(r.change), "num " + (flagged ? "watch-drop" : "watch-chg"));
+  }
 
-  // ---- movers ------------------------------------------------------------
-  const lenderById = new Map((DATA.lenders || []).map((l) => [l.id, l]));
-  (function moversCard() {
-    const ms = DATA.movers || [];
-    const down = ms.filter((m) => m.gap < 0).slice(0, DATA.moversShown);
-    const up = ms.filter((m) => m.gap > 0).sort((a, b) => b.gap - a.gap).slice(0, DATA.moversShown);
-    $("moverCount").textContent = hasNorm ? `${ms.length} lender${ms.length === 1 ? "" : "s"} moving against their norm` : "";
-    $("moverSub").textContent = hasNorm
-      ? `Each lender's sales against what its typical share of leads would have bought from the ${fmt(D.leads)} leads pinged ${isToday ? "so far" : "that day"}. Scaled to supply, not the clock: a lender buying its usual share of fewer leads is not pulling back.`
-      : "Needs at least one finished day stored to compare against.";
-    const row = (m) => {
-      const l = lenderById.get(m.id);
-      const div = document.createElement("div");
-      div.className = "mover";
-      const quiet = m.sold === 0;
-      div.innerHTML = `<div><div class="nm">${esc(m.name)}</div>
-        <div class="s">${fmt(m.sold)} sold vs ~${fmt(m.expected)} expected · buy-rate ${rate(m.rate)} vs ${rate(m.rateNorm)} typical</div></div>
-        <div class="sp"></div>
-        <div class="gap ${m.gap < 0 ? "neg" : "pos"}">${m.gap > 0 ? "+" : ""}${Math.round(m.gap)}<small>${quiet ? "no buys" : m.gap < 0 ? "behind" : "ahead"}</small></div>`;
-      if (l) {
-        const path = dayPath(l.day.sold), norm = cum(l.norm.sold);
-        div.querySelector(".sp").appendChild(sparkline(hourPoints(path), m.gap < 0,
-          pathExpand({ title: `${m.name}, ${dayWord}`, day: path, norm: norm, show: fmt,
-          panels: panelsFor(l, "lender"),
-          sub: `${fmt(m.sold)} sales against ${fmt(m.expected)} expected from the leads pinged; the dashed paths are its typical day, not scaled to the day's supply. ` + panelNote + normNote })));
-      }
-      return div;
-    };
-    $("moversDown").replaceChildren(...(down.length ? down.map(row) : [Object.assign(document.createElement("p"), { className: "sub", textContent: "Nobody notably behind." })]));
-    $("moversUp").replaceChildren(...(up.length ? up.map(row) : [Object.assign(document.createElement("p"), { className: "sub", textContent: "Nobody notably ahead." })]));
-  })();
+  // ---- affiliates table ---------------------------------------------------------
+  const affRows = (DATA.affiliates || []).filter((a) => a.sum.day.leads || a.sum.day.sold).map((a) => {
+    const s = a.sum.day, n = a.sum.norm;
+    const expectNow = hasNorm ? cumAt(a.norm.sold, hNow) : null;
+    return { a, name: a.name, internal: a.internal, sold: s.sold, leads: s.leads, revenue: s.value,
+             change: expectNow >= MIN_TYPICAL ? vsPct(s.sold, expectNow) : null,
+             rate: s.leads ? s.soldLeads / s.leads : null, rateNorm: n.leads ? n.soldLeads / n.leads : null,
+             filterPass: s.offered ? s.reached / s.offered : null,
+             epl: s.sold ? s.value / s.sold : null };
+  });
+  const drawAffiliates = sortable($("affTable"), () => affRows, (r) => {
+    const tr = document.createElement("tr");
+    const name = document.createElement("td");
+    name.innerHTML = `<span class="watch-name">${esc(r.name)}</span>` +
+      (DATA.source === "all" && r.internal ? '<span class="watch-journey">FF (internal)</span>' : "");
+    tr.appendChild(name);
+    salesCells(tr, r, r.a, "affiliate");
+    cell(tr, fmt(r.leads));
+    const p = vsPct(r.rate, r.rateNorm);
+    cell(tr, rate(r.rate), "num " + (hasNorm && p != null && p <= -15 ? "watch-drop" : ""));
+    cell(tr, rate(r.rateNorm), "num watch-chg");
+    cell(tr, rate(r.filterPass));
+    cell(tr, money2(r.epl));
+    cell(tr, money(r.revenue));
+    return tr;
+  });
+  $("affTitle").textContent = `Affiliates · ${DATA.sourceLabel}`;
+  $("affSub").textContent = affRows.length
+    ? `Every affiliate with leads ${dayWord}. Change is sales against its typical path by the same time; buy-rate is the share of its leads pinged that sold at least once, against its own typical rate. Select a heading to sort, a sparkline for every measure.`
+    : "No leads from this population yet.";
 
   // ---- why EPL --------------------------------------------------------------
   (function eplCard() {
@@ -728,78 +779,58 @@ const DATA = /*__DASHBOARD_DATA__*/null;
   $("paceMetric").addEventListener("change", drawPace);
 
   // ---- lenders table ----------------------------------------------------------
-  // Sorts on every column; revenue, highest first, until another is picked.
-  let buyerSort = "revenue", buyerDir = -1;
+  // Expected is what the lender's typical share of leads would have bought
+  // from the leads in so far: scaled to supply, not the clock, so a lender
+  // buying its usual share of fewer leads is not pulling back.
+  const moverIds = new Set((DATA.movers || []).map((m) => m.id));
+  let moversOnly = false;
   const buyerRows = (DATA.lenders || []).filter((l) => l.sum.day.sold || l.sum.day.reached).map((l) => {
     const s = l.sum.day, n = l.sum.norm;
     const expectNow = hasNorm ? cumAt(l.norm.sold, hNow) : null;
+    const rateNorm = N.leads ? n.sold / N.leads : null;
+    const expected = hasNorm && rateNorm != null ? rateNorm * D.leads : null;
     return { l, name: l.name, sold: s.sold, revenue: s.value,
-             change: expectNow ? vsPct(s.sold, expectNow) : null,
-             rate: D.leads ? s.sold / D.leads : null, rateNorm: N.leads ? n.sold / N.leads : null,
+             change: expectNow >= MIN_TYPICAL ? vsPct(s.sold, expectNow) : null,
+             expected, gap: expected == null ? null : s.sold - expected,
+             rate: D.leads ? s.sold / D.leads : null, rateNorm,
              filterPass: s.offered ? s.reached / s.offered : null,
-             filterPassNorm: n.offered ? n.reached / n.offered : null,
              accept: s.reached ? s.sold / s.reached : null, epl: s.sold ? s.value / s.sold : null };
   });
-  function drawBuyers() {
-    const rows = [...buyerRows].sort((a, b) => {
-      const va = buyerSort === "name" ? a.name.toLowerCase() : a[buyerSort];
-      const vb = buyerSort === "name" ? b.name.toLowerCase() : b[buyerSort];
-      if (va == null && vb == null) return b.revenue - a.revenue;
-      if (va == null) return 1;
-      if (vb == null) return -1;
-      if (va < vb) return -buyerDir;
-      if (va > vb) return buyerDir;
-      return b.revenue - a.revenue;
-    });
-    $("buyerTable").querySelectorAll("th[data-sort]").forEach((th) => {
-      const on = th.dataset.sort === buyerSort && !th.classList.contains("line");
-      if (on) th.setAttribute("aria-sort", buyerDir < 0 ? "descending" : "ascending");
-      else th.removeAttribute("aria-sort");
-    });
-    $("buyerSub").textContent = rows.length
-      ? `Every lender that bought or was sent a lead ${dayWord}, from ${DATA.sourceLabel.toLowerCase()}. Change is sales against the lender's typical path by the same time. Select a heading to sort.`
-      : "No lender has been sent a lead from this population yet.";
-    const body = $("buyerTable").querySelector("tbody");
-    body.innerHTML = "";
-    for (const r of rows) {
+  const drawBuyers = sortable($("buyerTable"),
+    () => buyerRows.filter((r) => !moversOnly || moverIds.has(r.l.id)), (r) => {
       const tr = document.createElement("tr");
       const name = document.createElement("td");
       name.innerHTML = `<span class="watch-name">${esc(r.name)}</span>`;
-      const line = document.createElement("td");
-      line.className = "line";
-      const path = dayPath(r.l.day.sold), norm = cum(r.l.norm.sold);
-      const flagged = r.change != null && r.change <= -25 && cumAt(r.l.norm.sold, hNow) >= 4;
-      line.appendChild(sparkline(hourPoints(path), flagged,
-        pathExpand({ title: `${r.name}, ${dayWord}`, day: path, norm: norm, show: fmt,
-          panels: panelsFor(r.l, "lender"),
-          sub: panelNote + normNote })));
-      const chg = r.change == null ? "" : (flagged ? "▼ " : "") + (r.change > 0 ? "+" : "") + Math.round(r.change) + "%";
-      tr.append(name, line);
-      const cells = [[fmt(r.sold), "num watch-val"], [chg, "num " + (flagged ? "watch-drop" : "watch-chg")],
-                     [rate(r.rate), "num"], [rate(r.rateNorm), "num watch-chg"],
-                     [rate(r.filterPass), "num"],
-                     [rate(r.accept), "num"], [money2(r.epl), "num"], [money(r.revenue), "num"]];
-      for (const [v, cls] of cells) {
-        const td = document.createElement("td");
-        td.className = cls; td.textContent = v;
-        tr.appendChild(td);
-      }
-      body.appendChild(tr);
-    }
-  }
-  $("buyerTable").querySelectorAll("th[data-sort]").forEach((th) => {
-    th.tabIndex = 0;
-    const pick = () => {
-      const key = th.dataset.sort;
-      if (key === buyerSort) buyerDir = -buyerDir;
-      else { buyerSort = key; buyerDir = key === "name" ? 1 : -1; }
-      drawBuyers();
-    };
-    th.addEventListener("click", pick);
-    th.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); }
+      tr.appendChild(name);
+      salesCells(tr, r, r.l, "lender");
+      cell(tr, r.expected == null ? "—" : "~" + fmt(r.expected), "num watch-chg");
+      const mover = moverIds.has(r.l.id);
+      const gap = r.gap == null ? "—" : (r.gap > 0 ? "+" : "") + Math.round(r.gap);
+      cell(tr, gap, "num" + (mover ? (r.gap < 0 ? " neg" : " pos") : " watch-chg")).style.fontWeight = mover ? "640" : "";
+      cell(tr, rate(r.rate));
+      cell(tr, rate(r.rateNorm), "num watch-chg");
+      cell(tr, rate(r.filterPass));
+      cell(tr, rate(r.accept));
+      cell(tr, money2(r.epl));
+      cell(tr, money(r.revenue));
+      return tr;
+    }, (rows) => {
+      $("buyerSub").textContent = !buyerRows.length
+        ? "No lender has been sent a lead from this population yet."
+        : moversOnly
+          ? (rows.length ? `The ${rows.length} lender${rows.length === 1 ? "" : "s"} whose sales are off what their usual share of the ${fmt(D.leads)} leads pinged would buy, by more than chance. Gap in bold: red behind, green ahead.`
+                         : "Nobody is notably off their usual appetite.")
+          : `Every lender that bought or was sent a lead ${dayWord}, from ${DATA.sourceLabel.toLowerCase()}. Change is against the lender's typical path by the same time; Expected is what its usual share of the ${fmt(D.leads)} leads pinged would buy, and a bold Gap is more than chance. Select a heading to sort.`;
     });
-  });
+  for (const [id, only] of [["lendAll", false], ["lendMovers", true]]) {
+    $(id).addEventListener("click", () => {
+      moversOnly = only;
+      $("lendAll").setAttribute("aria-pressed", String(!only));
+      $("lendMovers").setAttribute("aria-pressed", String(only));
+      drawBuyers();
+    });
+  }
+  $("lendMovers").textContent = `Off their usual appetite (${moverIds.size})`;
 
   // ---- tier pace --------------------------------------------------------------
   const COLORS = ["var(--series-1)", "var(--series-2)", "var(--s3)", "var(--s4)", "var(--s5)", "var(--s6)", "var(--s7)", "var(--s8)"];
@@ -850,7 +881,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     "yesterday is the finished day once collected. Sales and revenue exclude the Dummy test lender and DCS; test affiliates are left out of leads. " +
     "The ping log carries each lead's identifier, used only to find the hour of its first ping and never stored.";
 
-  function drawAll() { drawPace(); drawBuyers(); drawTiers(); drawPop(); }
+  function drawAll() { drawPace(); drawAffiliates(); drawBuyers(); drawTiers(); drawPop(); }
   drawAll();
   let resizeTimer = null;
   addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(drawAll, 120); });

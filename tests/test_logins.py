@@ -33,13 +33,18 @@ class Browser:
     """A client that keeps its cookie and does not follow redirects."""
 
     def __init__(self, port):
-        self.port, self.cookie = port, None
+        self.port, self.cookies = port, {}
+
+    @property
+    def cookie(self):
+        """The session cookie's value, or None once signed out."""
+        return self.cookies.get(main.Handler.COOKIE)
 
     def request(self, method, path, form=None, ip=None):
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
         headers = {}
-        if self.cookie:
-            headers["Cookie"] = self.cookie
+        if self.cookies:
+            headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in self.cookies.items())
         if ip:
             headers["X-Forwarded-For"] = ip
         body = None
@@ -49,10 +54,13 @@ class Browser:
         conn.request(method, path, body=body, headers=headers)
         r = conn.getresponse()
         text = r.read().decode("utf-8", "replace")
-        set_cookie = r.getheader("Set-Cookie")
-        if set_cookie:
-            value = set_cookie.split(";")[0]
-            self.cookie = None if value.endswith("=") else value
+        for header, value in r.getheaders():
+            if header.lower() == "set-cookie":
+                name, _, v = value.split(";")[0].partition("=")
+                if v:
+                    self.cookies[name] = v
+                else:
+                    self.cookies.pop(name, None)
         conn.close()
         return r.status, r.getheader("Location"), text
 
@@ -70,7 +78,9 @@ class Browser:
         return re.search(r'name="csrf" value="([^"]+)"', text).group(1)
 
 
-class Logins(unittest.TestCase):
+class Server(unittest.TestCase):
+    """The real handler on a free port, with an empty database."""
+
     def setUp(self):
         tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
         main.DB_PATH = str(tmp / "o.db")
@@ -97,6 +107,9 @@ class Logins(unittest.TestCase):
         self.assertEqual(status, 303)
         return b
 
+
+
+class Logins(Server):
     def make_user(self, role):
         a = self.admin()
         status, _, text = a.post("/admin/create", {"csrf": a.csrf(), "username": f"sam-{role}",
