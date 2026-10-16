@@ -12,6 +12,7 @@ SERVICE = Path(__file__).resolve().parent.parent / "service"
 if str(SERVICE) not in sys.path:
     sys.path.insert(0, str(SERVICE))
 
+import dash                                                # noqa: E402
 import main                                                # noqa: E402
 import store                                               # noqa: E402
 from tests.test_logins import Server                       # noqa: E402
@@ -88,6 +89,37 @@ class Remembered(Server):
     def test_today_and_yesterday_have_no_range(self):
         b = self.admin()
         self.assertNotIn('id="rangeSel"', b.get("/yesterday")[2])
+
+
+class ShortRange(unittest.TestCase):
+    """A seven-day range still has trend lines: they read back
+    store.TREND_DAYS, while the totals stay on the seven days."""
+
+    def setUp(self):
+        self.conn = store.connect(":memory:")
+        self.addCleanup(self.conn.close)
+        self.addCleanup(store.set_window)
+        today = store.business_today()
+        for back in range(1, 29):
+            day = (today - dt.timedelta(days=back)).isoformat()
+            self.conn.execute(
+                "INSERT INTO affiliate_day (business_date, source, affiliate_id, affiliate_name,"
+                " received, sold, revenue, bs_cost, adword_spent, profit, collected_at)"
+                " VALUES (?, 'internal', 193, 'FF', 10, 4, 100, 5, 50, 45, ?)", (day, STAMP))
+        self.conn.commit()
+
+    def test_the_cutoff_reaches_back_for_a_short_range(self):
+        today = store.business_today()
+        self.assertEqual(store.trend_cutoff(7), (today - dt.timedelta(days=28)).isoformat())
+        self.assertEqual(store.trend_cutoff(90), store.business_cutoff(90))
+        store.set_window("2026-09-24", "2026-09-30", "x", "x", 7)
+        self.assertEqual(store.trend_cutoff(7), "2026-09-02")
+
+    def test_ads_on_seven_days_have_a_line_and_an_earlier_level(self):
+        paid = dash.paid_acquisition(self.conn, 7)
+        self.assertGreater(len(paid["spend"]["points"]), 1)
+        self.assertIsNotNone(paid["spend"]["baseline"])
+        self.assertAlmostEqual(paid["totals"]["spend"], 7 * 50)
 
 
 if __name__ == "__main__":

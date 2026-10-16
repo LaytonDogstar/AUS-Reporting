@@ -700,6 +700,46 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     });
   });
 
+  // ---- tile trends ---------------------------------------------------
+  // Per-day figures as a rolling seven-day average, rates as a rolling
+  // seven-day rate - summed then divided - and each with the latest week
+  // against the weeks before it, as the trend tables have them.
+  const WIN = DATA.trendWindow || 7;
+  function tilePanels(series, who) {
+    const days = series.map((d) => d.day);
+    const meanPts = (f) => series.slice(WIN - 1).map((_, i) => {
+      const span = series.slice(i, i + WIN);
+      return [days[i + WIN - 1], span.reduce((s, d) => s + (d[f] || 0), 0) / WIN];
+    });
+    const ratePts = (n, d) => series.slice(WIN - 1).map((_, i) => {
+      const span = series.slice(i, i + WIN);
+      const den = span.reduce((s, x) => s + (x[d] || 0), 0);
+      return [days[i + WIN - 1], den ? span.reduce((s, x) => s + (x[n] || 0), 0) / den : null];
+    });
+    const recent = series.slice(-WIN), before = series.slice(0, -WIN);
+    const avg = (rows, f) => (rows.length ? rows.reduce((s, d) => s + (d[f] || 0), 0) / rows.length : null);
+    const rat = (rows, n, d) => {
+      const den = rows.reduce((s, x) => s + (x[d] || 0), 0);
+      return den ? rows.reduce((s, x) => s + (x[n] || 0), 0) / den : null;
+    };
+    const panel = (name, points, cur, base, show) => {
+      const change = cur != null && base ? (cur - base) / base : null;
+      return { name, points, current: cur, baseline: base, change,
+               flagged: change != null && change <= -0.15, show };
+    };
+    const perDay = (v) => (v == null ? "—" : fmt(v));
+    const moneyDay = (v) => (v == null ? "—" : money(v));
+    const out = [];
+    for (const [name, f, show] of [["Offered a day", "processed", perDay], ["Passed filters a day", "sent", perDay],
+                                   ["Bought a day", "accepted", perDay], ["Redirected a day", "redirect", perDay],
+                                   ["Revenue a day", "revenue", moneyDay]])
+      out.push(panel(name, meanPts(f), avg(recent, f), avg(before, f), show));
+    for (const [name, n, d] of [["Filter pass", "sent", "processed"], ["Acceptance", "accepted", "sent"],
+                                ["Redirect rate", "redirect", "accepted"]])
+      out.push(panel(name, ratePts(n, d), rat(recent, n, d), rat(before, n, d), rate));
+    return series.length >= WIN + 1 ? out : [];
+  }
+
   // ---- render ------------------------------------------------------
   function render() {
     const one = byId.get(lender);
@@ -709,14 +749,34 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     }, { processed: 0, sent: 0, accepted: 0, redirect: 0, revenue: 0 });
     const buying = lenders.filter((l) => l.accepted > 0).length;
     const share = (a, b, what) => (b ? rate(a / b) + " " + what : "—");
-    $("tiles").innerHTML = [
+    const specs = [
       ["Offered", fmt(t.processed), one ? (DATA.windowLabel || `${DATA.windowDays} days`) : `${DATA.windowLabel || DATA.windowDays + " days"}, across tiers`],
       ["Passed filters", fmt(t.sent), share(t.sent, t.processed, "of offered")],
       ["Bought", fmt(t.accepted), share(t.accepted, t.sent, "of passed")],
       ["Redirected", fmt(t.redirect), share(t.redirect, t.accepted, "of bought")],
       ["Revenue", money(t.revenue), one ? (t.accepted ? "$" + (t.revenue / t.accepted).toFixed(2) + " per sale" : "—")
                                          : `${buying} lenders buying`],
-    ].map(([k, v, s]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s}</div></div>`).join("");
+    ];
+    // Every tile has a trend, and its pop-up shows the whole suite: the
+    // five daily figures and the three rates between them, each a
+    // rolling seven days against the weeks before.
+    const panels = tilePanels(one ? one.daily : DATA.days || [], one ? one.name : "All lenders");
+    const box = $("tiles");
+    box.innerHTML = "";
+    for (const [k, v, sub] of specs) {
+      const div = document.createElement("div");
+      div.className = "tile";
+      div.innerHTML = `<div class="k">${k}</div><div style="display:flex;justify-content:space-between;align-items:flex-end;gap:8px">
+        <div class="v">${v}</div><span class="sp"></span></div><div class="s">${sub}</div>`;
+      const mine = panels.find((p) => p.name.startsWith(k));
+      if (mine && mine.points.length > 1) {
+        div.querySelector(".sp").appendChild(sparkline(mine.points, mine.flagged, withPanels({
+          title: (one ? one.name : "All lenders") + " · " + mine.name, points: mine.points,
+          baseline: mine.baseline, current: mine.current, change: mine.change,
+          flagged: mine.flagged, show: mine.show }, panels, mine.name)));
+      }
+      box.appendChild(div);
+    }
 
     drawWatch();
     drawDetail();

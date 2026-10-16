@@ -1137,9 +1137,11 @@ const DATA = /*__DASHBOARD_DATA__*/null;
         <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:8px">
           <div class="v">${show(m.current)}</div><span class="sp"></span></div>
         <div class="s">latest week · earlier ${show(m.baseline)}<span class="${m.flag ? "watch-drop" : ""}">${chg}</span></div>`;
-      div.querySelector(".sp").appendChild(sparkline(m.points, m.flag, {
+      div.querySelector(".sp").appendChild(sparkline(m.points, m.flag, withPanels({
         title: "FF · " + label, points: m.points, baseline: m.baseline,
-        current: m.current, change: m.change, flagged: m.flag, show }));
+        current: m.current, change: m.change, flagged: m.flag, show },
+        specs.map(([k2, l2, sh2]) => ({ name: l2, points: p[k2].points, baseline: p[k2].baseline,
+          current: p[k2].current, change: p[k2].change, flagged: p[k2].flag, show: sh2 })), label)));
       box.appendChild(div);
     }
     const t = p.totals;

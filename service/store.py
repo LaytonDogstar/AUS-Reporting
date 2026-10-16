@@ -127,6 +127,24 @@ def business_cutoff(days: int) -> str:
     return (business_today() - timedelta(days=days)).isoformat()
 
 
+# A trend line reads at least this many days, whatever range is picked:
+# a seven-day window holds one rolling seven-day point and no weeks before
+# it to set the latest week against. Totals stay on the window itself.
+TREND_DAYS = 28
+
+
+def trend_cutoff(days: int) -> str:
+    """The first day a trend reads: the window's start, or earlier when
+    the window is shorter than TREND_DAYS, so it still ends where the
+    window ends."""
+    start = business_cutoff(days)
+    if days >= TREND_DAYS:
+        return start
+    end = getattr(_WINDOW, "end", None)
+    last = datetime.fromisoformat(end).date() if end else business_today()
+    return min(start, (last - timedelta(days=TREND_DAYS)).isoformat())
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS call (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -948,7 +966,7 @@ def ff_money(conn, business_date, source="internal"):
     return None
 
 
-def ff_money_daily(conn, days=30):
+def ff_money_daily(conn, days=30, since=None):
     """Per day: FF revenue, BS cost, Ads spend and profit, from the
     internal report's rows."""
     return conn.execute(
@@ -956,7 +974,7 @@ def ff_money_daily(conn, days=30):
         " SUM(profit), SUM(received), SUM(sold) FROM affiliate_day"
         " WHERE business_date >= ? AND business_date <= win_end() AND source='internal'"
         " GROUP BY business_date ORDER BY business_date",
-        (business_cutoff(days),)).fetchall()
+        (since or business_cutoff(days),)).fetchall()
 
 
 # The metric the quality score is taken over. Monotonic across every
@@ -1209,7 +1227,7 @@ _LENDER_ID = "COALESCE(t.lender_id, -d.lender_tier_id)"
 _LENDER_NAME = "COALESCE(NULLIF(TRIM(t.lender_name), ''), d.lender_tier_name)"
 
 
-def lender_daily(conn, days=30):
+def lender_daily(conn, days=30, since=None):
     """[(lender_id, lender_name, day, processed, sent, accepted,
     redirect, revenue, commission, profit)] from the lender report,
     tiers summed."""
@@ -1220,7 +1238,7 @@ def lender_daily(conn, days=30):
         " LEFT JOIN lender_tier t ON t.lender_tier_id = d.lender_tier_id"
         " WHERE d.business_date >= ? AND d.business_date <= win_end()" + _not_test_lender() +
         f" GROUP BY {_LENDER_ID}, d.business_date",
-        (business_cutoff(days),)).fetchall()
+        (since or business_cutoff(days),)).fetchall()
 
 
 def lender_tier_totals(conn, days=30):
@@ -1269,7 +1287,7 @@ def lender_demographic_metrics(conn):
         "SELECT DISTINCT metric FROM quality_tier_day ORDER BY metric")]
 
 
-def affiliate_lender_daily(conn, days=30):
+def affiliate_lender_daily(conn, days=30, since=None):
     """[(day, affiliate_id, lender_id, offered, passed, sold, value)].
 
     Offered is every ping; passed the filters is sold, declined or
@@ -1285,7 +1303,7 @@ def affiliate_lender_daily(conn, days=30):
         " FROM affiliate_lender_day WHERE business_date >= ? AND business_date <= win_end()" + _not_test() +
         _not_excluded_lender() +
         " GROUP BY business_date, affiliate_id, lender_id",
-        (business_cutoff(days),)).fetchall()
+        (since or business_cutoff(days),)).fetchall()
 
 
 def lender_names(conn):

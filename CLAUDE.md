@@ -24,6 +24,9 @@ by Railway from the `claude/code-review-tsyca6` branch; see
   period page; Today and Yesterday are one day each and have none. A custom
   range bounds every windowed query through `win_end()`, so a new windowed
   query needs `AND business_date <= win_end()` beside its `>= ?`.
+  Trend lines read back at least 28 days (`store.trend_cutoff()`), so a
+  7-day range still has a line and an earlier level; totals stay on the
+  range itself.
 - Google Ads spend is summed from the internal report's rows (its totals block
   reads 0) and shown for FF as a whole: all of it is booked to one source.
 - Today and Yesterday carry a Profit tile from the two affiliate reports

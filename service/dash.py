@@ -167,14 +167,18 @@ def paid_acquisition(conn, days=30):
     so this is read for FF as a whole and never per source.
 
     Each measure is a rolling seven days with the latest week set against
-    the weeks before, as the trend tables are.
+    the weeks before, as the trend tables are, read over at least
+    store.TREND_DAYS so a short range still has a line; the totals are
+    the range's own.
     """
-    rows = store.ff_money_daily(conn, days)
-    if not rows or not any(r[3] for r in rows):
-        return None
+    start = store.business_cutoff(days)
+    rows = store.ff_money_daily(conn, days, since=store.trend_cutoff(days))
     series = [{"day": d, "revenue": rev or 0, "bs_cost": bs or 0, "spend": ads or 0,
                "profit": prof or 0, "received": rec or 0, "sold": sold or 0}
               for d, rev, bs, ads, prof, rec, sold in rows]
+    window = [d for d in series if d["day"] >= start]
+    if not window or not any(d["spend"] for d in window):
+        return None
 
     def split(field):
         recent, before = series[-trends.WINDOW:], series[:-trends.WINDOW]
@@ -197,9 +201,9 @@ def paid_acquisition(conn, days=30):
     r_base = (sum(d["revenue"] for d in before) / sum(d["spend"] for d in before)
               if sum(d["spend"] for d in before) else None)
     out["roas"] = measure(trends.rolling(series, "revenue", "spend"), r_cur, r_base)
-    out["totals"] = {k: sum(d[k] for d in series) for k in
+    out["totals"] = {k: sum(d[k] for d in window) for k in
                      ("spend", "revenue", "profit", "bs_cost", "received", "sold")}
-    out["days"] = len(series)
+    out["days"] = len(window)
     return out
 
 
@@ -242,9 +246,12 @@ def affiliate_trends(conn, days, source):
 
     Every day in the window is present for every affiliate, zero-filled,
     so a week with no leads reads as a gap in volume rather than being
-    silently skipped over.
+    silently skipped over. The lines read over at least store.TREND_DAYS,
+    so a short range still has weeks before its latest; the totals are
+    the range's own.
     """
-    cutoff = store.business_cutoff(days)
+    start = store.business_cutoff(days)
+    cutoff = store.trend_cutoff(days)
     rows = conn.execute(
         "SELECT affiliate_id, MAX(affiliate_name), business_date, SUM(received),"
         " SUM(bs_extracted), SUM(submitted), SUM(sold), SUM(revenue),"
@@ -259,8 +266,9 @@ def affiliate_trends(conn, days, source):
     for aid, name, day_, rec, ext, sub_, sold, rev, bs_cost, profit in rows:
         a = by_affiliate.setdefault(aid, {"name": known.get(aid) or name, "days": {},
                                           "bs_cost": 0.0, "profit": 0.0})
-        a["bs_cost"] += bs_cost or 0
-        a["profit"] += profit or 0
+        if day_ >= start:
+            a["bs_cost"] += bs_cost or 0
+            a["profit"] += profit or 0
         a["days"][day_] = {"day": day_, "received": rec or 0, "extracted": ext or 0,
                            "submitted": sub_ or 0, "sold": sold or 0, "revenue": rev or 0}
 
@@ -269,7 +277,8 @@ def affiliate_trends(conn, days, source):
         series = [a["days"].get(d) or {"day": d, "received": 0, "extracted": 0,
                                         "submitted": 0, "sold": 0, "revenue": 0}
                   for d in all_days]
-        leads = sum(d["received"] for d in series)
+        window = [d for d in series if d["day"] >= start]
+        leads = sum(d["received"] for d in window)
         if not leads:
             continue
         journey = journeys.journey_of(aid, source)
@@ -284,10 +293,10 @@ def affiliate_trends(conn, days, source):
         out.append({"id": aid, "name": a["name"], "leads": leads, "journey": journey,
                     # Money over the window, for the trends table's own columns
                     # and its default order.
-                    "revenue": sum(d["revenue"] for d in series),
+                    "revenue": sum(d["revenue"] for d in window),
                     "bsCost": a["bs_cost"], "profit": a["profit"],
                     # A line through one or three leads is noise drawn as signal.
-                    "enoughToTrend": leads >= store.MIN_SCORED_LEADS,
+                    "enoughToTrend": sum(d["received"] for d in series) >= store.MIN_SCORED_LEADS,
                     "journeyLabel": journeys.LABELS[journey],
                     "journeyNote": journeys.DESCRIPTIONS[journey],
                     "measures": measures})
@@ -305,7 +314,8 @@ def pair_drilldown(conn, days, by):
     bought over passed its filters - with the same drop call as the
     trends tables.
     """
-    rows = store.affiliate_lender_daily(conn, days)
+    start = store.business_cutoff(days)
+    rows = store.affiliate_lender_daily(conn, days, since=store.trend_cutoff(days))
     all_days = sorted({r[0] for r in rows})
     fields = ("offered", "passed", "sold", "value")
     pairs: dict[tuple[int, int], dict] = {}
@@ -320,7 +330,9 @@ def pair_drilldown(conn, days, by):
     for (aid, lid), by_day in pairs.items():
         series = [by_day.get(d_) or {"day": d_, "offered": 0, "passed": 0, "sold": 0,
                                      "value": 0.0} for d_ in all_days]
-        sums = {f: sum(p[f] or 0 for p in series) for f in fields}
+        sums = {f: sum(p[f] or 0 for p in series if p["day"] >= start) for f in fields}
+        # Whether a line is worth drawing is over the days it is drawn on.
+        span = {f: sum(p[f] or 0 for p in series) for f in fields}
         if not sums["offered"]:
             continue
         acceptance = trends.assess(series, "acceptance", measures=trends.PAIR_MEASURES)
@@ -331,10 +343,10 @@ def pair_drilldown(conn, days, by):
                         else name or f"Affiliate {aid}"),
                "internal": internal if by == "lender" else None,
                "bought": {"points": trends.rolling_mean(series, "sold"),
-                          "enoughToTrend": sums["sold"] >= 10},
+                          "enoughToTrend": span["sold"] >= 10},
                "acceptance": {"points": trends.rolling(series, "sold", "passed"),
                               # A line through a handful of leads is noise.
-                              "enoughToTrend": sums["passed"] >= store.MIN_SCORED_LEADS,
+                              "enoughToTrend": span["passed"] >= store.MIN_SCORED_LEADS,
                               **acceptance}}
         grouped.setdefault(aid if by == "affiliate" else lid, []).append(row)
 
@@ -367,7 +379,9 @@ DEMOGRAPHICS = (
 def lender_payload(conn, days=30):
     """The lender page: per lender, the three rates to keep from falling,
     its tiers, and what it buys by band against what it is offered."""
-    rows = store.lender_daily(conn, days)
+    # Trends read over at least store.TREND_DAYS; totals are the range's.
+    start = store.business_cutoff(days)
+    rows = store.lender_daily(conn, days, since=store.trend_cutoff(days))
     all_days = sorted({r[2] for r in rows})
     # Profit is the lender report's own: revenue less affiliate commission.
     # It cannot see the internal sources' costs or bank statement costs,
@@ -395,18 +409,22 @@ def lender_payload(conn, days=30):
     lenders = []
     for lid, lender in by_lender.items():
         series = [lender["days"].get(d) or {"day": d, **blank} for d in all_days]
-        sums = {f: sum(p[f] for p in series) for f in fields}
+        sums = {f: sum(p[f] for p in series if p["day"] >= start) for f in fields}
+        span = {f: sum(p[f] for p in series) for f in fields}
         if not sums["processed"]:
             continue
         measures = {}
         for key, (num, den) in trends.LENDER_MEASURES.items():
             measures[key] = {
                 # A line through a handful of leads is noise drawn as signal.
-                "enoughToTrend": sums[den] >= store.MIN_SCORED_LEADS,
+                "enoughToTrend": span[den] >= store.MIN_SCORED_LEADS,
                 "points": trends.rolling(series, num, den),
                 **trends.assess(series, key, measures=trends.LENDER_MEASURES)}
         lenders.append({"id": lid, "name": lender["name"], **sums,
                         "measures": measures,
+                        # Its own days, for the tiles' trends when it is picked.
+                        "daily": [{k: p[k] for k in ("day", "processed", "sent", "accepted",
+                                                     "redirect", "revenue")} for p in series],
                         "tiers": sorted(tiers.get(lid, []), key=lambda t: -t["processed"])})
     lenders.sort(key=lambda r: (-r["revenue"], -r["sent"], -r["processed"]))
 
