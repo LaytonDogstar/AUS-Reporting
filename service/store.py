@@ -418,6 +418,15 @@ CREATE TABLE IF NOT EXISTS live_internal (
     collected_at TEXT NOT NULL
 );
 
+-- The same for the external affiliate report, read live, so today's
+-- profit can be shown for every source and not only FF.
+CREATE TABLE IF NOT EXISTS live_external (
+    business_date TEXT PRIMARY KEY,
+    received INTEGER, sold INTEGER,
+    revenue REAL, bs_cost REAL, adword_spent REAL, profit REAL,
+    collected_at TEXT NOT NULL
+);
+
 -- Why a day is missing, so a gap is explained rather than silent.
 CREATE TABLE IF NOT EXISTS collection (
     business_date TEXT NOT NULL,
@@ -833,11 +842,12 @@ def save_hours(conn, business_date, leads, sales, as_of, complete, collected_at,
     return True
 
 
-def save_live_internal(conn, business_date, totals, collected_at):
-    """Today's FF figures, from the internal report read live."""
+def save_live_internal(conn, business_date, totals, collected_at, source="internal"):
+    """Today's figures from one affiliate report, read live."""
+    table = {"internal": "live_internal", "external": "live_external"}[source]
     with conn:
         conn.execute(
-            "INSERT OR REPLACE INTO live_internal (business_date, received, sold, revenue,"
+            f"INSERT OR REPLACE INTO {table} (business_date, received, sold, revenue,"
             " bs_cost, adword_spent, profit, collected_at) VALUES (?,?,?,?,?,?,?,?)",
             (business_date, totals["received"], totals["sold"], totals["revenue"],
              totals["bs_cost"], totals["adword_spent"], totals["profit"], collected_at))
@@ -913,9 +923,10 @@ def hour_rows(conn, dates, source):
     return leads, sales, filtered
 
 
-def ff_money(conn, business_date):
-    """FF revenue, BS cost, Ads spend and profit for one day: the stored
-    internal report for a finished day, the live read for today.
+def ff_money(conn, business_date, source="internal"):
+    """One report's revenue, BS cost, Ads spend and profit for one day:
+    the stored report for a finished day, the live read for today. FF by
+    default; `source="external"` reads the external affiliate report.
 
     The report's own totals block carries 0 for Ads spend on finished
     days while its rows carry the real figure - all of it on one source -
@@ -924,13 +935,13 @@ def ff_money(conn, business_date):
     r = conn.execute(
         "SELECT SUM(received), SUM(sold), SUM(revenue), SUM(bs_cost), SUM(adword_spent),"
         " SUM(profit), MAX(collected_at), COUNT(*) FROM affiliate_day"
-        " WHERE business_date=? AND source='internal'", (business_date,)).fetchone()
+        " WHERE business_date=? AND source=?" + _not_test(), (business_date, source)).fetchone()
     if r and r[7]:
         return {"received": r[0], "sold": r[1], "revenue": r[2], "bs_cost": r[3],
                 "adword_spent": r[4], "profit": r[5], "collected_at": r[6], "live": False}
     r = conn.execute(
         "SELECT received, sold, revenue, bs_cost, adword_spent, profit, collected_at"
-        " FROM live_internal WHERE business_date=?", (business_date,)).fetchone()
+        f" FROM live_{source} WHERE business_date=?", (business_date,)).fetchone()
     if r:
         return {"received": r[0], "sold": r[1], "revenue": r[2], "bs_cost": r[3],
                 "adword_spent": r[4], "profit": r[5], "collected_at": r[6], "live": True}

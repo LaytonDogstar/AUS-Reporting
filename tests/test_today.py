@@ -349,3 +349,40 @@ class SideBySide(unittest.TestCase):
         store.save_affiliates(conn, day, "external", rows, totals, STAMP)
         conn.close()
         self.assertIn('"source":"both"', main.dashboard_page(30).decode())
+
+
+class Profit(unittest.TestCase):
+    """The Profit tile: each report's own profit, added only as money."""
+
+    def setUp(self):
+        self.conn = store.connect(":memory:")
+        self.addCleanup(self.conn.close)
+        self.day = (store.business_today() - dt.timedelta(days=1)).isoformat()
+        for source, items in (
+                ("external", [{"AffiliateName": "Borrowly(59)", "TotalProfit": 500.0, "TotalReceived": 10},
+                              {"AffiliateName": "DummyJourney(144)", "TotalProfit": 999.0, "TotalReceived": 5}]),
+                ("internal", [{"AffiliateName": "Friendly Finance(24)", "TotalProfit": 200.0,
+                               "TotalAdwordSpent": 50.0, "TotalReceived": 10}])):
+            rows, totals = collector.reduce_affiliates({"Items": items})
+            store.save_affiliates(self.conn, self.day, source, rows, totals, STAMP)
+        store.save_hours(self.conn, self.day, {(10, EXT): (1, 1)}, {}, self.day + "T23:59", True, STAMP)
+
+    def test_all_sources_carries_both_reports_profit(self):
+        p = dash.today_payload(self.conn, "yesterday", "all")
+        self.assertEqual({k: v["day"] for k, v in p["profit"].items()},
+                         {"external": 500.0, "internal": 200.0})
+
+    def test_one_population_carries_its_own(self):
+        self.assertEqual(list(dash.today_payload(self.conn, "yesterday", "external")["profit"]), ["external"])
+        self.assertEqual(list(dash.today_payload(self.conn, "yesterday", "internal")["profit"]), ["internal"])
+
+    def test_test_traffic_is_left_out(self):
+        self.assertEqual(store.ff_money(self.conn, self.day, "external")["profit"], 500.0)
+
+    def test_today_reads_the_live_report_of_each(self):
+        today = store.business_today().isoformat()
+        for source, profit in (("external", 70.0), ("internal", 30.0)):
+            store.save_live_internal(self.conn, today, {"received": 1, "sold": 1, "revenue": 1.0,
+                                     "bs_cost": 0.0, "adword_spent": 0.0, "profit": profit}, STAMP, source)
+        self.assertEqual(store.ff_money(self.conn, today, "external")["profit"], 70.0)
+        self.assertTrue(store.ff_money(self.conn, today, "internal")["live"])

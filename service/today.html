@@ -18,6 +18,11 @@
   .down { color: var(--critical); font-weight: 620; }
   .flat { color: var(--ink-2); }
   .tile .row { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; }
+  /* six tiles to a row: the five measures and profit */
+  #tiles { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+  #tiles .tile { padding: 12px 13px; }
+  #tiles .tile .v { font-size: 24px; }
+  #tiles .tile svg.spark { width: 60px; }
   .tile svg.spark { width: 72px; height: 26px; flex: none; }
   .fine { font-size: 12.5px; color: var(--muted); margin: -10px 0 20px; }
   .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
@@ -566,6 +571,36 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     }
   })();
 
+  // ---- profit -------------------------------------------------------------
+  // From the two affiliate reports, which are read live with the ping log
+  // for today: external profit after commission and statement cost, FF
+  // profit after statement cost and Ads spend. For All sources the two are
+  // added - profit is money; it is lead counts the reports count
+  // differently. Profit is not kept by the hour, so the typical figure by
+  // now is the typical day's, scaled by how far through its revenue the
+  // typical day is at this time.
+  function profitTile() {
+    const P = DATA.profit || {};
+    const pops = Object.keys(P);
+    if (!pops.length) return null;
+    const have = pops.filter((k) => P[k].day != null);
+    if (!have.length) return null;
+    const day = have.reduce((s, k) => s + P[k].day, 0);
+    const normAll = pops.every((k) => P[k].norm != null) ? pops.reduce((s, k) => s + P[k].norm, 0) : null;
+    const frac = isToday && hNow < 24 && N.value ? cumAt(T.norm.value, hNow) / N.value : 1;
+    const byNowP = normAll == null ? null : normAll * frac;
+    const label = { external: "ext", internal: "FF" };
+    const parts = pops.length > 1
+      ? pops.map((k) => `${label[k]} ${P[k].day == null ? "not read yet" : money(P[k].day)}`).join(" · ")
+      : "";
+    const live = pops.some((k) => P[k].live);
+    const sub = (normAll == null ? "" : `≈ ${money(normAll)}/day typical · ${arrow(vsPct(day, byNowP))}` +
+                 (frac < 1 ? " vs typical by now" : "")) +
+                (parts ? `<br>${parts}` : "") +
+                (pops.includes("internal") ? `<br><span style="color:var(--muted)">FF after Ads spend${live ? " · read live" : ""}</span>` : "");
+    return tile("Profit", money(day), sub);
+  }
+
   // ---- tiles ------------------------------------------------------------
   function tile(k, v, s, spark) {
     const div = document.createElement("div");
@@ -602,6 +637,8 @@ const DATA = /*__DASHBOARD_DATA__*/null;
       ratioTile("Buy-rate", "soldLeads", "leads", rate, N.leads ? N.soldLeads / N.leads : null, D.leads ? D.soldLeads / D.leads : null),
       ratioTile("Earnings per sale", "value", "sold", money2, N.sold ? N.value / N.sold : null, D.sold ? D.value / D.sold : null),
       countTile("value", "Revenue", money));
+    const pt = profitTile();
+    if (pt) box.append(pt);
     $("tileNote").textContent = "Typical is " + (DATA.normLabel || "not set yet") +
       ". Leads pinged are leads that reached the ping tree, so fewer than the affiliate report's received. " +
       "Sales and revenue are what lenders bought, at the tier's price; a lead can sell to more than one lender, so buy-rate is the share of leads pinged that sold at least once. " +

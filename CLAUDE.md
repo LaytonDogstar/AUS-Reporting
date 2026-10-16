@@ -26,6 +26,10 @@ by Railway from the `claude/code-review-tsyca6` branch; see
   query needs `AND business_date <= win_end()` beside its `>= ?`.
 - Google Ads spend is summed from the internal report's rows (its totals block
   reads 0) and shown for FF as a whole: all of it is booked to one source.
+- Today and Yesterday carry a Profit tile from the two affiliate reports
+  (both read live for today): external profit, FF profit after Ads spend, or
+  for All sources the two added - profit is money, so adding it is sound
+  where adding the reports' lead counts is not.
 - Trend tables label each measure's columns (Trend, Latest, Change), sort on
   every column, and open sorted by revenue, highest first.
 - Lenders: Tippla stays in all reporting, with revenue shown as $0 (its tier

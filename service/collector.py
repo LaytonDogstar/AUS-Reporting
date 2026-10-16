@@ -893,7 +893,7 @@ def reset(conn):
                       "lender_result_day", "lender_result_day_meta",
                       "affiliate_result_day", "quality_affiliate_day",
                       "quality_tier_day", "affiliate_lender_day", "hour_leads",
-                      "hour_sales", "hour_filtered", "hour_meta", "live_internal", "collection"):
+                      "hour_sales", "hour_filtered", "hour_meta", "live_internal", "live_external", "collection"):
             conn.execute(f"DELETE FROM {table}")
 
 
@@ -1002,16 +1002,21 @@ def collect_live(conn, day: date | None = None):
             "CompareStartDate": f"{prev.isoformat()}T00:00:00",
             "CompareEndDate": f"{prev.isoformat()}T00:00:00",
             "IsAllActiveOnly": False, "ExcludeInternalSources": False}
-    status, payload, ms, error = fetch(
-        f"{API_BASE}/api/PublicReports/InternalAffiliateLeadCountReport", "POST", body)
-    if error or status != 200:
-        out["internal"] = error or f"HTTP {status}"
-    else:
+    # Both affiliate reports, for today's profit: FF's (after Ads spend)
+    # and the external affiliates'. Kept apart; the page shows each, and
+    # adds the two only as money.
+    for source, report in (("internal", "InternalAffiliateLeadCountReport"),
+                           ("external", "AffiliateLeadCountReport")):
+        status, payload, ms, error = fetch(f"{API_BASE}/api/PublicReports/{report}", "POST", body)
+        if error or status != 200:
+            out[source] = error or f"HTTP {status}"
+            continue
         rows, _ = reduce_affiliates(json.loads(payload.decode("utf-8", "replace")))
+        rows = [r for r in rows if r.get("affiliate_id") not in store.TEST_AFFILIATE_IDS]
         totals = {k: sum(r[k] or 0 for r in rows) for k in
                   ("received", "sold", "revenue", "bs_cost", "adword_spent", "profit")}
-        store.save_live_internal(conn, iso, totals, stamp)
-        out["internal"] = "ok"
+        store.save_live_internal(conn, iso, totals, stamp, source)
+        out[source] = "ok"
     return out
 
 

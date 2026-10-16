@@ -835,6 +835,23 @@ def today_payload(conn, which="today", source="external"):
         ff = {"day": cur, "norm": ({k: v / counted for k, v in pooled.items()}
                                    if counted else None)}
 
+    # Profit, from the two affiliate reports: each population's own, the
+    # day's and the norm days' average. FF's is after statement cost and
+    # Ads spend; external's after commission and statement cost. Profit
+    # is money, so for All sources the page adds the two - unlike lead
+    # counts, which the reports count differently.
+    def money_for(pop):
+        cur = store.ff_money(conn, iso, pop)
+        vals = [m["profit"] or 0 for m in (store.ff_money(conn, d, pop) for d in norm_days)
+                if m and not m["live"]]
+        return {"day": cur["profit"] if cur else None,
+                "live": bool(cur and cur["live"]),
+                "collected_at": cur["collected_at"] if cur else None,
+                "norm": sum(vals) / len(vals) if vals else None}
+    pops = {"all": ("external", "internal"), "external": ("external",),
+            "internal": ("internal",)}[source]
+    profit = {pop: money_for(pop) for pop in pops}
+
     lender_rows = entity_list(lenders)
     day_sum, norm_sum = summary(total)["day"], summary(total)["norm"]
     return {
@@ -855,6 +872,7 @@ def today_payload(conn, which="today", source="external"):
         "affiliates": [{**a, "internal": internal.get(a["id"], False)}
                        for a in entity_list(affs)],
         "ff": ff,
+        "profit": profit,
         "moverMin": MOVER_MIN,
         "moversShown": MOVERS_SHOWN,
         "topTiers": TOP_TIERS,
