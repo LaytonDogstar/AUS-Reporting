@@ -174,7 +174,7 @@ class Logins(Server):
     # ---- roles -------------------------------------------------------------
     def test_a_viewer_sees_the_dashboard_and_nothing_else(self):
         b, _ = self.make_user("viewer")
-        for path in ("/", "/lenders", "/customers", "/today", "/yesterday"):
+        for path in ("/", "/lenders", "/customers", "/today", "/yesterday", "/day", "/days"):
             self.assertEqual(b.get(path)[0], 200, path)
         for path in ("/collection", "/pings", "/explore", "/admin", "/reset"):
             self.assertEqual(b.get(path)[0], 403, path)

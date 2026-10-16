@@ -12,16 +12,19 @@ by Railway from the `claude/code-review-tsyca6` branch; see
   including any added later, on any page. `sparkline()` in each template
   throws without an `expand` description, and `tests/test_sparklines.py`
   fails on any call site that does not pass one. (Layton, 15 Oct 2026.)
-- Pages: Affiliates (`/`, `template.html`), Lenders (`/lenders`), Customers
-  (`/customers`), Today (`/today`) and Yesterday (`/yesterday`, both
-  `today.html`) share one stylesheet and one tab bar, `main.page_tabs()`, put
-  in place of `<!--__TABS__-->`: Affiliates | Lenders | Customers with the
-  range beside them, then Today | Yesterday. Today and Yesterday are the US
+- Pages: Today (`/today`), Yesterday (`/yesterday`), Day (`/day`) and Days
+  (`/days`), all `today.html`, then Affiliates (`/`, `template.html`),
+  Lenders (`/lenders`) and Customers (`/customers`) share one stylesheet and
+  one tab bar, `main.page_tabs()`, put in place of `<!--__TABS__-->`: Today |
+  Yesterday | Day | Days first, then Affiliates | Lenders | Customers, each
+  with its date or range beside it. Today and Yesterday are the US
   dashboard's views of the same name, fitted to Overflow; today is read live
-  every ten minutes.
+  every ten minutes. Day (any finished day, `?date=`) and Days (the range)
+  are the same view without the intraday charts (`dash.period_payload`): one
+  point a day, each day against its own typical day.
 - The range is the US dashboard's: last 7, 14, 28, 30, 56 or 90 days, or
   custom dates. It is chosen once and remembered in a cookie across every
-  period page; Today and Yesterday are one day each and have none. A custom
+  period page, Days included; Today, Yesterday and Day are one day each and have none. A custom
   range bounds every windowed query through `win_end()`, so a new windowed
   query needs `AND business_date <= win_end()` beside its `>= ?`.
   Trend lines read back at least 28 days (`store.trend_cutoff()`), so a
@@ -29,7 +32,7 @@ by Railway from the `claude/code-review-tsyca6` branch; see
   range itself.
 - Google Ads spend is summed from the internal report's rows (its totals block
   reads 0) and shown for FF as a whole: all of it is booked to one source.
-- Today and Yesterday carry a Profit tile from the two affiliate reports
+- Today, Yesterday, Day and Days carry a Profit tile from the two affiliate reports
   (both read live for today): external profit, FF profit after Ads spend, or
   for All sources the two added - profit is money, so adding it is sound
   where adding the reports' lead counts is not.
@@ -43,13 +46,13 @@ by Railway from the `claude/code-review-tsyca6` branch; see
   (`dash.payload_both`): every row carries its population, each figure is
   worked out per population and shown next to the other - two values in a
   tile, two daily charts, two funnels, one trend table with FF marked - or
-  one population alone by the switch. Today and Yesterday offer All sources,
+  one population alone by the switch. The day views offer All sources,
   and open on it: their figures come from the ping log, which counts both
   alike, so adding them there is sound.
 - A sparkline's pop-up shows every measure of its row, the clicked one first:
   the trend tables on Affiliates and Lenders, the who-bought-from-whom tables,
-  and every row on Today and Yesterday (with each hour beside the running
-  figure). The sparkline itself stays one line.
+  and every row on the day views (each hour beside the running figure on
+  Today and Yesterday; each day against its typical day on Days). The sparkline itself stays one line.
 - Lead-level identifiers (`LeadId`, `LeadApplicationId`) and the credential
   fields returned by `Affiliates` are never stored.
 

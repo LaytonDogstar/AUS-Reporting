@@ -141,7 +141,7 @@
   </section>
 
   <div class="split">
-    <section class="card">
+    <section class="card" id="paceCard">
       <div class="chart-head">
         <h2>Pace through the day</h2>
         <select id="paceMetric" aria-label="Measure">
@@ -194,7 +194,7 @@
     </section>
   </div>
 
-  <section class="card">
+  <section class="card" id="tierCard">
     <div class="chart-head">
       <h2>Tier pace</h2>
       <select id="tierMetric" aria-label="Measure">
@@ -242,18 +242,31 @@ const DATA = /*__DASHBOARD_DATA__*/null;
   const hourLabel = (h) => (h % 12 === 0 ? 12 : h % 12) + (h < 12 ? "am" : "pm");
 
   const isToday = DATA.page === "today";
+  // Day and Days: any finished day, or a run of them, one point a day
+  // rather than one an hour - the intraday charts are left out - and each
+  // day against its own typical day.
+  const PERIOD = !!DATA.period;
+  const NB = PERIOD ? DATA.buckets.length : 24;
+  const dayLabel = (iso) => new Date(iso + "T00:00:00").toLocaleDateString("en-AU",
+    { weekday: "short", day: "numeric", month: "short" });
+  const bucketLabel = (i) => (PERIOD ? dayLabel(DATA.buckets[i]) : hourLabel(i));
+  const bucketSpan = (i) => (PERIOD ? bucketLabel(i) : `${hourLabel(i)} – ${hourLabel((i + 1) % 24)}`);
+  const collectedDays = new Set(DATA.collectedDays || []);
   const meta = DATA.meta;
   const hasNorm = DATA.normDays && DATA.normDays.length > 0;
-  const dayWord = isToday ? "today" : "yesterday";
-  const DayWord = isToday ? "Today" : "Yesterday";
+  const DayWord = PERIOD ? (NB === 1 ? dayLabel(DATA.start) : `${dayLabel(DATA.start)} – ${dayLabel(DATA.end)}`)
+                         : isToday ? "Today" : "Yesterday";
+  const dayWord = PERIOD ? (NB === 1 ? "on " + DayWord : `over these ${NB} days`) : DayWord.toLowerCase();
+  const PER = PERIOD && NB > 1 ? "" : "/day";
 
   // How far through the day the data reaches, in hours. A finished day
-  // reaches 24; a live one, the minute of its newest ping.
-  let hNow = 24;
-  if (meta && !meta.complete && meta.as_of) {
+  // reaches 24; a live one, the minute of its newest ping. A period
+  // reaches its last day.
+  let hNow = NB;
+  if (!PERIOD && meta && !meta.complete && meta.as_of) {
     hNow = Number(meta.as_of.slice(11, 13)) + Number(meta.as_of.slice(14, 16)) / 60;
   }
-  const lastHour = Math.min(23, Math.floor(hNow - 1e-9));
+  const lastHour = Math.min(NB - 1, Math.floor(hNow - 1e-9));
   const asOfText = meta && meta.as_of ? meta.as_of.slice(11, 16) : null;
 
   const sum = (a) => a.reduce((s, v) => s + v, 0);
@@ -261,7 +274,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
   // Cumulative at a fractional hour: whole hours, then the share of the
   // current one already gone.
   const cumAt = (a, t) => {
-    if (t >= 24) return sum(a);
+    if (t >= NB) return sum(a);
     const h = Math.floor(t);
     return sum(a.slice(0, h)) + (t - h) * (a[h] || 0);
   };
@@ -325,7 +338,9 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     });
     return svg;
   }
-  const hourPoints = (path) => path.map((v, i) => [hourLabel(i), v]);
+  const hourPoints = (path) => path.map((v, i) => [bucketLabel(i), v]);
+  // A sparkline needs two points: a single Day has none to draw.
+  const canTrend = NB > 1;
 
   // ---- hour chart: the day against the typical path -------------------
   // series: [{name, values (24, null where not reached), color, dashed}]
@@ -354,7 +369,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
       return [1, 2, 2.5, 5, 10].map((f) => f * mag).find((v) => v >= raw) * 4;
     };
     const max = niceMax(vals), rmax = hasRight ? niceMax(rvals) : 1;
-    const x = (i) => m.l + (i / 23) * iw;
+    const x = (i) => m.l + (i / (NB - 1 || 1)) * iw;
     const y = (v) => m.t + ih - (v / max) * ih;
     const yr = (v) => m.t + ih - (v / rmax) * ih;
     for (let i = 0; i <= 4; i++) {
@@ -368,9 +383,10 @@ const DATA = /*__DASHBOARD_DATA__*/null;
         r.textContent = showRight((rmax / 4) * i);
       }
     }
-    for (let h = 0; h < 24; h += (W < 520 ? 6 : 3)) {
+    const step = PERIOD ? Math.max(1, Math.ceil(NB / (W < 520 ? 4 : 8))) : (W < 520 ? 6 : 3);
+    for (let h = 0; h < NB; h += step) {
       const t = el("text", { x: x(h), y: H - 6, class: "tick", "text-anchor": h ? "middle" : "start" }, svg);
-      t.textContent = hourLabel(h);
+      t.textContent = bucketLabel(h);
     }
     if (isToday && hNow < 24) {
       const xx = m.l + (Math.min(hNow, 23) / 23) * iw;
@@ -400,13 +416,13 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     const hit = el("rect", { x: m.l, y: m.t, width: iw, height: ih, fill: "transparent" }, svg);
     hit.addEventListener("mousemove", (e) => {
       const box = svg.getBoundingClientRect();
-      const i = Math.max(0, Math.min(23, Math.round(((e.clientX - box.left - m.l) / iw) * 23)));
+      const i = Math.max(0, Math.min(NB - 1, Math.round(((e.clientX - box.left - m.l) / iw) * (NB - 1))));
       cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("opacity", 1);
       const rows = series.filter((s) => !s.hidden).map((s) => {
         const fmtV = s.axis === "right" ? showRight : show;
         return `<div class="row"><span>${esc(s.name)}</span><span>${s.values[i] == null ? "—" : fmtV(s.values[i])}</span></div>`;
       }).join("");
-      showTip(e, `<b>${hourLabel(i)} – ${hourLabel((i + 1) % 24)}</b>${rows}`);
+      showTip(e, `<b>${bucketSpan(i)}</b>${rows}`);
     });
     hit.addEventListener("mouseleave", () => { cross.setAttribute("opacity", 0); hideTip(); });
   }
@@ -429,13 +445,13 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     for (const p of popChart.panels) {
       const fig = document.createElement("figure");
       const chg = p.change == null ? "" : ` (${p.change > 0 ? "+" : ""}${Math.round(p.change)}%)`;
-      fig.innerHTML = `<figcaption>${esc(p.name)} <span class="cap-sub">${DayWord.toLowerCase()} ${p.show(p.now)}` +
+      fig.innerHTML = `<figcaption>${esc(p.name)} <span class="cap-sub">${PERIOD ? "actual" : DayWord.toLowerCase()} ${p.show(p.now)}` +
         (hasNorm ? ` · typical ${isToday && hNow < 24 && p.cumulative ? "by now " : ""}${p.show(p.typ)}` +
           `<span class="${p.change != null && p.change <= -10 ? "neg" : p.change != null && p.change >= 10 ? "pos" : ""}">${chg}</span>` : "") +
         `</span></figcaption>`;
       const svg = document.createElementNS(SVGNS, "svg");
       svg.setAttribute("role", "img");
-      svg.setAttribute("aria-label", p.name + " through the day against the typical path");
+      svg.setAttribute("aria-label", p.name + (PERIOD ? " day by day" : " through the day") + " against the typical path");
       fig.appendChild(svg);
       grid.appendChild(fig);
       drawHourChart(svg, p.series, p.show, 220);
@@ -477,7 +493,31 @@ const DATA = /*__DASHBOARD_DATA__*/null;
             ["Filter pass", "reached", "offered"], ["Accept %", "sold", "reached"]],
   };
   const SHOW_FOR = { value: money, leads: fmt, sold: fmt, reached: fmt };
+  // A period's day-by-day figure: a count each day, or a ratio taken over
+  // that day alone. A day not collected is a gap, not a zero.
+  const daily = (a) => a.map((v, i) => (collectedDays.has(DATA.buckets[i]) ? v : null));
+  const dailyRatio = (num, den) => num.map((v, i) => (collectedDays.has(DATA.buckets[i]) && den[i] ? v / den[i] : null));
+  function periodPanels(b, kind, first) {
+    const out = MEASURE_SETS[kind].map(([name, num, den]) => {
+      const show = den ? (num === "value" ? money2 : rate) : SHOW_FOR[num];
+      const dayV = den ? dailyRatio(b.day[num], b.day[den]) : daily(b.day[num]);
+      const normV = den ? b.norm[num].map((v, i) => (b.norm[den][i] ? v / b.norm[den][i] : null)) : b.norm[num];
+      const now = den ? (sum(b.day[den]) ? sum(b.day[num]) / sum(b.day[den]) : null) : sum(b.day[num]);
+      const typ = den ? (sum(b.norm[den]) ? sum(b.norm[num]) / sum(b.norm[den]) : null) : sum(b.norm[num]);
+      const series = [{ name: "Each day", values: dayV, color: "var(--series-1)", dots: true }];
+      if (hasNorm) series.push({ name: "Typical day", values: normV, color: "var(--muted)", dashed: true });
+      return { name, series, show, now, typ, cumulative: !den,
+               change: hasNorm && typ ? (now / typ - 1) * 100 : null };
+    });
+    if (first) out.sort((a, b2) => (b2.name === first) - (a.name === first));
+    return out;
+  }
+  // The line a sparkline draws for a row: by the hour, running; or for a
+  // period, day by day.
+  const trendLine = (b, num, den) => (PERIOD ? (den ? dailyRatio(b.day[num], b.day[den]) : daily(b.day[num]))
+                                             : den ? ratioPath(b.day[num], b.day[den], true) : dayPath(b.day[num]));
   function panelsFor(b, kind, first) {
+    if (PERIOD) return periodPanels(b, kind, first);
     const out = MEASURE_SETS[kind].map(([name, num, den]) => {
       if (den) {
         const show = num === "value" ? money2 : rate;
@@ -511,8 +551,11 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     return { name, series, show, now, typ, cumulative,
              change: hasNorm && typ ? (now / typ - 1) * 100 : null };
   }
-  const panelNote = "Each chart has the running figure and each hour on its own, both against the typical day. Counts are compared with the typical day by the same time; ratios with the typical whole-day figure." + (isToday ? " The current hour is still filling. " : " ");
-  const normNote = hasNorm
+  const panelNote = PERIOD ? "Each chart has each day's figure against that date's typical day. The headline sets the period's total against the typical total. " : "Each chart has the running figure and each hour on its own, both against the typical day. Counts are compared with the typical day by the same time; ratios with the typical whole-day figure." + (isToday ? " The current hour is still filling. " : " ");
+  const normNote = PERIOD
+    ? (hasNorm ? "Dashed is the typical day for each date: the same weekday over the eight weeks before it, as Yesterday uses (or the nearest weeks, early in the history)." : "No finished days are stored yet to set a typical day against.") +
+      (meta && !meta.complete ? ` ${meta.collected} of ${meta.days} days are collected; the rest are left out of both figures.` : "")
+    : hasNorm
     ? `Dashed is ${DATA.normLabel}: the average of ${DATA.normDays.length} finished day${DATA.normDays.length > 1 ? "s" : ""} (${DATA.normDays.slice(-1)[0]} to ${DATA.normDays[0]}). Hours are Sydney time.`
     : "No finished days are stored yet to set a typical path against. Hours are Sydney time.";
 
@@ -533,12 +576,32 @@ const DATA = /*__DASHBOARD_DATA__*/null;
 
   // ---- header, switches -------------------------------------------------
   $({ all: "srcAll", internal: "srcInternal" }[DATA.source] || "srcExternal").setAttribute("aria-current", "page");
+  // The population switch keeps the page's date or range.
+  for (const [id, src] of [["srcAll", "all"], ["srcExternal", "external"], ["srcInternal", "internal"]]) {
+    const u = new URL(location.href);
+    u.searchParams.set("source", src);
+    $(id).href = u.pathname + u.search;
+  }
+  if (!canTrend) {
+    // One day has no line to draw: drop the tables' Trend column.
+    document.querySelectorAll("th.line").forEach((th) => {
+      th.classList.add("hidden");
+      th.parentElement.previousElementSibling.querySelector("th.grp").colSpan = 2;
+    });
+  }
+  if (PERIOD) {
+    for (const id of ["paceCard", "tierCard"]) $(id).classList.add("hidden");
+    $("popLegend").innerHTML = '<span><i style="background:var(--series-1)"></i>Each day</span><span><i style="background:var(--muted)"></i>Typical day (dashed)</span>';
+  }
   if (isToday) {
     const r = $("refreshLink");
     r.classList.remove("hidden");
     r.href = "/today?refresh=1&source=" + DATA.source;
   }
-  const when = isToday
+  const when = PERIOD
+    ? `${NB === 1 ? DATA.weekday + " " + DATA.start : DayWord + " " + DATA.end.slice(0, 4) + " · " + NB + " days"} · ` +
+      (!meta ? "not collected yet" : meta.complete ? (NB === 1 ? "finished day" : "finished days") : `${meta.collected} of ${meta.days} days collected`)
+    : isToday
     ? (asOfText ? `Today ${DATA.weekday} ${DATA.date} · live, as of ${asOfText} Sydney` : `Today ${DATA.date} · not read yet`)
     : `${DATA.weekday} ${DATA.date} · ` + (meta && meta.complete ? "finished day" : (asOfText ? `from the last live read, to ${asOfText}; the finished day is collected within the half hour` : "not collected yet"));
   $("asof").textContent = when + " · " + DATA.sourceLabel;
@@ -547,7 +610,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
   (function verdict() {
     const v = $("verdict");
     if (!meta) {
-      v.innerHTML = isToday
+      v.innerHTML = PERIOD ? "Nothing is collected for these days yet." : isToday
         ? "Today has not been read yet. The first live read runs as the service starts and every ten minutes after; this page fills in on the next load."
         : "Yesterday is not collected yet. It is read within the half hour after midnight, Sydney time.";
       return;
@@ -566,6 +629,8 @@ const DATA = /*__DASHBOARD_DATA__*/null;
       const projVal = byNow("value") ? D.value * N.value / byNow("value") : null;
       v.innerHTML = `<span class="${cls}">${mark}${word}</span> ${esc(DATA.normLabel)} by ${asOfText}` +
         (projSold ? ` — on pace for <b>~${fmt(projSold)} sales</b> · <b>~${money(projVal)}</b> by the end of the day if it holds this shape.` : ".");
+    } else if (PERIOD) {
+      v.innerHTML = `<span class="${cls}">${mark}${word.charAt(0).toUpperCase() + word.slice(1)} typical</span> — <b>${fmt(D.sold)} sales</b> · <b>${money(D.value)}</b> ${dayWord}, against ${fmt(N.sold)} and ${money(N.value)} typical.`;
     } else {
       v.innerHTML = `<span class="${cls}">${mark}Ended ${word}</span> ${esc(DATA.normLabel)} — finished with <b>${fmt(D.sold)} sales</b> · <b>${money(D.value)}</b>, against ${fmt(N.sold)} and ${money(N.value)} typical.`;
     }
@@ -594,7 +659,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
       ? pops.map((k) => `${label[k]} ${P[k].day == null ? "not read yet" : money(P[k].day)}`).join(" · ")
       : "";
     const live = pops.some((k) => P[k].live);
-    const sub = (normAll == null ? "" : `≈ ${money(normAll)}/day typical · ${arrow(vsPct(day, byNowP))}` +
+    const sub = (normAll == null ? "" : `≈ ${money(normAll)}${PER} typical · ${arrow(vsPct(day, byNowP))}` +
                  (frac < 1 ? " vs typical by now" : "")) +
                 (parts ? `<br>${parts}` : "") +
                 (pops.includes("internal") ? `<br><span style="color:var(--muted)">FF after Ads spend${live ? " · read live" : ""}</span>` : "");
@@ -615,18 +680,18 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     if (!meta) return;
     const cut = isToday && hNow < 24;
     const sub = (k, show) => !hasNorm ? "" :
-      `≈ ${show(N[k])}/day typical · ${arrow(vsPct(D[k], byNow(k)))} ${cut ? "vs typical by now" : ""}`;
+      `≈ ${show(N[k])}${PER} typical · ${arrow(vsPct(D[k], byNow(k)))} ${cut ? "vs typical by now" : ""}`;
     const countTile = (k, label, show) => {
-      const path = dayPath(T.day[k]), norm = cum(T.norm[k]);
-      return tile(label, show(D[k]), sub(k, show),
+      const path = trendLine(T, k), norm = cum(T.norm[k]);
+      return tile(label, show(D[k]), sub(k, show), canTrend &&
         sparkline(hourPoints(path), false, pathExpand({ title: `${DayWord}, every measure`, day: path, norm: norm, show: show,
           panels: panelsFor(T, "total", label),
           sub: panelNote + normNote })));
     };
     const ratioTile = (label, num, den, show, normVal, dayVal) => {
-      const path = ratioPath(T.day[num], T.day[den], true), norm = ratioPath(T.norm[num], T.norm[den], false);
+      const path = trendLine(T, num, den), norm = ratioPath(T.norm[num], T.norm[den], false);
       const p = vsPct(dayVal, normVal);
-      return tile(label, show(dayVal), hasNorm ? `≈ ${show(normVal)} typical · ${arrow(p)}` : "",
+      return tile(label, show(dayVal), hasNorm ? `≈ ${show(normVal)} typical · ${arrow(p)}` : "", canTrend &&
         sparkline(hourPoints(path), p != null && p <= -10, pathExpand({ title: `${DayWord}, every measure`, day: path, norm: norm, show: show,
           panels: panelsFor(T, "total", label),
           sub: panelNote + normNote })));
@@ -639,11 +704,11 @@ const DATA = /*__DASHBOARD_DATA__*/null;
       countTile("value", "Revenue", money));
     const pt = profitTile();
     if (pt) box.append(pt);
-    $("tileNote").textContent = "Typical is " + (DATA.normLabel || "not set yet") +
+    $("tileNote").textContent = (PERIOD ? "Typical is each date's typical day - the same weekday over the eight weeks before it - added up over the period" : "Typical is " + (DATA.normLabel || "not set yet")) +
       ". Leads pinged are leads that reached the ping tree, so fewer than the affiliate report's received. " +
       "Sales and revenue are what lenders bought, at the tier's price; a lead can sell to more than one lender, so buy-rate is the share of leads pinged that sold at least once. " +
       "Filter pass is the share a lender let through its filters of the leads it evaluated; the Lenders page divides by the report's processed count, which also takes in some leads a lender skipped, so it reads a little lower. " +
-      "Counts are compared with the typical day by the same time; the two ratios do not depend on the time of day, so they read fairly mid-day.";
+      (PERIOD ? "" : "Counts are compared with the typical day by the same time; the two ratios do not depend on the time of day, so they read fairly mid-day.");
   })();
 
   // ---- FF: Google Ads -------------------------------------------------------
@@ -659,12 +724,12 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     const t = (k, v, s) => { const div = document.createElement("div"); div.className = "tile";
       div.innerHTML = `<div class="k">${k}</div><div class="v">${v}</div><div class="s">${s}</div>`; return div; };
     box.append(
-      t("Ads spend", money(d.adword_spent), n ? `≈ ${money(n.adword_spent)}/day typical` : ""),
-      t("FF revenue", money(d.revenue), n ? `≈ ${money(n.revenue)}/day typical` : ""),
+      t("Ads spend", money(d.adword_spent), n ? `≈ ${money(n.adword_spent)}${PER} typical` : ""),
+      t("FF revenue", money(d.revenue), n ? `≈ ${money(n.revenue)}${PER} typical` : ""),
       t("Return on ad spend", roas == null ? "—" : roas.toFixed(2) + "×", roasN ? `≈ ${roasN.toFixed(2)}× typical` : "revenue ÷ Ads spend"),
-      t("Profit after Ads", money(d.profit), (n ? `≈ ${money(n.profit)}/day typical · ` : "") + `statements ${money(d.bs_cost)}`));
+      t("Profit after Ads", money(d.profit), (n ? `≈ ${money(n.profit)}${PER} typical · ` : "") + `statements ${money(d.bs_cost)}`));
     const at = d.collected_at ? d.collected_at.slice(11, 16) + " UTC" : "";
-    $("ffSub").innerHTML = (d.live ? `From the internal affiliate report, read live at ${at}. ` : "From the internal affiliate report for the finished day. ") +
+    $("ffSub").innerHTML = (d.live ? `From the internal affiliate report, read live at ${at}. ` : (PERIOD && NB > 1 ? "From the internal affiliate report, summed over the days. " : "From the internal affiliate report for the finished day. ")) +
       "Profit is the report's own: revenue less statement cost and Ads spend. " +
       "<b>All Ads spend is booked to one source, Friendly Finance Min Loan</b>, so read FF as a whole: that source alone looks loss-making and the others look free.";
   })();
@@ -724,9 +789,10 @@ const DATA = /*__DASHBOARD_DATA__*/null;
   function salesCells(tr, r, b, kind) {
     const line = document.createElement("td");
     line.className = "line";
-    const path = dayPath(b.day.sold), norm = cum(b.norm.sold);
+    const path = trendLine(b, "sold"), norm = cum(b.norm.sold);
     const flagged = r.change != null && r.change <= -25 && cumAt(b.norm.sold, hNow) >= 4;
-    line.appendChild(sparkline(hourPoints(path), flagged,
+    if (!canTrend) line.classList.add("hidden");
+    else line.appendChild(sparkline(hourPoints(path), flagged,
       pathExpand({ title: `${r.name}, ${dayWord}`, day: path, norm: norm, show: fmt,
         panels: panelsFor(b, kind),
         sub: panelNote + normNote })));
@@ -763,7 +829,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
   });
   $("affTitle").textContent = `Affiliates · ${DATA.sourceLabel}`;
   $("affSub").textContent = affRows.length
-    ? `Every affiliate with leads ${dayWord}. Change is sales against its typical path by the same time; buy-rate is the share of its leads pinged that sold at least once, against its own typical rate. Select a heading to sort, a sparkline for every measure.`
+    ? `Every affiliate with leads ${dayWord}. Change is sales against its typical ${PERIOD ? "figure" : "path by the same time"}; buy-rate is the share of its leads pinged that sold at least once, against its own typical rate. Select a heading to sort, a sparkline for every measure.`
     : "No leads from this population yet.";
 
   // ---- why EPL --------------------------------------------------------------
@@ -857,7 +923,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
         : moversOnly
           ? (rows.length ? `The ${rows.length} lender${rows.length === 1 ? "" : "s"} whose sales are off what their usual share of the ${fmt(D.leads)} leads pinged would buy, by more than chance. Gap in bold: red behind, green ahead.`
                          : "Nobody is notably off their usual appetite.")
-          : `Every lender that bought or was sent a lead ${dayWord}, from ${DATA.sourceLabel.toLowerCase()}. Change is against the lender's typical path by the same time; Expected is what its usual share of the ${fmt(D.leads)} leads pinged would buy, and a bold Gap is more than chance. Select a heading to sort.`;
+          : `Every lender that bought or was sent a lead ${dayWord}, from ${DATA.sourceLabel.toLowerCase()}. Change is against the lender's typical ${PERIOD ? "figure" : "path by the same time"}; Expected is what its usual share of the ${fmt(D.leads)} leads pinged would buy, and a bold Gap is more than chance. Select a heading to sort.`;
     });
   for (const [id, only] of [["lendAll", false], ["lendMovers", true]]) {
     $(id).addEventListener("click", () => {
@@ -918,7 +984,10 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     "yesterday is the finished day once collected. Sales and revenue exclude the Dummy test lender and DCS; test affiliates are left out of leads. " +
     "The ping log carries each lead's identifier, used only to find the hour of its first ping and never stored.";
 
-  function drawAll() { drawPace(); drawAffiliates(); drawBuyers(); drawTiers(); drawPop(); }
+  function drawAll() {
+    if (!PERIOD) { drawPace(); drawTiers(); }
+    drawAffiliates(); drawBuyers(); drawPop();
+  }
   drawAll();
   let resizeTimer = null;
   addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(drawAll, 120); });

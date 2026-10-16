@@ -148,7 +148,7 @@ def page(title, body):
 
 def nav(active=""):
     items = [("/", "Dashboard"), ("/lenders", "Lenders"), ("/customers", "Customers"),
-             ("/today", "Today"), ("/yesterday", "Yesterday"),
+             ("/today", "Today"), ("/yesterday", "Yesterday"), ("/day", "Day"), ("/days", "Days"),
              ("/scorecard", "Scorecard"),
              ("/affiliates", "Affiliates"), ("/quality", "Lead quality"),
              ("/pings", "Ping log"), ("/collection", "Collection"),
@@ -227,6 +227,40 @@ def today_page(which="today", source="all"):
     finally:
         conn.close()
     return dash.render(data, dash.TODAY_TEMPLATE).encode("utf-8")
+
+
+def period_page(start, end, source="all", which="days"):
+    """The Today view over a chosen finished day, or a run of them: one
+    point a day, each day against its own typical day."""
+    conn = store.connect(DB_PATH)
+    try:
+        data = dash.period_payload(conn, start, end, source, which)
+    finally:
+        conn.close()
+    return dash.render(data, dash.TODAY_TEMPLATE).encode("utf-8")
+
+
+def resolve_day(params):
+    """The day the Day page shows: the one asked for, no later than
+    yesterday, else yesterday."""
+    yesterday = store.business_today() - timedelta(days=1)
+    try:
+        day = date.fromisoformat(params.get("date", ""))
+    except ValueError:
+        return yesterday
+    return min(day, yesterday)
+
+
+def period_span(rng):
+    """The finished days a range covers on the Days page: a custom range's
+    own dates, or the last n days to yesterday; no more than
+    dash.PERIOD_MAX_DAYS, keeping the latest."""
+    yesterday = store.business_today() - timedelta(days=1)
+    end = date.fromisoformat(rng["end"]) if rng["end"] else yesterday
+    start = (date.fromisoformat(rng["start"]) if rng["start"]
+             else end - timedelta(days=rng["days"] - 1))
+    start = max(start, end - timedelta(days=dash.PERIOD_MAX_DAYS - 1))
+    return start.isoformat(), end.isoformat()
 
 
 def customers_page(days=30):
@@ -876,9 +910,10 @@ RANGE_PRESETS = (7, 14, 28, 30, 56, 90)
 DEFAULT_DAYS = 30
 MAX_RANGE_DAYS = 366
 RANGE_COOKIE = "rng"
-# Pages that show a period, and so take the range. Today and Yesterday
-# are one day each and do not.
-RANGE_PAGES = ("/", "/lenders", "/customers", "/scorecard", "/affiliates", "/quality", "/pings")
+# Pages that show a period, and so take the range. Today, Yesterday and
+# Day are one day each and do not.
+RANGE_PAGES = ("/", "/lenders", "/customers", "/scorecard", "/affiliates", "/quality", "/pings",
+               "/days")
 
 
 def resolve_range(params, cookie):
@@ -975,12 +1010,30 @@ def range_control(rng):
 
 
 PERIOD_TABS = (("/", "Affiliates"), ("/lenders", "Lenders"), ("/customers", "Customers"))
-DAY_TABS = (("/today", "Today"), ("/yesterday", "Yesterday"))
+DAY_TABS = (("/today", "Today"), ("/yesterday", "Yesterday"), ("/day", "Day"), ("/days", "Days"))
+
+
+def day_control(day):
+    """The Day page's date: picking one reloads the page on it."""
+    yesterday = (store.business_today() - timedelta(days=1)).isoformat()
+    return f"""<span class="rangectl" style="display:inline-flex;gap:6px;align-items:center">
+<label class="lbl" for="daySel">Date</label>
+<input type="date" id="daySel" class="f" value="{day}" max="{yesterday}" aria-label="Day">
+<script>(function () {{
+  var d = document.getElementById("daySel");
+  d.addEventListener("change", function () {{
+    if (!d.value) return;
+    var u = new URL(location.href);
+    u.searchParams.set("date", d.value);
+    location.href = u.pathname + u.search;
+  }});
+}})();</script></span>"""
 
 
 def page_tabs(active):
-    """The page switch, the same on every dashboard page: the pages over a
-    period, with the range beside them, then the two single days."""
+    """The page switch, the same on every dashboard page: the day views
+    first - Today, Yesterday, a chosen Day and a run of Days - then the
+    pages over a period, each with its date or range beside it."""
     rng = getattr(CURRENT, "range", None)
 
     current = ' aria-current="page"'
@@ -989,10 +1042,15 @@ def page_tabs(active):
         return (f'<nav class="seg" aria-label="{label}">' + "".join(
             f'<a class="seglink" href="{h}"{current if h == active else ""}>{t}</a>'
             for h, t in tabs) + "</nav>")
-    out = group(PERIOD_TABS, "Pages over a period")
-    if rng and active in RANGE_PAGES:
+    out = group(DAY_TABS, "Day views")
+    if active == "/day" and getattr(CURRENT, "day", None):
+        out += day_control(CURRENT.day)
+    if rng and active == "/days":
         out += range_control(rng)
-    return out + group(DAY_TABS, "Pages for one day")
+    out += group(PERIOD_TABS, "Pages over a period")
+    if rng and active in RANGE_PAGES and active != "/days":
+        out += range_control(rng)
+    return out
 
 
 # ----------------------------------------------------------------- logins
@@ -1240,7 +1298,7 @@ class Handler(BaseHTTPRequestHandler):
         return None
 
     def do_GET(self):                                # noqa: N802
-        CURRENT.user = CURRENT.range = CURRENT.range_cookie = None
+        CURRENT.user = CURRENT.range = CURRENT.range_cookie = CURRENT.day = None
         store.set_window()
         path, _, query = self.path.partition("?")
         CURRENT.path = path
@@ -1304,6 +1362,18 @@ class Handler(BaseHTTPRequestHandler):
                     collector.live_in_background(DB_PATH)
                     return self._redirect(f"/today?source={source}")
                 return self._send(200, today_page(path[1:], source))
+            if path in ("/day", "/days"):
+                source = params.get("source", "all")
+                if source not in dash.TODAY_SOURCES:
+                    source = "all"
+                # The day's figures are the ping log's, not the window's.
+                store.set_window()
+                if path == "/day":
+                    day = resolve_day(params).isoformat()
+                    CURRENT.day = day
+                    return self._send(200, period_page(day, day, source, "day"))
+                start, end = period_span(CURRENT.range)
+                return self._send(200, period_page(start, end, source, "days"))
             if path == "/customers":
                 return self._send(200, customers_page(days))
             if path == "/collection":

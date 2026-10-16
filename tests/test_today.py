@@ -386,3 +386,56 @@ class Profit(unittest.TestCase):
                                      "bs_cost": 0.0, "adword_spent": 0.0, "profit": profit}, STAMP, source)
         self.assertEqual(store.ff_money(self.conn, today, "external")["profit"], 70.0)
         self.assertTrue(store.ff_money(self.conn, today, "internal")["live"])
+
+
+class Period(Payload):
+    """Day and Days: the Today view over any finished day or run of days,
+    one bucket a day, each day against its own typical day."""
+
+    def days_ago(self, n):
+        return (self.today - dt.timedelta(days=n)).isoformat()
+
+    def test_a_run_of_days_has_a_bucket_a_day_summed_to_the_whole(self):
+        p = dash.period_payload(self.conn, self.days_ago(7), self.days_ago(1), "external")
+        self.assertEqual(len(p["buckets"]), 7)
+        self.assertEqual(p["total"]["day"]["leads"], [10] * 7)
+        self.assertEqual(sum(p["total"]["norm"]["leads"]), 70)     # a typical day for each
+        self.assertTrue(p["meta"]["complete"])
+        self.assertEqual(p["tiers"], [])                            # no intraday charts
+
+    def test_each_day_is_set_against_its_own_weekday(self):
+        seed(self.conn, self.days_ago(8), ext=(40, 4, 4, 120.0))
+        seed(self.conn, self.days_ago(22))                          # a third of that weekday
+        p = dash.period_payload(self.conn, self.days_ago(1), self.days_ago(1), "external")
+        # A week before yesterday had 40 leads; the others 10: (40+10+10)/3.
+        self.assertAlmostEqual(sum(p["total"]["norm"]["leads"]), 20)
+
+    def test_a_day_not_collected_is_left_out_of_both_figures(self):
+        self.conn.execute("DELETE FROM hour_meta WHERE business_date=?", (self.days_ago(2),))
+        self.conn.commit()
+        p = dash.period_payload(self.conn, self.days_ago(3), self.days_ago(1), "external")
+        self.assertEqual((p["meta"]["collected"], p["meta"]["days"]), (2, 3))
+        self.assertEqual(p["total"]["day"]["leads"], [10, 0, 10])
+        self.assertEqual(p["total"]["norm"]["leads"][1], 0)
+
+    def test_the_pages_render_and_the_tabs_put_the_day_views_first(self):
+        tmp = Path(self.enterContext(tempfile.TemporaryDirectory())) / "p.db"
+        main.DB_PATH = str(tmp)
+        conn = store.connect(main.DB_PATH)
+        for i in range(1, 15):
+            seed(conn, self.days_ago(i))
+        conn.close()
+        html = main.period_page(self.days_ago(7), self.days_ago(1), "all", "days").decode()
+        self.assertIn('"period":true', html)
+        tabs = main.page_tabs("/days")
+        order = [tabs.index(f'href="{h}"') for h in ("/today", "/yesterday", "/day", "/days", "/", "/lenders")]
+        self.assertEqual(order, sorted(order))
+
+    def test_the_day_is_never_later_than_yesterday(self):
+        self.assertEqual(main.resolve_day({"date": self.today.isoformat()}).isoformat(), self.days_ago(1))
+        self.assertEqual(main.resolve_day({"date": "rubbish"}).isoformat(), self.days_ago(1))
+        self.assertEqual(main.resolve_day({"date": self.days_ago(5)}).isoformat(), self.days_ago(5))
+
+    def test_a_preset_is_the_last_n_finished_days(self):
+        start, end = main.period_span({"days": 7, "start": None, "end": None})
+        self.assertEqual((start, end), (self.days_ago(7), self.days_ago(1)))

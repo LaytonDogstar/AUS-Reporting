@@ -753,31 +753,26 @@ def epl_breakdown(lenders):
             "rows": shown}
 
 
-def today_payload(conn, which="today", source="external"):
-    """The Today and Yesterday pages: one day hour by hour against the
-    norm, for one population. The day is `which` - today, still being
-    read live, or yesterday."""
-    today = store.business_today()
-    day = today if which == "today" else today - dt.timedelta(days=1)
-    iso = day.isoformat()
-    meta = store.hour_meta(conn, iso)
-    norm_days, norm_label = _norm_days(conn, day)
-    leads_rows, sales_rows, filtered_rows = store.hour_rows(conn, [iso] + norm_days, source)
+def _aggregate(conn, rows, nb, place):
+    """Leads and sales into buckets, each with the period's own figure and
+    the typical one beside it.
 
+    `rows` are (leads, sales, filtered) as store.hour_rows gives them; `nb`
+    is how many buckets - hours of a day, or days of a period; `place(d, h)`
+    says where a row of day `d`, hour `h` lands: [(side, bucket, weight)].
+    Returns the totals, and the lender, tier and affiliate buckets.
+    """
+    leads_rows, sales_rows, filtered_rows = rows
     tiers = {r[0]: {"tier": r[1], "lender_id": r[2], "lender": r[3]} for r in conn.execute(
         "SELECT lender_tier_id, lender_tier_name, lender_id, lender_name FROM lender_tier")}
     affiliates = {r[0]: r[1] for r in conn.execute("SELECT affiliate_id, name FROM affiliate")}
-    internal = store.is_internal_map(conn)
     lender_names = {t["lender_id"]: (t["lender"] or "").strip() or t["tier"]
                     for t in tiers.values() if t["lender_id"] is not None}
-
-    n_norm = len(norm_days) or 1
 
     def blank():
         # `offered` is what a lender evaluated: passed its filters
         # (reached) or failed them. Filter pass is reached / offered.
-        return {"leads": _hours(), "soldLeads": _hours(), "sold": _hours(), "value": _hours(),
-                "reached": _hours(), "offered": _hours()}
+        return {k: [0] * nb for k in ("leads", "soldLeads", "sold", "value", "reached", "offered")}
 
     total = {"day": blank(), "norm": blank()}
     lenders, tier_rows, affs = {}, {}, {}
@@ -788,90 +783,132 @@ def today_payload(conn, which="today", source="external"):
             b = table[key] = {"day": blank(), "norm": blank(), "name": name_fn()}
         return b
 
+    def aff_name(aid):
+        return lambda: affiliates.get(aid) or f"Affiliate {aid}"
+
     for d, h, aid, n, n_sold in leads_rows:
-        side = "day" if d == iso else "norm"
-        w = 1 if side == "day" else 1 / n_norm
-        for b in (total, bucket(affs, aid, lambda: affiliates.get(aid) or f"Affiliate {aid}")):
-            b[side]["leads"][h] += n * w
-            b[side]["soldLeads"][h] += n_sold * w
+        for side, i, w in place(d, h):
+            for b in (total, bucket(affs, aid, aff_name(aid))):
+                b[side]["leads"][i] += n * w
+                b[side]["soldLeads"][i] += n_sold * w
     for d, h, aid, lid, tid, reached, sold, value in sales_rows:
-        side = "day" if d == iso else "norm"
-        w = 1 if side == "day" else 1 / n_norm
         info = tiers.get(tid, {})
         lname = (info.get("lender") or "").strip() or info.get("tier") or f"Lender {lid}"
-        for b in (total, bucket(lenders, lid, lambda: lname),
-                  bucket(tier_rows, tid, lambda: (info.get("tier") or f"Tier {tid}")),
-                  bucket(affs, aid, lambda: affiliates.get(aid) or f"Affiliate {aid}")):
-            b[side]["reached"][h] += reached * w
-            b[side]["offered"][h] += reached * w
-            b[side]["sold"][h] += sold * w
-            b[side]["value"][h] += value * w
-        tier_rows[tid]["lender"] = lname
+        for side, i, w in place(d, h):
+            for b in (total, bucket(lenders, lid, lambda: lname),
+                      bucket(tier_rows, tid, lambda: (info.get("tier") or f"Tier {tid}")),
+                      bucket(affs, aid, aff_name(aid))):
+                b[side]["reached"][i] += reached * w
+                b[side]["offered"][i] += reached * w
+                b[side]["sold"][i] += sold * w
+                b[side]["value"][i] += value * w
+            tier_rows[tid]["lender"] = lname
     for d, h, aid, lid, n in filtered_rows:
-        side = "day" if d == iso else "norm"
-        w = 1 if side == "day" else 1 / n_norm
         # Lender and affiliate only: the counts are not kept per tier.
         lname = lender_names.get(lid) or f"Lender {lid}"
-        for b in (total, bucket(lenders, lid, lambda: lname),
-                  bucket(affs, aid, lambda: affiliates.get(aid) or f"Affiliate {aid}")):
-            b[side]["offered"][h] += n * w
+        for side, i, w in place(d, h):
+            for b in (total, bucket(lenders, lid, lambda: lname),
+                      bucket(affs, aid, aff_name(aid))):
+                b[side]["offered"][i] += n * w
+    return total, lenders, tier_rows, affs
 
-    def rounded(b):
-        return {side: {k: [round(v, 3) for v in arr] for k, arr in b[side].items()}
-                for side in ("day", "norm")}
 
-    def summary(b):
-        out = {}
-        for side in ("day", "norm"):
-            out[side] = {k: round(sum(arr), 2) for k, arr in b[side].items()}
-        return out
+def _rounded(b):
+    return {side: {k: [round(v, 3) for v in arr] for k, arr in b[side].items()}
+            for side in ("day", "norm")}
 
-    def entity_list(table, limit=None, key="value"):
-        rows = []
-        for eid, b in table.items():
-            s = summary(b)
-            if not (s["day"]["sold"] or s["norm"]["sold"] or s["day"]["leads"]):
-                continue
-            rows.append({"id": eid, "name": b["name"], "lender": b.get("lender"),
-                         "sum": s, **rounded(b)})
-        rows.sort(key=lambda r: (-r["sum"]["day"][key], -r["sum"]["norm"][key]))
-        return rows[:limit] if limit else rows
 
-    # FF money: Google Ads spend beside what it bought. The day's own,
-    # and the norm days' pooled, from the internal report.
+def _summary(b):
+    return {side: {k: round(sum(arr), 2) for k, arr in b[side].items()}
+            for side in ("day", "norm")}
+
+
+def _entity_list(table, limit=None, key="value"):
+    rows = []
+    for eid, b in table.items():
+        s = _summary(b)
+        if not (s["day"]["sold"] or s["norm"]["sold"] or s["day"]["leads"]):
+            continue
+        rows.append({"id": eid, "name": b["name"], "lender": b.get("lender"),
+                     "sum": s, **_rounded(b)})
+    rows.sort(key=lambda r: (-r["sum"]["day"][key], -r["sum"]["norm"][key]))
+    return rows[:limit] if limit else rows
+
+
+def _money_parts(conn, source, days, norm_weights):
+    """FF money and each population's profit: the days' own, summed, and
+    the typical figure, each norm day weighted as the buckets weight it.
+
+    A day not yet in the reports counts as missing rather than zero."""
+    cache = {}
+
+    def money(d, pop):
+        if (d, pop) not in cache:
+            cache[(d, pop)] = store.ff_money(conn, d, pop)
+        return cache[(d, pop)]
+
+    def typical(pop, field):
+        # Per period day, the average of its norm days that the report has.
+        total, any_ = 0.0, False
+        for _day, weights in norm_weights:
+            vals = [(money(d, pop)[field] or 0) for d in weights
+                    if money(d, pop) and not money(d, pop)["live"]]
+            if vals:
+                total += sum(vals) / len(vals)
+                any_ = True
+        return total if any_ else None
+
     ff = None
     if source in ("internal", "all"):
-        cur = store.ff_money(conn, iso)
-        pooled = {"revenue": 0.0, "adword_spent": 0.0, "profit": 0.0, "bs_cost": 0.0}
-        counted = 0
-        for d in norm_days:
-            m = store.ff_money(conn, d)
-            if m and not m["live"]:
-                counted += 1
-                for k in pooled:
-                    pooled[k] += m[k] or 0
-        ff = {"day": cur, "norm": ({k: v / counted for k, v in pooled.items()}
-                                   if counted else None)}
+        have = [money(d, "internal") for d in days if money(d, "internal")]
+        cur = None
+        if have:
+            cur = {k: sum(m[k] or 0 for m in have) for k in
+                   ("received", "sold", "revenue", "bs_cost", "adword_spent", "profit")}
+            cur.update(live=any(m["live"] for m in have),
+                       collected_at=max(m["collected_at"] or "" for m in have) or None)
+        norm = {k: typical("internal", k) for k in ("revenue", "adword_spent", "profit", "bs_cost")}
+        ff = {"day": cur, "norm": norm if norm["revenue"] is not None else None}
 
-    # Profit, from the two affiliate reports: each population's own, the
-    # day's and the norm days' average. FF's is after statement cost and
-    # Ads spend; external's after commission and statement cost. Profit
-    # is money, so for All sources the page adds the two - unlike lead
-    # counts, which the reports count differently.
-    def money_for(pop):
-        cur = store.ff_money(conn, iso, pop)
-        vals = [m["profit"] or 0 for m in (store.ff_money(conn, d, pop) for d in norm_days)
-                if m and not m["live"]]
-        return {"day": cur["profit"] if cur else None,
-                "live": bool(cur and cur["live"]),
-                "collected_at": cur["collected_at"] if cur else None,
-                "norm": sum(vals) / len(vals) if vals else None}
     pops = {"all": ("external", "internal"), "external": ("external",),
             "internal": ("internal",)}[source]
-    profit = {pop: money_for(pop) for pop in pops}
+    profit = {}
+    for pop in pops:
+        have = [money(d, pop) for d in days if money(d, pop)]
+        profit[pop] = {"day": sum(m["profit"] or 0 for m in have) if have else None,
+                       "live": any(m["live"] for m in have),
+                       "collected_at": max((m["collected_at"] or "" for m in have), default="") or None,
+                       "norm": typical(pop, "profit")}
+    return ff, profit
 
-    lender_rows = entity_list(lenders)
-    day_sum, norm_sum = summary(total)["day"], summary(total)["norm"]
+
+def today_payload(conn, which="today", source="external"):
+    """The Today and Yesterday pages: one day hour by hour against the
+    norm, for one population. The day is `which` - today, still being
+    read live, or yesterday."""
+    today = store.business_today()
+    day = today if which == "today" else today - dt.timedelta(days=1)
+    iso = day.isoformat()
+    meta = store.hour_meta(conn, iso)
+    norm_days, norm_label = _norm_days(conn, day)
+    n_norm = len(norm_days) or 1
+
+    def place(d, h):
+        return [("day", h, 1)] if d == iso else [("norm", h, 1 / n_norm)]
+
+    total, lenders, tier_rows, affs = _aggregate(
+        conn, store.hour_rows(conn, [iso] + norm_days, source), 24, place)
+    internal = store.is_internal_map(conn)
+    # FF money - Google Ads spend beside what it bought - and profit, from
+    # the two affiliate reports: the day's own and the norm days' average.
+    # FF's profit is after statement cost and Ads spend; external's after
+    # commission and statement cost. Profit is money, so for All sources
+    # the page adds the two - unlike lead counts, which the reports count
+    # differently.
+    ff, profit = _money_parts(conn, source, [iso], [(iso, norm_days)])
+
+    lender_rows = _entity_list(lenders)
+    day_sum, norm_sum = _summary(total)["day"], _summary(total)["norm"]
     return {
         "page": which,
         "date": iso,
@@ -882,13 +919,110 @@ def today_payload(conn, which="today", source="external"):
         "normLabel": norm_label,
         "source": source,
         "sourceLabel": SOURCE_LABELS.get(source, source),
-        "total": rounded(total),
+        "total": _rounded(total),
         "lenders": lender_rows,
         "movers": movers(lender_rows, day_sum["leads"], norm_sum["leads"]),
         "epl": epl_breakdown(lender_rows),
-        "tiers": entity_list(tier_rows, TOP_TIERS * 3, key="sold"),
+        "tiers": _entity_list(tier_rows, TOP_TIERS * 3, key="sold"),
         "affiliates": [{**a, "internal": internal.get(a["id"], False)}
-                       for a in entity_list(affs)],
+                       for a in _entity_list(affs)],
+        "ff": ff,
+        "profit": profit,
+        "moverMin": MOVER_MIN,
+        "moversShown": MOVERS_SHOWN,
+        "topTiers": TOP_TIERS,
+        "eplRows": EPL_ROWS,
+        "generatedUtc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+    }
+
+
+# The Day and Days pages: no longer than this, so a page stays quick to build.
+PERIOD_MAX_DAYS = 90
+
+
+def period_payload(conn, start, end, source="all", page="days"):
+    """The Day and Days pages: the Today view over any finished day or run
+    of days, one point a day rather than one an hour.
+
+    Each day is set against its own typical day - the same weekday over
+    the eight weeks before it, as Yesterday is - so the typical figure for
+    the period is the sum of its days' and keeps their weekday mix.
+    """
+    first, last = dt.date.fromisoformat(start), dt.date.fromisoformat(end)
+    span = [(first + dt.timedelta(days=i)).isoformat() for i in range((last - first).days + 1)]
+    index = {d: i for i, d in enumerate(span)}
+    # Every finished day, so a day early in the history can borrow weeks
+    # after it; 56 days beyond the period's end is as far as any reaches.
+    finished = store.hour_days(conn, (last + dt.timedelta(days=57)).isoformat(),
+                               len(span) + 200)
+    collected = [d for d in span if d in set(finished)]
+
+    # A day not collected has no figure, so it has no typical one either:
+    # the comparison runs over the days the page has. A day too early in
+    # the history to have weeks before it borrows the nearest weeks after.
+    have = set(collected)
+    norms = []
+    for d in span:
+        if d not in have:
+            norms.append((d, []))
+            continue
+        day = dt.date.fromisoformat(d)
+        gap = {x: (day - dt.date.fromisoformat(x)).days for x in finished if x != d}
+        pick = [x for x in gap if 0 < gap[x] <= 56 and gap[x] % 7 == 0][:NORM_WEEKDAYS]
+        if len(pick) < NORM_WEEKDAY_MIN:
+            pick = [x for x in gap if 0 < gap[x] <= NORM_DAYS]
+        if len(pick) < NORM_WEEKDAY_MIN:
+            near = sorted((x for x in gap if abs(gap[x]) <= 56 and gap[x] % 7 == 0),
+                          key=lambda x: abs(gap[x]))
+            pick = near[:NORM_WEEKDAYS] or pick
+        if not pick:
+            # Last resort, the history is that short: the nearest days.
+            pick = sorted((x for x in gap if abs(gap[x]) <= NORM_DAYS),
+                          key=lambda x: abs(gap[x]))[:NORM_WEEKDAYS]
+        norms.append((d, pick))
+    weights: dict[str, list] = {}
+    for i, (_d, nd) in enumerate(norms):
+        for x in nd:
+            weights.setdefault(x, []).append((i, 1 / len(nd)))
+
+    def place(d, _h):
+        out = [("norm", i, w) for i, w in weights.get(d, ())]
+        if d in have:
+            out.append(("day", index[d], 1))
+        return out
+
+    dates = sorted(set(span) | set(weights))
+    total, lenders, tier_rows, affs = _aggregate(
+        conn, store.day_rows(conn, dates, source), len(span), place)
+    internal = store.is_internal_map(conn)
+    ff, profit = _money_parts(conn, source, collected, norms)
+
+    lender_rows = _entity_list(lenders)
+    day_sum, norm_sum = _summary(total)["day"], _summary(total)["norm"]
+    used = sorted({x for _d, nd in norms for x in nd}, reverse=True)
+    return {
+        "page": page,
+        "period": True,
+        "start": start,
+        "end": end,
+        "buckets": span,
+        "collectedDays": collected,
+        "date": start if len(span) == 1 else None,
+        "weekday": first.strftime("%A"),
+        "today": store.business_today().isoformat(),
+        "meta": {"complete": len(collected) == len(span), "as_of": None,
+                 "days": len(span), "collected": len(collected)} if collected else None,
+        "normDays": used,
+        "normLabel": ("a typical " + first.strftime("%A")) if len(span) == 1 else "typical days",
+        "source": source,
+        "sourceLabel": SOURCE_LABELS.get(source, source),
+        "total": _rounded(total),
+        "lenders": lender_rows,
+        "movers": movers(lender_rows, day_sum["leads"], norm_sum["leads"]),
+        "epl": epl_breakdown(lender_rows),
+        "tiers": [],
+        "affiliates": [{**a, "internal": internal.get(a["id"], False)}
+                       for a in _entity_list(affs)],
         "ff": ff,
         "profit": profit,
         "moverMin": MOVER_MIN,

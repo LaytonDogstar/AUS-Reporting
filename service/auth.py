@@ -265,7 +265,7 @@ def end_session(conn, token):
 
 # ---------------------------------------------------------------- access
 
-VIEWER_PATHS = ("/", "/lenders", "/customers", "/today", "/yesterday",
+VIEWER_PATHS = ("/", "/lenders", "/customers", "/today", "/yesterday", "/day", "/days",
                 "/scorecard", "/affiliates", "/quality")
 ANALYST_PATHS = ("/collection", "/pings", "/verify", "/explore")
 ANALYST_PREFIXES = ("/shape/",)

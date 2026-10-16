@@ -53,6 +53,13 @@ opens its profile: every band with share, pool, index and a trend line
 of its share over time, which opens against the pool, with a shift
 either way called beyond chance.
 
+`/day` (any finished day, `?date=YYYY-MM-DD`) and `/days` (the range,
+presets or custom, up to 90 days) are the same view without the
+intraday charts: one point a day, each day against its own typical
+day, so the period's typical total keeps its weekday mix. A day not
+collected is left out of both figures. They come first in the tabs,
+after Today and Yesterday.
+
 `/today` and `/yesterday` are the US dashboard's Today and Yesterday
 views, fitted to Overflow. The day hour by hour against the norm -
 the same weekday over the last eight weeks once there are three of

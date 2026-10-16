@@ -941,6 +941,29 @@ def hour_rows(conn, dates, source):
     return leads, sales, filtered
 
 
+def day_rows(conn, dates, source):
+    """hour_rows with the hours summed away - one row per day - for the
+    pages that read a day or more as a whole. The hour is None."""
+    if not dates:
+        return [], [], []
+    marks = ",".join("?" * len(dates))
+    where = _in_source(conn, source)
+    leads = conn.execute(
+        f"SELECT business_date, NULL, affiliate_id, SUM(leads), SUM(sold_leads) FROM hour_leads"
+        f" WHERE business_date IN ({marks})" + where +
+        " GROUP BY business_date, affiliate_id", dates).fetchall()
+    sales = conn.execute(
+        f"SELECT business_date, NULL, affiliate_id, lender_id, lender_tier_id, SUM(reached),"
+        f" SUM(sold), SUM(value) FROM hour_sales WHERE business_date IN ({marks})" + where +
+        _not_excluded_lender() +
+        " GROUP BY business_date, affiliate_id, lender_id, lender_tier_id", dates).fetchall()
+    filtered = conn.execute(
+        f"SELECT business_date, NULL, affiliate_id, lender_id, SUM(filtered) FROM hour_filtered"
+        f" WHERE business_date IN ({marks})" + where + _not_excluded_lender() +
+        " GROUP BY business_date, affiliate_id, lender_id", dates).fetchall()
+    return leads, sales, filtered
+
+
 def ff_money(conn, business_date, source="internal"):
     """One report's revenue, BS cost, Ads spend and profit for one day:
     the stored report for a finished day, the live read for today. FF by
