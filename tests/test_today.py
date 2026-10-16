@@ -306,3 +306,46 @@ class Pages(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SideBySide(unittest.TestCase):
+    """The Affiliates page with both populations, never added together."""
+
+    def setUp(self):
+        self.conn = store.connect(":memory:")
+        self.addCleanup(self.conn.close)
+        day = (store.business_today() - dt.timedelta(days=1)).isoformat()
+        for source, name, received in (("external", "Borrowly(59)", 300), ("internal", "Friendly Finance(24)", 100)):
+            rows, totals = collector.reduce_affiliates({"Items": [
+                {"AffiliateName": name, "TotalReceived": received, "TotalSold": received // 3,
+                 "TotalSubmitted": received // 2, "TotalRevenue": float(received)}]})
+            store.save_affiliates(self.conn, day, source, rows, totals, STAMP)
+
+    def test_every_row_says_which_population_it_is(self):
+        p = dash.payload_both(self.conn, 30)
+        self.assertEqual({r["Pop"] for r in p["applications"]}, {"external", "internal"})
+        self.assertEqual({(a["Id"], a["Pop"]) for a in p["affiliates"]},
+                         {(59, "external"), (24, "internal")})
+
+    def test_nothing_is_added_across_populations(self):
+        p = dash.payload_both(self.conn, 30)
+        by_pop = {}
+        for r in p["applications"]:
+            by_pop[r["Pop"]] = by_pop.get(r["Pop"], 0) + r["Applications"]
+        self.assertEqual(by_pop, {"external": 300, "internal": 100})
+        self.assertNotIn(400, [r["Applications"] for r in p["applications"]])
+
+    def test_quality_rates_stay_per_population(self):
+        p = dash.payload_both(self.conn, 30)
+        self.assertEqual(set(p["qualityBandsBySource"]), {"external", "internal"})
+
+    def test_the_affiliates_page_opens_side_by_side(self):
+        tmp = Path(self.enterContext(tempfile.TemporaryDirectory())) / "t.db"
+        main.DB_PATH = str(tmp)
+        conn = store.connect(main.DB_PATH)
+        day = (store.business_today() - dt.timedelta(days=1)).isoformat()
+        rows, totals = collector.reduce_affiliates({"Items": [
+            {"AffiliateName": "Borrowly(59)", "TotalReceived": 30, "TotalSold": 10}]})
+        store.save_affiliates(conn, day, "external", rows, totals, STAMP)
+        conn.close()
+        self.assertIn('"source":"both"', main.dashboard_page(30).decode())

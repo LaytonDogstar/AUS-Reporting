@@ -85,7 +85,7 @@
   }
   label.lbl { font-size: 13px; color: var(--muted); }
 
-  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px,1fr)); gap: 12px; margin-bottom: 22px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px,1fr)); gap: 12px; margin-bottom: 22px; }
   .tile {
     background: var(--surface); border: 1px solid var(--border); border-radius: 11px;
     padding: 14px 16px; box-shadow: var(--shadow);
@@ -157,6 +157,14 @@
   }
   a.seglink:last-child { border-right: 0; }
   a.seglink[aria-current="page"] { background: var(--series-1); color: #fff; font-weight: 560; }
+  /* the side-by-side view: one chart per population, never one sum */
+  .pairs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px; }
+  .pairs figure { margin: 0; }
+  .pairs figcaption { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+  @media (max-width: 760px) { .pairs { grid-template-columns: 1fr; } }
+  .tile .v.pair { font-size: 22px; white-space: nowrap; }
+  .tile .v .pop { font-size: 12px; font-weight: 500; color: var(--muted); letter-spacing: 0; margin: 0 2px 0 4px; }
+  .tile .v .sep { color: var(--muted); font-weight: 400; margin: 0 6px; }
   .multiples { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
   .multiples figure { margin: 0; }
   .multiples figcaption { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
@@ -176,6 +184,11 @@
   .pop-head { display: flex; align-items: baseline; gap: 12px; }
   .pop-head h2 { font-size: 16px; font-weight: 620; margin: 0; flex: 1 1 auto; }
   #popSub { font-size: 13px; color: var(--ink-2); margin: 4px 0 12px; }
+  .pop-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 22px; }
+  @media (max-width: 760px) { .pop-grid { grid-template-columns: 1fr; } }
+  .pop-grid figure { margin: 0; }
+  .pop-grid figcaption { font-size: 13.5px; font-weight: 620; margin-bottom: 2px; }
+  .pop-grid figcaption .cap-sub { font-weight: 400; color: var(--ink-2); font-size: 12.5px; }
   #tip {
     position: fixed; pointer-events: none; z-index: 9;
     background: var(--surface); color: var(--ink);
@@ -227,6 +240,12 @@
       <span><i style="background:var(--series-2)"></i>Sold to a lender</span>
     </div>
     <svg id="trend" height="260" role="img" aria-label="Daily applications and sales"></svg>
+    <div class="pairs hidden" id="trendPair">
+      <figure><figcaption>External affiliates</figcaption>
+        <svg id="trendExt" height="260" role="img" aria-label="External affiliates, daily applications and sales"></svg></figure>
+      <figure><figcaption>Internal sources (FF)</figcaption>
+        <svg id="trendFF" height="260" role="img" aria-label="FF, daily applications and sales"></svg></figure>
+    </div>
   </section>
 
   <section class="card" id="watchCard">
@@ -312,6 +331,12 @@
     <p class="sub" id="funnelSub"></p>
     <p class="note hidden" id="funnelNote"></p>
     <svg id="funnel" role="img" aria-label="Applications reaching each stage"></svg>
+    <div class="pairs hidden" id="funnelPair">
+      <figure><figcaption>External affiliates</figcaption>
+        <svg id="funnelExt" role="img" aria-label="External affiliates, applications reaching each stage"></svg></figure>
+      <figure><figcaption>Internal sources (FF)</figcaption>
+        <svg id="funnelFF" role="img" aria-label="FF, applications reaching each stage"></svg></figure>
+    </div>
   </section>
 
   <section class="card" id="qualityCard">
@@ -375,6 +400,7 @@
   </div>
   <p id="popSub"></p>
   <svg id="popChart" role="img" aria-label="Expanded trend"></svg>
+  <div class="pop-grid" id="popGrid"></div>
 </dialog>
 
 <div id="tip" role="status" aria-live="polite"></div>
@@ -396,6 +422,12 @@ const DATA = /*__DASHBOARD_DATA__*/null;
   // The window is the server's: the range control reloads with a new one.
   let days = DATA.windowDays || 30;
   let affiliate = "all";
+  // Side by side: both populations on one page. Every figure is worked
+  // out for one population at a time - `onlyPop` - and the two are shown
+  // next to each other, never added: the two reports count differently.
+  const BOTH = DATA.source === "both";
+  let onlyPop = null;
+  const popOf = new Map((DATA.affiliates || []).map((a) => [String(a.Id), a.Pop || null]));
   let showTables = false;
 
   // ---- lookups -----------------------------------------------------
@@ -427,7 +459,8 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     return from && row.Day >= from && row.Day <= latest;
   };
   const matchAff = (row) =>
-    affiliate === "all" || String(row.AffiliateId) === affiliate;
+    (affiliate === "all" || String(row.AffiliateId) === affiliate) &&
+    (!onlyPop || row.Pop === onlyPop);
   const keep = (row) => inWindow(row) && matchAff(row);
 
   // ---- aggregation -------------------------------------------------
@@ -460,13 +493,14 @@ const DATA = /*__DASHBOARD_DATA__*/null;
       });
       return out.get(k);
     };
-    for (const r of DATA.applications) if (inWindow(r)) {
+    const inPop = (r) => !onlyPop || r.Pop === onlyPop;
+    for (const r of DATA.applications) if (inWindow(r) && inPop(r)) {
       const a = row(r.AffiliateId);
       a.apps += r.Applications;
       if (r.AvgLoanAmount != null) { a.loanSum += r.AvgLoanAmount * r.Applications; a.loanDays += r.Applications; }
     }
-    for (const r of DATA.accepts) if (inWindow(r)) row(r.AffiliateId).sold += r.ApplicationsSold;
-    for (const r of DATA.stage_counts) if (inWindow(r)) {
+    for (const r of DATA.accepts) if (inWindow(r) && inPop(r)) row(r.AffiliateId).sold += r.ApplicationsSold;
+    for (const r of DATA.stage_counts) if (inWindow(r) && inPop(r)) {
       const s = String(r.StageId);
       if (s === OFFER)   row(r.AffiliateId).offer   += r.Applications;
       if (s === DECLINE) row(r.AffiliateId).decline += r.Applications;
@@ -592,7 +626,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
       if (String(r.id) === affiliate) tr.style.background = "var(--page)";
       const name = document.createElement("td");
       name.innerHTML = `<span class="watch-name">${r.name}</span>` +
-        `<span class="watch-journey">${r.journeyLabel} · ${fmt(r.leads)} leads</span>`;
+        `<span class="watch-journey">${BOTH && r.pop === "internal" ? "FF · " : ""}${r.journeyLabel} · ${fmt(r.leads)} leads</span>`;
       tr.appendChild(name);
       for (const [key, , , show] of MEASURES) {
         const NA_HTML = !r.measures[key].applies
@@ -609,9 +643,15 @@ const DATA = /*__DASHBOARD_DATA__*/null;
         }
         const line = document.createElement("td");
         line.className = "line";
-        line.appendChild(sparkline(m.points, m.flag, {
+        line.appendChild(sparkline(m.points, m.flag, withPanels({
           title: r.name + " · " + MEASURE_LABELS[key], points: m.points, baseline: m.baseline,
-          current: m.current, change: m.change, flagged: m.flag, show }));
+          current: m.current, change: m.change, flagged: m.flag, show },
+          MEASURES.map(([k, , , sh]) => {
+            const mm = r.measures[k];
+            return mm && mm.applies && r.enoughToTrend
+              ? { name: MEASURE_LABELS[k], points: mm.points, baseline: mm.baseline, current: mm.current,
+                  change: mm.change, flagged: mm.flag, show: sh } : null;
+          }), MEASURE_LABELS[key])));
         const val = document.createElement("td");
         val.className = "num watch-val"; val.textContent = m.current == null ? "—" : show(m.current);
         const chg = document.createElement("td");
@@ -723,8 +763,8 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     }
   }
 
-  function drawTrend(series) {
-    const svg = $("trend");
+  function drawTrend(series, svgId = "trend") {
+    const svg = $(svgId);
     svg.innerHTML = "";
     if (!series.length) return;
 
@@ -801,10 +841,14 @@ const DATA = /*__DASHBOARD_DATA__*/null;
   // over it. The rates are the population's - one source cannot move
   // them - so the two together say whether a source sends leads that
   // sell, or sells the leads it sends.
+  // In the side-by-side view, rates are the selected affiliate's own
+  // population's; with none selected, the external ones, as labelled.
+  const qualityPop = () => (BOTH ? (affiliate === "all" ? "external" : popOf.get(affiliate)) : null);
   function drawQuality() {
     const svg = $("quality");
     svg.innerHTML = "";
-    const bands = DATA.qualityBands || [];
+    const bands = (qualityPop() && DATA.qualityBandsBySource
+                   ? DATA.qualityBandsBySource[qualityPop()] : DATA.qualityBands) || [];
     if (!bands.length) { svg.setAttribute("height", 20); return; }
 
     const mine = affiliate === "all" ? null : (DATA.affiliateQuality || {})[affiliate];
@@ -832,8 +876,8 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     });
   }
 
-  function drawFunnel(counts) {
-    const svg = $("funnel");
+  function drawFunnel(counts, svgId = "funnel") {
+    const svg = $(svgId);
     svg.innerHTML = "";
 
     const rows = funnelStages
@@ -891,10 +935,38 @@ const DATA = /*__DASHBOARD_DATA__*/null;
   // ---- sparkline pop-up ---------------------------------------------
   const pop = $("chartPop");
   let popChart = null;
+  // A sparkline's pop-up shows every measure of its row, the clicked one
+  // first: one chart each, on its own axis, with the earlier weeks' level.
   function drawPop() {
     if (!popChart) return;
-    const e = popChart;
-    drawDetailChart($("popChart"), e.points, e.baseline, e.show, e.flagged, 360);
+    const e = popChart, grid = $("popGrid"), one = $("popChart");
+    if (!e.panels || e.panels.length < 2) {
+      grid.innerHTML = ""; one.classList.remove("hidden");
+      drawDetailChart(one, e.points, e.baseline, e.show, e.flagged, 360);
+      return;
+    }
+    one.classList.add("hidden"); one.innerHTML = "";
+    grid.innerHTML = "";
+    for (const p of e.panels) {
+      const fig = document.createElement("figure");
+      const cur = p.current == null ? "—" : p.show(p.current);
+      const chg = p.change == null ? "" : ` (${p.change > 0 ? "+" : ""}${Math.round(100 * p.change)}%)`;
+      fig.innerHTML = `<figcaption>${esc(p.name)} <span class="cap-sub">latest week ${cur}` +
+        (p.baseline == null ? "" : ` · earlier ${p.show(p.baseline)}<span class="${p.flagged ? "watch-drop" : ""}">${chg}</span>`) +
+        `</span></figcaption>`;
+      const svg = document.createElementNS(SVGNS, "svg");
+      svg.setAttribute("role", "img");
+      svg.setAttribute("aria-label", p.name + ", rolling seven days");
+      fig.appendChild(svg);
+      grid.appendChild(fig);
+      drawDetailChart(svg, p.points, p.baseline, p.show, p.flagged, 230);
+    }
+  }
+  // Every measure of a row for its pop-up, `first` at the front.
+  function withPanels(expand, panels, first) {
+    const list = panels.filter(Boolean);
+    list.sort((a, b) => (b.name === first) - (a.name === first));
+    return { ...expand, panels: list };
   }
   function openChart(e) {
     popChart = e;
@@ -902,10 +974,12 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     const cur = e.current == null ? "—" : e.show(e.current);
     const base = e.baseline == null ? "—" : e.show(e.baseline);
     const chg = e.change == null ? "" : ` (${e.change > 0 ? "+" : ""}${Math.round(100 * e.change)}%)`;
-    $("popSub").textContent = (e.baseline == null
-      ? `Rolling seven days. Latest week ${cur}.`
-      : `Rolling seven days. Latest week ${cur}, earlier weeks ${base}${chg}.`) +
-      (e.flagged ? " Flagged as a drop." : "");
+    $("popSub").textContent = e.panels && e.panels.length > 1
+      ? "Every measure for this row, each a rolling seven days against the earlier weeks' level (the flat line). Hover for the values."
+      : (e.baseline == null
+        ? `Rolling seven days. Latest week ${cur}.`
+        : `Rolling seven days. Latest week ${cur}, earlier weeks ${base}${chg}.`) +
+        (e.flagged ? " Flagged as a drop." : "");
     pop.appendChild(tip);               // the pop-up sits above the page, so its tooltip must too
     pop.showModal();
     drawPop();
@@ -926,6 +1000,16 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     return null;
   };
   const perDay = (v) => (v == null ? "—" : v.toFixed(1));
+  // Both trends of a who-bought-from-whom row, for its pop-up.
+  function pairPanels(r) {
+    const showRate = (v) => (v == null ? "—" : pct(100 * v));
+    return [
+      r.bought.enoughToTrend ? { name: "Bought per day", points: r.bought.points, baseline: null,
+        current: lastPoint(r.bought.points), change: null, flagged: false, show: perDay } : null,
+      r.acceptance.enoughToTrend ? { name: "Acceptance", points: r.acceptance.points,
+        baseline: r.acceptance.baseline, current: r.acceptance.current, change: r.acceptance.change,
+        flagged: r.acceptance.flag, show: showRate } : null];
+  }
   function pairValue(r, key) {
     if (key === "name") return r.name.toLowerCase();
     if (!key.includes(":")) return r[key];
@@ -981,9 +1065,9 @@ const DATA = /*__DASHBOARD_DATA__*/null;
         const line = document.createElement("td");
         line.className = "line";
         const cur = lastPoint(r.bought.points);
-        line.appendChild(sparkline(r.bought.points, false, {
+        line.appendChild(sparkline(r.bought.points, false, withPanels({
           title: title + " · Bought per day", points: r.bought.points, baseline: null,
-          current: cur, change: null, flagged: false, show: perDay }));
+          current: cur, change: null, flagged: false, show: perDay }, pairPanels(r), "Bought per day")));
         const val = document.createElement("td");
         val.className = "num watch-val"; val.textContent = perDay(cur);
         tr.append(line, val);
@@ -999,9 +1083,9 @@ const DATA = /*__DASHBOARD_DATA__*/null;
         const line = document.createElement("td");
         line.className = "line";
         const showRate = (v) => (v == null ? "—" : pct(100 * v));
-        line.appendChild(sparkline(a.points, a.flag, {
+        line.appendChild(sparkline(a.points, a.flag, withPanels({
           title: title + " · Acceptance", points: a.points, baseline: a.baseline,
-          current: a.current, change: a.change, flagged: a.flag, show: showRate }));
+          current: a.current, change: a.change, flagged: a.flag, show: showRate }, pairPanels(r), "Acceptance")));
         const val = document.createElement("td");
         val.className = "num watch-val"; val.textContent = showRate(a.current);
         const chg = document.createElement("td");
@@ -1065,7 +1149,17 @@ const DATA = /*__DASHBOARD_DATA__*/null;
   }
 
   // ---- render ------------------------------------------------------
+  // One population's figures, for the side-by-side view.
+  function forPop(pop) {
+    onlyPop = pop;
+    try {
+      return { series: dailySeries(), counts: funnelCounts(), affs: affiliateRows() };
+    } finally { onlyPop = null; }
+  }
+
   function render() {
+    const split = BOTH && affiliate === "all";
+    const ext = split ? forPop("external") : null, ff = split ? forPop("internal") : null;
     const series = dailySeries();
     const counts = funnelCounts();
     const affs = affiliateRows();
@@ -1084,7 +1178,27 @@ const DATA = /*__DASHBOARD_DATA__*/null;
       ["Active affiliates", fmt(affs.length), "with applications"]
     ].map(([k, v, s]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s}</div></div>`).join("");
 
-    const who = affiliate === "all" ? "all affiliates" : affName.get(affiliate);
+    // Side by side: each tile holds both populations, next to each other.
+    if (split) {
+      const t = (p) => {
+        const a = p.series.reduce((x, d) => x + d.apps, 0), so = p.series.reduce((x, d) => x + d.sold, 0);
+        const de = p.counts.get(DECLINE) || 0, rec = p.counts.get(RECEIVED) || 0;
+        return { apps: a, sold: so, decline: de, received: rec, active: p.affs.length };
+      };
+      const e = t(ext), f = t(ff);
+      const pair = (a, b) => `${a}<span class="pop">ext</span><span class="sep">|</span>${b}<span class="pop">FF</span>`;
+      const rate = (n, d) => (d ? pct(100 * n / d) : "—");
+      $("tiles").innerHTML = [
+        ["Applications", pair(fmt(e.apps), fmt(f.apps)), DATA.windowLabel || `${days} days`],
+        ["Sold to a lender", pair(fmt(e.sold), fmt(f.sold)), `${rate(e.sold, e.apps)} | ${rate(f.sold, f.apps)} of applications`],
+        ["Declined by lenders", pair(fmt(e.decline), fmt(f.decline)), `${rate(e.decline, e.received)} | ${rate(f.decline, f.received)} of received`],
+        ["Reached a lender", pair(fmt(e.sold + e.decline), fmt(f.sold + f.decline)),
+         `${rate(e.sold + e.decline, e.apps)} | ${rate(f.sold + f.decline, f.apps)} of applications`],
+        ["Active affiliates", pair(fmt(e.active), fmt(f.active)), "with applications"]
+      ].map(([k, v, s]) => `<div class="tile"><div class="k">${k}</div><div class="v pair">${v}</div><div class="s">${s}</div></div>`).join("");
+    }
+
+    const who = affiliate === "all" ? (split ? "each population on its own" : "all affiliates") : affName.get(affiliate);
     $("trendSub").textContent = `Applications and sales per day, ${who}. Days are Sydney local time.`;
     $("funnelSub").textContent = `Applications reaching each stage, ${who}.`;
 
@@ -1103,8 +1217,17 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     }
 
     drawPaid();
-    drawTrend(series);
-    drawFunnel(counts);
+    $("trend").classList.toggle("hidden", split);
+    $("trendPair").classList.toggle("hidden", !split);
+    $("funnel").classList.toggle("hidden", split);
+    $("funnelPair").classList.toggle("hidden", !split);
+    if (split) {
+      drawTrend(ext.series, "trendExt"); drawTrend(ff.series, "trendFF");
+      drawFunnel(ext.counts, "funnelExt"); drawFunnel(ff.counts, "funnelFF");
+    } else {
+      drawTrend(series);
+      drawFunnel(counts);
+    }
     drawQuality();
     drawWatch();
     drawDetail();
@@ -1121,7 +1244,7 @@ const DATA = /*__DASHBOARD_DATA__*/null;
       (r) => affiliate === "all" || String(r.id) === affiliate);
     $("scoreTable").querySelector("tbody").innerHTML = score.map((r) => `
       <tr${String(r.id) === affiliate ? ' style="background:var(--page);font-weight:560"' : ""}>
-        <td>${r.name}</td>
+        <td>${r.name}${BOTH && r.pop === "internal" ? ' <span style="color:var(--muted)">· FF</span>' : ""}</td>
         <td class="num">${fmt(r.leads)}</td>
         <td class="num">${pct(100 * r.soldRate)}</td>
         <td class="num">${r.expected == null ? "—" : pct(100 * r.expected)}</td>
@@ -1139,18 +1262,24 @@ const DATA = /*__DASHBOARD_DATA__*/null;
         <td class="num">${fmt(a.sold + a.decline)}</td>
       </tr>`).join("");
 
-    $("trendTable").querySelector("tbody").innerHTML = series.map((d) => `
+    // The data tables, one block per population in the side-by-side view.
+    const blocks = split ? [["External affiliates", ext], ["Internal sources (FF)", ff]]
+                         : [[null, { series, counts }]];
+    const head = (label, cols) => label ? `<tr><th colspan="${cols}" style="text-align:left">${label}</th></tr>` : "";
+    $("trendTable").querySelector("tbody").innerHTML = blocks.map(([label, b]) => head(label, 4) + b.series.map((d) => `
       <tr><td>${d.day}</td><td class="num">${fmt(d.apps)}</td>
       <td class="num">${fmt(d.sold)}</td>
-      <td class="num">${d.apps ? pct(100 * d.sold / d.apps) : "—"}</td></tr>`).join("");
+      <td class="num">${d.apps ? pct(100 * d.sold / d.apps) : "—"}</td></tr>`).join("")).join("");
 
-    const received = counts.get(RECEIVED) || 0;
-    $("funnelTable").querySelector("tbody").innerHTML = funnelStages
-      .filter((id) => (counts.get(id) || 0) > 0)
-      .map((id) => `<tr><td>${stages[id].label}</td>
-        <td class="num">${fmt(counts.get(id))}</td>
-        <td class="num">${affiliate !== "all" && received ? pct(100 * counts.get(id) / received) : "—"}</td></tr>`)
-      .join("");
+    $("funnelTable").querySelector("tbody").innerHTML = blocks.map(([label, b]) => {
+      const received = b.counts.get(RECEIVED) || 0;
+      return head(label, 3) + funnelStages
+        .filter((id) => (b.counts.get(id) || 0) > 0)
+        .map((id) => `<tr><td>${stages[id].label}</td>
+          <td class="num">${fmt(b.counts.get(id))}</td>
+          <td class="num">${affiliate !== "all" && received ? pct(100 * b.counts.get(id) / received) : "—"}</td></tr>`)
+        .join("");
+    }).join("");
   }
 
   // ---- controls ----------------------------------------------------
@@ -1160,7 +1289,9 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     .sort((a, b) => a.name.localeCompare(b.name))
     .forEach((a) => {
       const o = document.createElement("option");
-      o.value = a.id; o.textContent = a.name; sel.appendChild(o);
+      o.value = a.id;
+      o.textContent = a.name + (BOTH && popOf.get(a.id) === "internal" ? " (FF)" : "");
+      sel.appendChild(o);
     });
   sel.addEventListener("change", () => { affiliate = sel.value; render(); });
 
@@ -1206,13 +1337,12 @@ const DATA = /*__DASHBOARD_DATA__*/null;
   addEventListener("resize", () => { render(); drawPop(); });
 
   // ---- chrome ------------------------------------------------------
-  // Which population this page is, and the link to the other one. They
-  // are separate: FF and non-FF lead counts cannot be added together,
-  // so one page never shows both.
+  // Which population this page shows: both side by side, or one. They
+  // are never added together: FF and non-FF lead counts cannot be.
   (function sourceControls() {
     const seg = $("sourceSeg");
     if (!seg || !DATA.source) return;
-    const options = [["external", "External"], ["internal", "Internal (FF)"]];
+    const options = [["both", "Side by side"], ["external", "External"], ["internal", "Internal (FF)"]];
     seg.innerHTML = options.map(([value, label]) =>
       `<button type="button" data-source="${value}"${
         value === DATA.source ? ' aria-pressed="true"' : ""}>${label}</button>`).join("");

@@ -52,7 +52,8 @@ FUNNEL = (
 
 SOURCE_LABELS = {"external": "External affiliates",
                  "internal": "Internal sources (FF)",
-                 "all": "All sources"}
+                 "all": "All sources",
+                 "both": "External and FF, side by side"}
 
 # Which populations the Today and Yesterday pages can show. `all` is
 # offered there alone: their figures come from the ping log, which
@@ -199,6 +200,39 @@ def paid_acquisition(conn, days=30):
     out["totals"] = {k: sum(d[k] for d in series) for k in
                      ("spend", "revenue", "profit", "bs_cost", "received", "sold")}
     out["days"] = len(series)
+    return out
+
+
+def payload_both(conn, days=30):
+    """The Affiliates page with both populations on it, side by side.
+
+    Each population is built exactly as its own page would be, and every
+    row carries which one it came from, so the page can show them next
+    to each other - two figures in a tile, two charts, two funnels, one
+    table with FF marked - and never add one to the other. The two
+    reports count differently (the dev team, 13 Oct 2026), so a sum of
+    the two would be a number that means nothing.
+    """
+    ext, ff = payload(conn, days, "external"), payload(conn, days, "internal")
+    out = dict(ext)
+    for key in ("applications", "accepts", "stage_counts"):
+        out[key] = ([{**r, "Pop": "external"} for r in ext[key]] +
+                    [{**r, "Pop": "internal"} for r in ff[key]])
+    out["affiliates"] = ([{**a, "Pop": "external"} for a in ext["affiliates"]] +
+                         [{**a, "Pop": "internal"} for a in ff["affiliates"]])
+    out["trends"] = sorted([{**r, "pop": "external"} for r in ext["trends"]] +
+                           [{**r, "pop": "internal"} for r in ff["trends"]],
+                           key=lambda r: (-r["revenue"], -r["leads"]))
+    out["scorecard"] = ([{**r, "pop": "external"} for r in ext["scorecard"]] +
+                        [{**r, "pop": "internal"} for r in ff["scorecard"]])
+    out["lendersByAffiliate"] = {**ext["lendersByAffiliate"], **ff["lendersByAffiliate"]}
+    out["affiliateQuality"] = {**ext["affiliateQuality"], **ff["affiliateQuality"]}
+    # Quality rates are per population too: a band's sold rate is taken
+    # within one, so each affiliate is read against its own.
+    out["qualityBandsBySource"] = {"external": ext["qualityBands"], "internal": ff["qualityBands"]}
+    out["paid"] = ff["paid"]
+    out["source"] = "both"
+    out["sourceLabel"] = SOURCE_LABELS["both"]
     return out
 
 

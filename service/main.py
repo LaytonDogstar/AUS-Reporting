@@ -174,7 +174,7 @@ def money(v):
 
 # ----------------------------------------------------------------- pages
 
-def dashboard_page(days=30, source="external"):
+def dashboard_page(days=30, source="both"):
     """The dashboard proper: tiles, trend and funnel, from collected counts.
 
     Built for one population at a time. FF and non-FF lead counts cannot
@@ -183,7 +183,8 @@ def dashboard_page(days=30, source="external"):
     """
     conn = store.connect(DB_PATH)
     try:
-        data = dash.payload(conn, days, source)
+        data = (dash.payload_both(conn, days) if source == "both"
+                else dash.payload(conn, days, source))
     finally:
         conn.close()
     role = (current_user() or {}).get("role", "admin")
@@ -1284,9 +1285,11 @@ class Handler(BaseHTTPRequestHandler):
                                         "SameSite=Lax; Max-Age=31536000")
         try:
             if path == "/":
-                source = params.get("source", "external")
-                if source not in ("external", "internal"):
-                    source = "external"
+                # Side by side by default: both populations on one page,
+                # never added together.
+                source = params.get("source", "both")
+                if source not in ("both", "external", "internal"):
+                    source = "both"
                 return self._send(200, dashboard_page(days, source))
             if path == "/lenders":
                 return self._send(200, lenders_page(days))

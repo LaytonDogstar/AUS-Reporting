@@ -164,6 +164,7 @@
   </div>
   <p id="popSub"></p>
   <svg id="popChart" role="img" aria-label="Expanded trend"></svg>
+  <div class="pop-grid" id="popGrid"></div>
 </dialog>
 
 <div id="tip" role="status" aria-live="polite"></div>
@@ -308,9 +309,15 @@ const DATA = /*__DASHBOARD_DATA__*/null;
         }
         const line = document.createElement("td");
         line.className = "line";
-        line.appendChild(sparkline(m.points, m.flag, {
+        line.appendChild(sparkline(m.points, m.flag, withPanels({
           title: r.name + " · " + MEASURE_LABELS[key], points: m.points, baseline: m.baseline,
-          current: m.current, change: m.change, flagged: m.flag, show: rate }));
+          current: m.current, change: m.change, flagged: m.flag, show: rate },
+          MEASURES.map(([k]) => {
+            const mm = r.measures[k];
+            return mm && mm.enoughToTrend
+              ? { name: MEASURE_LABELS[k], points: mm.points, baseline: mm.baseline, current: mm.current,
+                  change: mm.change, flagged: mm.flag, show: rate } : null;
+          }), MEASURE_LABELS[key])));
         const val = document.createElement("td");
         val.className = "num watch-val"; val.textContent = m.current == null ? "—" : rate(m.current);
         const chg = document.createElement("td");
@@ -517,10 +524,38 @@ const DATA = /*__DASHBOARD_DATA__*/null;
   // ---- sparkline pop-up ---------------------------------------------
   const pop = $("chartPop");
   let popChart = null;
+  // A sparkline's pop-up shows every measure of its row, the clicked one
+  // first: one chart each, on its own axis, with the earlier weeks' level.
   function drawPop() {
     if (!popChart) return;
-    const e = popChart;
-    drawDetailChart($("popChart"), e.points, e.baseline, e.show, e.flagged, 360);
+    const e = popChart, grid = $("popGrid"), one = $("popChart");
+    if (!e.panels || e.panels.length < 2) {
+      grid.innerHTML = ""; one.classList.remove("hidden");
+      drawDetailChart(one, e.points, e.baseline, e.show, e.flagged, 360);
+      return;
+    }
+    one.classList.add("hidden"); one.innerHTML = "";
+    grid.innerHTML = "";
+    for (const p of e.panels) {
+      const fig = document.createElement("figure");
+      const cur = p.current == null ? "—" : p.show(p.current);
+      const chg = p.change == null ? "" : ` (${p.change > 0 ? "+" : ""}${Math.round(100 * p.change)}%)`;
+      fig.innerHTML = `<figcaption>${esc(p.name)} <span class="cap-sub">latest week ${cur}` +
+        (p.baseline == null ? "" : ` · earlier ${p.show(p.baseline)}<span class="${p.flagged ? "watch-drop" : ""}">${chg}</span>`) +
+        `</span></figcaption>`;
+      const svg = document.createElementNS(SVGNS, "svg");
+      svg.setAttribute("role", "img");
+      svg.setAttribute("aria-label", p.name + ", rolling seven days");
+      fig.appendChild(svg);
+      grid.appendChild(fig);
+      drawDetailChart(svg, p.points, p.baseline, p.show, p.flagged, 230);
+    }
+  }
+  // Every measure of a row for its pop-up, `first` at the front.
+  function withPanels(expand, panels, first) {
+    const list = panels.filter(Boolean);
+    list.sort((a, b) => (b.name === first) - (a.name === first));
+    return { ...expand, panels: list };
   }
   function openChart(e) {
     popChart = e;
@@ -528,10 +563,12 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     const cur = e.current == null ? "—" : e.show(e.current);
     const base = e.baseline == null ? "—" : e.show(e.baseline);
     const chg = e.change == null ? "" : ` (${e.change > 0 ? "+" : ""}${Math.round(100 * e.change)}%)`;
-    $("popSub").textContent = (e.baseline == null
-      ? `Rolling seven days. Latest week ${cur}.`
-      : `Rolling seven days. Latest week ${cur}, earlier weeks ${base}${chg}.`) +
-      (e.flagged ? " Flagged as a drop." : "");
+    $("popSub").textContent = e.panels && e.panels.length > 1
+      ? "Every measure for this row, each a rolling seven days against the earlier weeks' level (the flat line). Hover for the values."
+      : (e.baseline == null
+        ? `Rolling seven days. Latest week ${cur}.`
+        : `Rolling seven days. Latest week ${cur}, earlier weeks ${base}${chg}.`) +
+        (e.flagged ? " Flagged as a drop." : "");
     pop.appendChild(tip);               // the pop-up sits above the page, so its tooltip must too
     pop.showModal();
     drawPop();
@@ -552,6 +589,16 @@ const DATA = /*__DASHBOARD_DATA__*/null;
     return null;
   };
   const perDay = (v) => (v == null ? "—" : v.toFixed(1));
+  // Both trends of a who-bought-from-whom row, for its pop-up.
+  function pairPanels(r) {
+    const showRate = (v) => (v == null ? "—" : pct(100 * v));
+    return [
+      r.bought.enoughToTrend ? { name: "Bought per day", points: r.bought.points, baseline: null,
+        current: lastPoint(r.bought.points), change: null, flagged: false, show: perDay } : null,
+      r.acceptance.enoughToTrend ? { name: "Acceptance", points: r.acceptance.points,
+        baseline: r.acceptance.baseline, current: r.acceptance.current, change: r.acceptance.change,
+        flagged: r.acceptance.flag, show: showRate } : null];
+  }
   function pairValue(r, key) {
     if (key === "name") return r.name.toLowerCase();
     if (!key.includes(":")) return r[key];
@@ -607,9 +654,9 @@ const DATA = /*__DASHBOARD_DATA__*/null;
         const line = document.createElement("td");
         line.className = "line";
         const cur = lastPoint(r.bought.points);
-        line.appendChild(sparkline(r.bought.points, false, {
+        line.appendChild(sparkline(r.bought.points, false, withPanels({
           title: title + " · Bought per day", points: r.bought.points, baseline: null,
-          current: cur, change: null, flagged: false, show: perDay }));
+          current: cur, change: null, flagged: false, show: perDay }, pairPanels(r), "Bought per day")));
         const val = document.createElement("td");
         val.className = "num watch-val"; val.textContent = perDay(cur);
         tr.append(line, val);
@@ -625,9 +672,9 @@ const DATA = /*__DASHBOARD_DATA__*/null;
         const line = document.createElement("td");
         line.className = "line";
         const showRate = (v) => (v == null ? "—" : pct(100 * v));
-        line.appendChild(sparkline(a.points, a.flag, {
+        line.appendChild(sparkline(a.points, a.flag, withPanels({
           title: title + " · Acceptance", points: a.points, baseline: a.baseline,
-          current: a.current, change: a.change, flagged: a.flag, show: showRate }));
+          current: a.current, change: a.change, flagged: a.flag, show: showRate }, pairPanels(r), "Acceptance")));
         const val = document.createElement("td");
         val.className = "num watch-val"; val.textContent = showRate(a.current);
         const chg = document.createElement("td");

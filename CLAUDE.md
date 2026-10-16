@@ -32,9 +32,17 @@ by Railway from the `claude/code-review-tsyca6` branch; see
   price is $0). The Dummy test lender (24) and DCS (22, offline) are left out
   via `store.EXCLUDED_LENDER_IDS`. (Layton, 15 Oct 2026.)
 - FF (internal) and non-FF (external) affiliate counts from the two affiliate
-  reports are never added together; pages built on those reports show one
-  population at a time. Today and Yesterday also offer All sources, and open
-  on it: their figures come from the ping log, which counts both alike.
+  reports are never added together. The Affiliates page opens side by side
+  (`dash.payload_both`): every row carries its population, each figure is
+  worked out per population and shown next to the other - two values in a
+  tile, two daily charts, two funnels, one trend table with FF marked - or
+  one population alone by the switch. Today and Yesterday offer All sources,
+  and open on it: their figures come from the ping log, which counts both
+  alike, so adding them there is sound.
+- A sparkline's pop-up shows every measure of its row, the clicked one first:
+  the trend tables on Affiliates and Lenders, the who-bought-from-whom tables,
+  and every row on Today and Yesterday (with each hour beside the running
+  figure). The sparkline itself stays one line.
 - Lead-level identifiers (`LeadId`, `LeadApplicationId`) and the credential
   fields returned by `Affiliates` are never stored.
 
