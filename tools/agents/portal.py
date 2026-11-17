@@ -14,6 +14,7 @@ import json
 import os
 import re
 import ssl
+import time
 import urllib.parse
 import urllib.request
 
@@ -40,13 +41,22 @@ class Portal:
         if "kt_login_signin_form" in r.read().decode("utf-8", "replace"):
             raise RuntimeError("portal sign-in refused")
 
-    def _get(self, path):
-        with self.op.open(BASE + path, timeout=300) as r:
-            return r.read().decode("utf-8", "replace")
+    def _get(self, path, attempts=3):
+        """GET with retries: the portal resets connections now and then."""
+        for i in range(attempts):
+            try:
+                with self.op.open(BASE + path, timeout=300) as r:
+                    return r.read().decode("utf-8", "replace")
+            except (ConnectionError, TimeoutError, OSError):
+                if i == attempts - 1:
+                    raise
+                time.sleep(5 * (i + 1))
 
     def failed_filters(self, tier_id, start, end):
         """{processed, passed, failed, ignored, filters: [(name, count)]} for a tier.
-        Counts only. A lead fails several filters, so the counts overlap."""
+        Counts only. A lead fails several filters, so the counts overlap,
+        and on a single day a filter's count can exceed the leads
+        processed: compare week-long windows, not single days."""
         q = (f"startDate={start}&endDate={end}&affiliateId=null&lenderTierId={int(tier_id)}"
              "&affiliateGroupId=null&lenderId=null")
         d = json.loads(self._get(f"/api/Reports/FailedFilterReports?{q}"))
@@ -54,3 +64,10 @@ class Portal:
                 "failed": d.get("LeadFailed"), "ignored": d.get("LeadIgnored"),
                 "filters": sorted(((it["FailedFilter"], it["Count"]) for it in d.get("Items", [])),
                                   key=lambda x: -x[1])}
+
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) != 4:
+        sys.exit("usage: portal.py <tier_id> <start YYYY-MM-DD> <end YYYY-MM-DD>")
+    print(json.dumps(Portal().failed_filters(sys.argv[1], sys.argv[2], sys.argv[3]), indent=1))

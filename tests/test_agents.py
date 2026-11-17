@@ -69,6 +69,17 @@ class AgentToken(Server):
         self.assertEqual(call(self.port, "GET", "/favicon.ico")[0], 204)
         self.assertEqual(call(self.port, "GET", "/favicon.ico", token=TOKEN)[0], 204)
 
+    def test_movers_and_tiers_answer_with_the_history(self):
+        status, text = call(self.port, "GET", "/api/agent/movers?days=28", token=TOKEN)
+        self.assertEqual(status, 200)
+        m = json.loads(text)
+        for key in ("lenders", "tier_events", "lender_weeks", "source_days"):
+            self.assertIn(key, m)
+        status, text = call(self.port, "GET", "/api/agent/tiers?days=14&ids=1,2", token=TOKEN)
+        self.assertEqual(status, 200)
+        self.assertEqual(len(json.loads(text)["dates"]), 14)
+        self.assertEqual(call(self.port, "GET", "/api/agent/tiers?ids=x", token=TOKEN)[0], 400)
+
     def test_a_short_token_is_never_accepted(self):
         main.AGENT_TOKEN = "short"
         self.assertEqual(call(self.port, "GET", "/api/agent/status", token="short")[0], 303)
@@ -218,3 +229,68 @@ class Store(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class History(unittest.TestCase):
+    """The views the first briefing had to dig for by hand."""
+
+    def setUp(self):
+        import agentapi
+        self.api = agentapi
+        self.conn = store.connect(":memory:")
+        self.addCleanup(self.conn.close)
+        self.y = store.business_today() - __import__("datetime").timedelta(days=1)
+        for tid, name, lid, lname in ((1, "Steady T1", 10, "Steady"), (2, "Fresh T3", 10, "Steady"),
+                                      (3, "Gone T1", 11, "Gone"), (4, "Picky T1", 12, "Picky"),
+                                      (5, "Dummy T1", store.EXCLUDED_LENDER_IDS[0], "Dummy")):
+            self.conn.execute("INSERT INTO lender_tier (lender_tier_id, lender_tier_name, lender_id,"
+                              " lender_name, price, is_active, collected_at) VALUES (?,?,?,?,?,1,?)",
+                              (tid, name, lid, lname, 10, STAMP))
+        for back in range(35):
+            d = (self.y - __import__("datetime").timedelta(days=back)).isoformat()
+            self.day(d, 1, 100, 40, 10, 100.0)
+            if back < 5:
+                self.day(d, 2, 50, 20, 5, 50.0)                  # new: started five days ago
+            if back >= 10:
+                self.day(d, 3, 80, 30, 8, 80.0)                  # gone quiet ten days ago
+            self.day(d, 4, 60, 30, 0 if back < 7 else 6, 0 if back < 7 else 60.0)  # stopped buying
+            self.day(d, 5, 9, 9, 9, 0.0)                         # excluded lender
+        self.conn.execute("INSERT INTO affiliate_totals_day (business_date, source, received, sold,"
+                          " revenue, collected_at) VALUES (?,?,?,?,?,?)",
+                          (self.y.isoformat(), "internal", 900, 400, 6000.0, STAMP))
+        self.conn.commit()
+
+    def day(self, d, tid, p, s, a, rev):
+        self.conn.execute("INSERT INTO lender_tier_day (business_date, lender_tier_id, lender_tier_name,"
+                          " processed, sent, accepted, revenue, collected_at) VALUES (?,?,?,?,?,?,?,?)",
+                          (d, tid, f"t{tid}", p, s, a, rev, STAMP))
+
+    def test_tier_events_call_new_quiet_and_stopped(self):
+        ev = {e["tier_id"]: e for e in self.api.tier_events(self.conn)}
+        self.assertEqual(ev[2]["event"], "new tier")
+        self.assertEqual(ev[2]["since"], (self.y - __import__("datetime").timedelta(days=4)).isoformat())
+        self.assertEqual(ev[3]["event"], "offered nothing")
+        self.assertEqual(ev[3]["offered_per_day_before"], 80)
+        self.assertEqual(ev[4]["event"], "stopped buying")
+        self.assertNotIn(1, ev)
+        self.assertNotIn(5, ev)                                  # excluded lender never shows
+
+    def test_lender_weeks_show_every_lender_newest_last(self):
+        lw = {l["lender_id"]: l for l in self.api.lender_weeks(self.conn)["lenders"]}
+        self.assertEqual(lw[10]["weeks"][-1]["bought"], 7 * 10 + 5 * 5)
+        self.assertEqual(lw[11]["weeks"][-1]["revenue"], 0)      # a lender at $0 is still listed
+        self.assertEqual(lw[11]["revenue_change_vs_prior_avg"], -1.0)
+        self.assertNotIn(store.EXCLUDED_LENDER_IDS[0], lw)
+
+    def test_tier_days_one_figure_a_day(self):
+        td = self.api.tier_days(self.conn, 7, lender_id=10)
+        self.assertEqual(len(td["dates"]), 7)
+        self.assertEqual(td["dates"][-1], self.y.isoformat())
+        fresh = next(t for t in td["tiers"] if t["id"] == 2)
+        self.assertEqual(fresh["offered"], [0, 0, 50, 50, 50, 50, 50])
+
+    def test_source_days_keep_ff_and_external_apart(self):
+        sd = self.api.source_days(self.conn, 7)
+        self.assertEqual(sd["internal"]["received"][-1], 900)
+        self.assertIsNone(sd["external"]["received"][-1])
+        self.assertNotIn("all", sd)

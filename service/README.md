@@ -167,7 +167,8 @@ collect, clear, change a user or open `/admin`. Unset, the token is off.
 |---|---|
 | `GET /api/agent/status` | collection health: each report kind's latest good day, failures, missing days, whether the database is on the volume |
 | `GET /api/agent/day?date=` | one day as stored: lender report, both affiliate reports, ping log, and what the Day page shows |
-| `GET /api/agent/movers?days=` | lenders with their filter pass, acceptance and redirect trends, flags, tiers and mapping; affiliate-by-lender moves; customer-mix shifts |
+| `GET /api/agent/movers?days=` | lenders with their filter pass, acceptance and redirect trends, flags, tiers and mapping; affiliate-by-lender moves; customer-mix shifts; tiers that started, went quiet or stopped buying; each lender's last four weeks; FF and external a day at a time |
+| `GET /api/agent/tiers?days=&lender=&ids=` | per tier, one figure a day: offered, passed, bought, revenue |
 | `GET /api/agent/lenders` | every tier with its mapped brand, company and type |
 | `GET /api/agent/reports?agent=&since=&body=1` | the agents' reports |
 | `POST /api/agent/report` | post one (JSON: agent, kind, status, title, summary, body) — token only |

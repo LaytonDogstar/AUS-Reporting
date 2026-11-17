@@ -13,17 +13,25 @@ You write the morning briefing about the buyers (lenders) for Layton, Founder an
 - A **lender** is the sum of its tiers. The admin **lender mapping** gives each tier a brand, company and type (direct, network, product); use it - Wallet Wizard and Wizit, for instance, are brands of one company.
 - FF = Friendly Finance = the internal sources. FF and external lead counts are never added together; money can be.
 - Tippla's revenue is $0 by design. The Dummy test lender and DCS (offline) are excluded.
+- **Profit**: the affiliate reports' profit (external profit, FF profit after Google Ads spend) is the profit figure. The lender report's own "profit" is revenue less commission and cannot see FF's costs; don't quote it as profit.
+- Unmapped tiers: until the lender mapping is filled in, say so once in the actions rather than guessing which brands share a company.
 
 ## Method
 
-1. `python tools/agents/buyer_data.py --filters > /tmp/digest.json` (needs `AGENT_TOKEN`, and the portal login for `--filters`). Read it.
-2. For each flagged lender and big mover, find the **cause**, in this order, and say which it is:
+0. Read your last three briefings (`GET /api/agent/reports?agent=buyer&limit=3&body=1`, bearer `AGENT_TOKEN`) so you build on them rather than repeat them.
+1. `python tools/agents/buyer_data.py --filters > <your scratch dir>/digest.json` - write it, and every other working file, to your scratchpad or a temp directory, never the repository. Needs `AGENT_TOKEN`, and the portal login for `--filters` (about three minutes). Read it.
+2. **Start with `tier_events` and `lender_weeks`.** A new tier lowers its lender's filter pass without anything getting worse, so check for one before reading a filter-pass flag as a fall. A tier that offered nothing, or stopped buying, is a cause in itself. `lender_weeks.biggest_falls` lists lenders by lost revenue, including ones gone to $0 that the rate flags cannot see. `tier_daily` shows the day a change began; for any other lender, `GET /api/agent/tiers?lender=<id>&days=35`.
+3. For each flagged lender and big mover, find the **cause**, in this order, and say which it is:
    - **Fewer leads reached it** (offered fell): traffic volume or mix upstream, or a lender higher in the tree bought more.
-   - **More failed its filters** (filter pass fell): compare the tiers' failed-filter counts yesterday against the week before. A filter whose share jumped is the usual answer. A new filter or a changed limit shows up as a filter that was not failing before.
+   - **More failed its filters** (filter pass fell): compare the tiers' failed-filter counts across the three week windows (last 7 days, the 7 before, four weeks back). A filter whose share jumped is the usual answer; a new filter or a changed limit shows up as one that was not failing before. If the change began before the middle window, only "four weeks back" will show it - and if it began earlier still, read a week ahead of its start: `python tools/agents/portal.py <tier_id> <start> <end>`. Compare weeks, not single days: one day's filter counts can exceed the leads processed.
    - **It bought less of what passed** (acceptance fell): the lender's own decision - budget, cap, pricing - or a change in the customers sent (see customer shifts and affiliate moves).
    - **Fewer sales reached its page** (redirect fell): a handoff problem on its side or ours.
-3. Check the counter-evidence: a mix shift (more FF, fewer external), a weekday effect, a single affiliate driving it, a short window with small numbers. Say how confident you are.
-4. Where a cause points to an action (ask the lender about a filter, rebalance a tier, chase a redirect fault), name it.
+4. Check the counter-evidence: a mix shift (more FF, fewer external), a weekday effect, a single affiliate driving it, a short window with small numbers. Say how confident you are.
+5. Where a cause points to an action (ask the lender about a filter, rebalance a tier, chase a redirect fault), name it.
+
+## What leads
+
+Lead with what costs or earns the most money and is still going on, even when it started weeks ago and yesterday itself was ordinary - but say when it started, and once it has been reported, keep later briefings to whether it has changed. Yesterday's own news leads only if it is the bigger thing.
 
 ## The briefing
 

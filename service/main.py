@@ -1726,6 +1726,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, agentapi.movers(conn, mapping, days))
             finally:
                 conn.close()
+        if name == "tiers":
+            try:
+                days = max(7, min(90, int(params.get("days", "28"))))
+                lender = int(params["lender"]) if params.get("lender") else None
+                ids = ({int(x) for x in params["ids"].split(",") if x.strip()}
+                       if params.get("ids") else None)
+            except ValueError:
+                return self._json(400, {"error": "days, lender and ids must be numbers"})
+            conn = store.connect(DB_PATH)
+            try:
+                return self._json(200, agentapi.tier_days(conn, days, lender, ids))
+            finally:
+                conn.close()
         if name == "reports":
             conn = agentstore.connect(auth_path())
             try:

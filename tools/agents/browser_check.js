@@ -25,7 +25,14 @@ const fs = require('fs');
     try {
       await page.goto(base + path, { waitUntil: 'load', timeout: 120000 });
       await page.waitForTimeout(1500);
-      const sparks = await page.locator('svg.spark').count();
+      let sparks = await page.locator('svg.spark').count();
+      if (!sparks && await page.locator('#lenderSel option').count() > 1) {
+        // Customers draws its sparklines once a lender is picked: pick the first.
+        const value = await page.locator('#lenderSel option').nth(1).getAttribute('value');
+        await page.selectOption('#lenderSel', value);
+        await page.waitForTimeout(800);
+        sparks = await page.locator('svg.spark').count();
+      }
       let popup = 'no sparklines on the page';
       if (sparks) {
         await page.locator('svg.spark').first().click();
