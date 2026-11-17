@@ -6,6 +6,7 @@ is visible in the numbers, so each correction is held here.
 """
 
 import sys
+from datetime import timedelta
 import tempfile
 import unittest
 from pathlib import Path
@@ -216,7 +217,8 @@ class Scorecard(ServicePage):
         the column is added by migration and older days keep a null."""
         conn = self.conn()
         older = self.affiliate("Big Volume(1)", None, "external", 500, 50, 1000.0, 900.0)
-        store.save_affiliates(conn, "2026-10-01", "external", [older], None, STAMP)
+        earlier = (store.business_today() - timedelta(days=10)).isoformat()
+        store.save_affiliates(conn, earlier, "external", [older], None, STAMP)
 
         rows = store.scorecard(conn, 30)
         big = [r for r in rows if "Big Volume" in (r["name"] or "")]

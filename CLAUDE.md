@@ -69,6 +69,24 @@ by Railway from the `claude/code-review-tsyca6` branch; see
   never a GET link.
 - `APP_PASSWORD` signs in as the break-glass `admin` and is never stored.
 
+## Agents
+
+- The agents are defined in `.claude/agents/` and run from `AGENTS.md`:
+  data-checker and site-tester and buyer-analyst daily (scheduled), the
+  developer and ux-reviewer on demand, the manager over them. Their
+  scripts are in `tools/agents/`.
+- `AGENT_TOKEN` (32+ characters, in Railway and in the Claude
+  environment) is a bearer token that reads as a read-only Analyst and
+  can write only `POST /api/agent/report`. Never give it more.
+- Agent reports and the lender mapping live in `auth.db`
+  (`service/agentstore.py`), shown escaped. The buyer briefing heads
+  Today and Yesterday through `<!--__BRIEFING__-->`.
+- Lender mapping (`/admin/lenders`): brand, company and type per tier,
+  admin-only, every change audited. Read it through
+  `agentstore.resolved()`, never the raw table.
+- The portal is read by `tools/agents/portal.py` for failed-filter
+  counts only; never per-lead lists, never a save.
+
 ## Deploying
 
 Logins live in `auth.db` beside the data and need the Railway volume at

@@ -419,7 +419,10 @@ class QualityByAffiliate(unittest.TestCase):
     def setUp(self):
         self.conn = store.connect(":memory:")
         self.addCleanup(self.conn.close)
-        self.day = "2026-10-12"
+        # Inside every rolling window whatever day the suite runs: a fixed
+        # date falls out of the 30-day window a month later and the
+        # tests fail for the calendar, not the code.
+        self.day = (store.business_today() - dt.timedelta(days=2)).isoformat()
 
     def test_bands_are_counted_with_the_lender_result(self):
         """The result is kept so a band's sold rate can be taken within

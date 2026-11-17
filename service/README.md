@@ -130,9 +130,9 @@ scrypt hash, reset rather than recovered.
 
 | Role | Sees |
 |---|---|
-| Viewer | Affiliates, Lenders, Customers, Today, Yesterday, Scorecard, Lead quality, Affiliate funnel |
+| Viewer | Affiliates, Lenders, Customers, Today, Yesterday, Briefing, Scorecard, Lead quality, Affiliate funnel |
 | Analyst | those, and the diagnostic pages: Collection, Ping log, Window check, API explorer — read-only |
-| Admin | everything, and collecting, clearing, calling the API explorer, and managing users |
+| Admin | everything, and collecting, clearing, calling the API explorer, managing users, lender mapping and agent reports |
 
 `/admin` lists the users with their role, status, last sign-in and last
 page view; changes a role, resets a password, deactivates or deletes a
@@ -151,6 +151,42 @@ cannot trigger one by getting an admin to click. After ten failed
 sign-ins in fifteen minutes from one address, that address is refused
 until the window passes; per address, not per username, so nobody can
 lock a real user out by guessing at their name.
+
+## Agents, reports and lender mapping
+
+The agents in `.claude/agents/` (runbook: `AGENTS.md` at the repo root)
+read the live dashboard and post what they find back to it.
+
+**`AGENT_TOKEN`** (Railway variable, 32+ characters) lets them in. A
+request carrying `Authorization: Bearer <token>` is treated as a
+read-only Analyst: it can open every dashboard and diagnostic page and
+the agent API, and the only thing it can write is a report. It can never
+collect, clear, change a user or open `/admin`. Unset, the token is off.
+
+| Path | What |
+|---|---|
+| `GET /api/agent/status` | collection health: each report kind's latest good day, failures, missing days, whether the database is on the volume |
+| `GET /api/agent/day?date=` | one day as stored: lender report, both affiliate reports, ping log, and what the Day page shows |
+| `GET /api/agent/movers?days=` | lenders with their filter pass, acceptance and redirect trends, flags, tiers and mapping; affiliate-by-lender moves; customer-mix shifts |
+| `GET /api/agent/lenders` | every tier with its mapped brand, company and type |
+| `GET /api/agent/reports?agent=&since=&body=1` | the agents' reports |
+| `POST /api/agent/report` | post one (JSON: agent, kind, status, title, summary, body) — token only |
+
+The agent API answers the token or an admin's session; nobody else.
+
+**Reports** are kept in `auth.db`, so a data rebuild never clears them.
+Admins read them at `/admin/reports`, filtered by agent. The latest buyer
+briefing, if under 36 hours old, heads Today and Yesterday as a card
+linking to `/briefing`, which any Viewer can open; it only ever shows
+briefings. All agent text is shown escaped, as plain text.
+
+**Lender mapping** (`/admin/lenders`, admin only) gives each lender tier
+a brand, a company, a type (direct, network, product or other) and
+notes, so that several tiers - or several brands of one company - can
+be read as one buyer. Brand defaults to the platform's lender name. Set
+a field for every tier of a lender at once, or tier by tier; every
+change is logged with who made it. The buyer agent reads it through the
+agent API.
 
 ## What it stores
 
@@ -295,6 +331,7 @@ All in the web UI. Nothing to install.
    | `APP_PASSWORD` | the break-glass admin password: sign in as `admin` with it |
    | `OVERFLOW_API_USER` | the admin.overflowhub.com.au login |
    | `OVERFLOW_API_PASSWORD` | its password |
+   | `AGENT_TOKEN` | optional: a random string of 32+ characters that lets the agents read the dashboard and post reports (see below and `AGENTS.md`) |
 
    The service refuses to serve anything until `APP_PASSWORD` is set,
    because a Railway URL is public.

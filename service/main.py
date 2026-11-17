@@ -12,6 +12,7 @@ import html
 import json
 import os
 import re
+import secrets
 import threading
 import traceback
 import urllib.parse
@@ -19,11 +20,18 @@ from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import auth
+import agentapi
+import agentstore
 import collector
 import dash
 import store
 
 APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
+# The agents' credential: a bearer token, set in Railway and in the
+# environment the agents run in. It reads what an analyst may and posts
+# reports; it can change nothing else. Too short a token is ignored.
+AGENT_TOKEN = os.environ.get("AGENT_TOKEN", "")
+AGENT_TOKEN_MIN = 32
 PORT = int(os.environ.get("PORT", "8080"))
 DB_PATH = os.environ.get("DB_PATH") or ("/data/overflow.db" if os.path.isdir("/data") else "overflow.db")
 
@@ -227,7 +235,33 @@ def today_page(which="today", source="all"):
         data = dash.today_payload(conn, which, source)
     finally:
         conn.close()
-    return dash.render(data, dash.TODAY_TEMPLATE).encode("utf-8")
+    body = dash.render(data, dash.TODAY_TEMPLATE)
+    return body.replace("<!--__BRIEFING__-->", briefing_card(), 1).encode("utf-8")
+
+
+BRIEFING_MAX_HOURS = 36
+
+
+def briefing_card():
+    """The buyer agent's latest briefing, at the top of Today and
+    Yesterday, if it is recent. Text an agent wrote: escaped."""
+    try:
+        conn = agentstore.connect(auth_path())
+        try:
+            b = agentstore.latest(conn, "buyer", "briefing", BRIEFING_MAX_HOURS)
+        finally:
+            conn.close()
+    except Exception as exc:                         # noqa: BLE001
+        print(f"briefing not read: {exc}", flush=True)
+        return ""
+    if not b:
+        return ""
+    when = b["created_at"][:16].replace("T", " ") + " UTC"
+    summary = html.escape(b.get("summary") or "")
+    return (f'<section class="card briefing"><h2>{html.escape(b["title"])}</h2>'
+            f'<p class="sub">Buyer briefing · {when}</p>'
+            f'<div style="white-space:pre-wrap;font-size:14px;line-height:1.55">{summary}</div>'
+            f'<p style="margin:8px 0 0"><a href="/briefing?id={b["id"]}">Full briefing</a></p></section>')
 
 
 def period_page(start, end, source="all", which="days"):
@@ -1095,7 +1129,7 @@ def admin_page(notice=""):
                     for r in auth.ROLES)
     p = ["<h1>Admin</h1>",
          '<p class="sub">Who can sign in, what they can see, and when they last did.</p>',
-         nav(), notice,
+         nav(), ADMIN_SECTIONS, notice,
          '<h2>Add a user</h2><div class="card">'
          '<form method="post" action="/admin/create" style="display:flex;gap:8px;flex-wrap:wrap">'
          f'<input type="hidden" name="csrf" value="{html.escape(current_user()["csrf"])}">'
@@ -1206,6 +1240,159 @@ def safe_next(target):
     return target
 
 
+ADMIN_SECTIONS = ('<p class="note"><strong>Admin:</strong> <a href="/admin">Users</a> &middot; '
+                  '<a href="/admin/lenders">Lender mapping</a> &middot; '
+                  '<a href="/admin/reports">Agent reports</a></p>')
+
+STATUS_CLASS = {"ok": "ok", "warn": "warn", "fail": "bad", "info": ""}
+
+
+def _hidden_csrf():
+    return f'<input type="hidden" name="csrf" value="{html.escape(current_user()["csrf"])}">'
+
+
+def lender_map_page(show_all=False, notice=""):
+    """Each tier's brand, company and type: what the API does not know.
+    Edited here, one tier at a time or a lender's every tier at once;
+    every change is kept in the log beneath."""
+    data_conn = store.connect(DB_PATH)
+    map_conn = agentstore.connect(auth_path())
+    try:
+        tiers = agentapi.lenders(data_conn, agentstore.lender_map(map_conn))
+        log = agentstore.audit(map_conn, 60)
+    finally:
+        data_conn.close()
+        map_conn.close()
+    names = {t["tier_id"]: f'{t["lender"] or ""} · {t["tier"] or ""}' for t in tiers}
+    shown = [t for t in tiers if show_all or t["active"] or t["mapped"]]
+    types = lambda cur: '<option value="">—</option>' + "".join(
+        f'<option value="{k}"{" selected" if cur == k else ""}>{html.escape(v)}</option>'
+        for k, v in agentstore.TYPE_LABELS.items())
+    p = ["<h1>Lender mapping</h1>",
+         '<p class="sub">The brand each tier sells under, the company behind it, and what kind '
+         'of buyer it is. The API knows a tier&rsquo;s lender and nothing else; the pages and '
+         'the agents read this.</p>', nav(), ADMIN_SECTIONS, notice,
+         f'<p class="note">{len(shown)} of {len(tiers)} tiers shown. '
+         + ('<a href="/admin/lenders">Active and mapped only</a>' if show_all
+            else '<a href="/admin/lenders?all=1">Show inactive tiers too</a>') + '</p>',
+         '<div class="card" style="overflow-x:auto"><table><tr><th>Tier</th><th class="n">Price</th>'
+         '<th>Brand</th><th>Company</th><th>Type</th><th>Notes</th><th></th></tr>']
+    by_lender = {}
+    for t in shown:
+        by_lender.setdefault((t["lender"] or "(no lender)", t["lender_id"]), []).append(t)
+    for (lname, lid), ts in sorted(by_lender.items(), key=lambda kv: kv[0][0].lower()):
+        fid = f"L{lid}"
+        p.append(
+            f'<tr><td colspan="7" style="background:var(--bg);padding-top:12px">'
+            f'<b>{html.escape(lname)}</b> <span class="note">· {len(ts)} tier(s) · '
+            f'apply to every tier:</span> '
+            f'<form id="{fid}" method="post" action="/admin/lenders/apply" style="display:inline">'
+            f'{_hidden_csrf()}<input type="hidden" name="lender_id" value="{lid}">'
+            f'<input class="f" name="brand" placeholder="brand" style="width:130px"> '
+            f'<input class="f" name="company" placeholder="company" style="width:130px"> '
+            f'<select class="f" name="lender_type">{types(None)}</select> '
+            f'<button class="btn small" type="submit">Apply</button></form></td></tr>')
+        for t in ts:
+            f = f"T{t['tier_id']}"
+            p.append(
+                f'<tr><td>{html.escape(t["tier"] or "")}'
+                + ('' if t["active"] else ' <span class="note">(inactive)</span>')
+                + f'<br><span class="note">id {t["tier_id"]}</span></td>'
+                f'<td class="n">{"" if t["price"] is None else "$" + format(t["price"], ",.2f")}</td>'
+                f'<td><input class="f" form="{f}" name="brand" value="{html.escape(t["brand"] or "")}"'
+                f' style="width:140px"></td>'
+                f'<td><input class="f" form="{f}" name="company" value="{html.escape(t["company"] or "")}"'
+                f' style="width:140px"></td>'
+                f'<td><select class="f" form="{f}" name="lender_type">{types(t["type"])}</select></td>'
+                f'<td><input class="f" form="{f}" name="notes" value="{html.escape(t["notes"] or "")}"'
+                f' style="width:200px"></td>'
+                f'<td><form id="{f}" method="post" action="/admin/lenders/save">{_hidden_csrf()}'
+                f'<input type="hidden" name="tier_id" value="{t["tier_id"]}">'
+                f'<button class="btn small" type="submit">Save</button></form>'
+                + (f'<br><span class="note">{html.escape(t["updated_by"] or "")} '
+                   f'{html.escape((t["updated_at"] or "")[:10])}</span>' if t["mapped"] else "")
+                + '</td></tr>')
+    p.append("</table></div>")
+    p.append('<h2>Change log</h2><div class="card"><table><tr><th>When (UTC)</th><th>Who</th>'
+             '<th>Tier</th><th>Field</th><th>Before</th><th>After</th></tr>')
+    for at, who, tid, field, before, after in log:
+        p.append(f'<tr><td class="mono">{html.escape(at[:16].replace("T", " "))}</td>'
+                 f'<td>{html.escape(who or "")}</td><td>{html.escape(names.get(tid, str(tid)))}</td>'
+                 f'<td>{html.escape(field)}</td><td>{html.escape(before or "—")}</td>'
+                 f'<td>{html.escape(after or "—")}</td></tr>')
+    if not log:
+        p.append('<tr><td colspan="6" class="note">No changes yet.</td></tr>')
+    p.append("</table></div>")
+    return page("Lender mapping", "".join(p))
+
+
+def agent_reports_page(agent=""):
+    conn = agentstore.connect(auth_path())
+    try:
+        rows = agentstore.reports(conn, agent or None, limit=200)
+    finally:
+        conn.close()
+    filt = " &middot; ".join(
+        (f"<strong>{lbl}</strong>" if a == agent else f'<a href="/admin/reports?agent={a}">{lbl}</a>')
+        for a, lbl in [("", "All")] + list(agentstore.AGENT_LABELS.items()))
+    p = ["<h1>Agent reports</h1>",
+         '<p class="sub">What the agents found: the daily data check and buyer briefing, the '
+         'nightly site test, and the reviews and builds run on demand.</p>',
+         nav(), ADMIN_SECTIONS, f'<p class="note">{filt}</p>',
+         '<div class="card"><table><tr><th>When (UTC)</th><th>Agent</th><th>Status</th>'
+         '<th>Report</th></tr>']
+    for r in rows:
+        cls = STATUS_CLASS.get(r["status"], "")
+        p.append(f'<tr><td class="mono">{html.escape(r["created_at"][:16].replace("T", " "))}</td>'
+                 f'<td>{html.escape(agentstore.AGENT_LABELS.get(r["agent"], r["agent"]))}</td>'
+                 f'<td class="{cls}"><b>{html.escape(r["status"].upper())}</b></td>'
+                 f'<td><a href="/admin/reports/view?id={r["id"]}">{html.escape(r["title"])}</a>'
+                 f'<br><span class="note">{html.escape((r["summary"] or "")[:240])}</span></td></tr>')
+    if not rows:
+        p.append('<tr><td colspan="4" class="note">No reports yet. The agents post here once '
+                 '<code>AGENT_TOKEN</code> is set in Railway and in their environment.</td></tr>')
+    p.append("</table></div>")
+    return page("Agent reports", "".join(p))
+
+
+def report_view(report_id, back="/admin/reports"):
+    conn = agentstore.connect(auth_path())
+    try:
+        r = agentstore.report(conn, report_id)
+    finally:
+        conn.close()
+    if not r:
+        return None
+    cls = STATUS_CLASS.get(r["status"], "")
+    return page(r["title"], "".join([
+        f'<p><a href="{back}">&larr; back</a></p><h1>{html.escape(r["title"])}</h1>',
+        f'<p class="sub">{html.escape(agentstore.AGENT_LABELS.get(r["agent"], r["agent"]))} · '
+        f'{html.escape(r["kind"])} · <b class="{cls}">{html.escape(r["status"].upper())}</b> · '
+        f'run {html.escape(r["run_at"])} · posted {html.escape(r["created_at"])}</p>', nav(),
+        f'<div class="card"><div style="white-space:pre-wrap">{html.escape(r["summary"] or "")}'
+        f'</div></div>' if r["summary"] else "",
+        f'<div class="card"><div style="white-space:pre-wrap;font-size:14px;line-height:1.6">'
+        f'{html.escape(r["body"] or "")}</div></div>']))
+
+
+def briefing_page(report_id=None):
+    """The buyer briefing for everyone who can see the dashboard: the
+    latest, or one by id - but only ever a briefing."""
+    conn = agentstore.connect(auth_path())
+    try:
+        if report_id:
+            r = agentstore.report(conn, report_id)
+            r = r if r and r["agent"] == "buyer" and r["kind"] == "briefing" else None
+        else:
+            r = agentstore.latest(conn, "buyer", "briefing")
+    finally:
+        conn.close()
+    if not r:
+        return page("Briefing", "<h1>Briefing</h1>" + nav() +
+                    '<div class="card note">No buyer briefing has been posted yet.</div>')
+    return report_view(r["id"], back="/today")
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "overflow/2.0"
     COOKIE = "ovs"
@@ -1307,9 +1494,13 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/healthz":
             return self._send(200, b"ok", "text/plain; charset=utf-8")
+        if path == "/favicon.ico":
+            # No icon; answered before sign-in so browsers stop logging a 403
+            # on every page (the site test's first live run caught it).
+            return self._send(204, b"", "image/x-icon")
         if not APP_PASSWORD:
             return self._not_configured()
-        user = self._user()
+        user = self._agent_user() or self._user()
         if path == "/login":
             if user:
                 return self._redirect(safe_next(params.get("next")))
@@ -1317,7 +1508,9 @@ class Handler(BaseHTTPRequestHandler):
         if not user:
             return self._redirect("/login?next=" + urllib.parse.quote(safe_next(self.path)))
         CURRENT.user = user
-        if path.startswith("/admin") or path == "/reset":
+        if path.startswith("/api/agent/"):
+            allowed = bool(user.get("agent")) or user["role"] == "admin"
+        elif path.startswith("/admin") or path == "/reset":
             allowed = user["role"] == "admin"
         else:
             allowed = auth.can_view(user["role"], path)
@@ -1393,6 +1586,20 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, verify_page(5))
             if path == "/reset":
                 return self._send(200, page("Reset", confirm_reset()))
+            if path.startswith("/api/agent/"):
+                return self._agent_api(path, params)
+            if path == "/briefing":
+                rid = params.get("id")
+                return self._send(200, briefing_page(int(rid) if rid and rid.isdigit() else None))
+            if path == "/admin/lenders":
+                return self._send(200, lender_map_page(params.get("all") == "1"))
+            if path == "/admin/reports":
+                agent = params.get("agent", "")
+                return self._send(200, agent_reports_page(agent if agent in agentstore.AGENTS else ""))
+            if path == "/admin/reports/view":
+                rid = params.get("id", "")
+                body = report_view(int(rid)) if rid.isdigit() else None
+                return self._send(200, body) if body else self._send(404, page("Not found", "<h1>Not found</h1>"))
             if path == "/admin":
                 return self._send(200, admin_page())
             if path == "/admin/activity":
@@ -1409,6 +1616,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):                               # noqa: N802
         CURRENT.user = None
         path = self.path.partition("?")[0]
+        if path == "/api/agent/report":
+            return self._agent_report()
         try:
             length = min(int(self.headers.get("Content-Length", "0") or 0), 16384)
         except ValueError:
@@ -1457,12 +1666,131 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/explore/run":
                 explore_run()
                 return self._redirect("/explore")
+            if path in ("/admin/lenders/save", "/admin/lenders/apply"):
+                return self._lender_action(path, form, user)
             if path.startswith("/admin/"):
                 return self._admin_action(path, form, user)
         except Exception:                            # noqa: BLE001
             return self._send(500, page("Error", f"<h1>Error</h1><pre class='mono'>"
                                                  f"{html.escape(traceback.format_exc())}</pre>"))
         return self._send(404, page("Not found", "<h1>Not found</h1>"))
+
+    # ---- agents ---------------------------------------------------------
+    def _agent_user(self):
+        """The agent token as a read-only login. Its form token is random
+        per request, so it can never pass a form check."""
+        header = self.headers.get("Authorization", "")
+        if len(AGENT_TOKEN) < AGENT_TOKEN_MIN or not header.startswith("Bearer "):
+            return None
+        if not hmac.compare_digest(header[7:].strip().encode(), AGENT_TOKEN.encode()):
+            return None
+        return {"username": "agent", "role": "analyst", "csrf": secrets.token_urlsafe(24),
+                "agent": True}
+
+    def _json(self, code, obj):
+        return self._send(code, json.dumps(obj, default=str).encode(), "application/json")
+
+    def _agent_api(self, path, params):
+        name = path[len("/api/agent/"):]
+        if name == "status":
+            conn = store.connect(DB_PATH)
+            try:
+                return self._json(200, agentapi.status(conn, DB_PATH))
+            finally:
+                conn.close()
+        if name == "day":
+            try:
+                iso = date.fromisoformat(params.get("date") or
+                                         (store.business_today() - timedelta(days=1)).isoformat())
+            except ValueError:
+                return self._json(400, {"error": "date must be YYYY-MM-DD"})
+            conn = store.connect(DB_PATH)
+            try:
+                return self._json(200, agentapi.day(conn, iso.isoformat()))
+            finally:
+                conn.close()
+        if name in ("movers", "lenders"):
+            map_conn = agentstore.connect(auth_path())
+            try:
+                mapping = agentstore.lender_map(map_conn)
+            finally:
+                map_conn.close()
+            conn = store.connect(DB_PATH)
+            try:
+                if name == "lenders":
+                    return self._json(200, {"tiers": agentapi.lenders(conn, mapping)})
+                try:
+                    days = max(7, min(90, int(params.get("days", "28"))))
+                except ValueError:
+                    days = 28
+                return self._json(200, agentapi.movers(conn, mapping, days))
+            finally:
+                conn.close()
+        if name == "reports":
+            conn = agentstore.connect(auth_path())
+            try:
+                agent = params.get("agent") or None
+                if agent and agent not in agentstore.AGENTS:
+                    return self._json(400, {"error": "unknown agent"})
+                try:
+                    limit = max(1, min(200, int(params.get("limit", "50"))))
+                except ValueError:
+                    limit = 50
+                return self._json(200, {"reports": agentstore.reports(
+                    conn, agent, params.get("since") or None, limit, params.get("body") == "1")})
+            finally:
+                conn.close()
+        return self._json(404, {"error": "no such endpoint"})
+
+    def _agent_report(self):
+        """An agent posting what it found: JSON, the agent token only."""
+        if not APP_PASSWORD:
+            return self._not_configured()
+        if not self._agent_user():
+            return self._json(401, {"error": "agent token required"})
+        try:
+            length = int(self.headers.get("Content-Length", "0") or 0)
+        except ValueError:
+            length = 0
+        if length <= 0 or length > agentstore.MAX_BODY + 20_000:
+            return self._json(413, {"error": "report missing or too large"})
+        try:
+            data = json.loads(self.rfile.read(length).decode("utf-8"))
+            conn = agentstore.connect(auth_path())
+            try:
+                rid = agentstore.add_report(conn, data.get("agent"), data.get("kind"),
+                                            data.get("status"), data.get("title"),
+                                            data.get("summary", ""), data.get("body", ""),
+                                            data.get("run_at"))
+            finally:
+                conn.close()
+        except (ValueError, AttributeError) as exc:
+            return self._json(400, {"error": str(exc)})
+        return self._json(201, {"id": rid, "url": f"/admin/reports/view?id={rid}"})
+
+    def _lender_action(self, path, form, user):
+        conn = agentstore.connect(auth_path())
+        try:
+            if path == "/admin/lenders/save":
+                values = {f: form.get(f, "") for f in agentstore.FIELDS}
+                agentstore.save_tier(conn, int(form.get("tier_id", "0")), values, user["username"])
+                return self._redirect("/admin/lenders")
+            lid = int(form.get("lender_id", "0"))
+            # Only what was filled in: a blank box leaves that field alone.
+            values = {f: form[f] for f in ("brand", "company", "lender_type") if form.get(f, "").strip()}
+            data_conn = store.connect(DB_PATH)
+            try:
+                tier_ids = [r[0] for r in data_conn.execute(
+                    "SELECT lender_tier_id FROM lender_tier WHERE lender_id=?", (lid,))]
+            finally:
+                data_conn.close()
+            if values:
+                agentstore.apply_to_tiers(conn, tier_ids, values, user["username"])
+            return self._redirect("/admin/lenders")
+        except ValueError as exc:
+            return self._send(400, lender_map_page(notice=f'<div class="card bad">{html.escape(str(exc))}</div>'))
+        finally:
+            conn.close()
 
     def _login(self, form):
         username = (form.get("username") or "").strip().lower()
